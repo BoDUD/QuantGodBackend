@@ -1,4 +1,4 @@
-import csv, json, tempfile, unittest
+import csv, json, os, tempfile, time, unittest
 from pathlib import Path
 from tools.entry_trigger_lab.data_loader import sample_runtime
 from tools.entry_trigger_lab.trigger_engine import build_trigger_plan
@@ -107,6 +107,56 @@ class EntryTriggerLabTests(unittest.TestCase):
             plan=build_trigger_plan(runtime,["USDJPYc"],directions=["LONG"]); decision=plan["decisions"][0]
             self.assertTrue(decision["confirmations"]["快通道质量通过"])
             self.assertEqual(decision["state"],"WAIT_TRIGGER_CONFIRMATION")
+
+    def test_global_mt5_dashboard_replaces_stale_repo_runtime_and_empty_fastlane(self):
+        old_env = {
+            key: os.environ.get(key)
+            for key in ("QG_USDJPY_INCLUDE_GLOBAL_MT5", "QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY", "QG_RUNTIME_DIR", "QG_MT5_FILES_DIR")
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); runtime=root/"runtime"; mt5_files=root/"mt5_files"
+                runtime.mkdir(parents=True, exist_ok=True); mt5_files.mkdir(parents=True, exist_ok=True)
+                (runtime/"quality").mkdir(parents=True, exist_ok=True); (runtime/"adaptive").mkdir(parents=True, exist_ok=True)
+                stale_snapshot=runtime/"QuantGod_MT5RuntimeSnapshot_USDJPYc.json"
+                stale_snapshot.write_text(json.dumps({"symbol":"USDJPYc","runtimeFresh":False,"runtimeAgeSeconds":9999,"fallback":False}), encoding="utf-8")
+                old_time=time.time()-3600; os.utime(stale_snapshot,(old_time,old_time))
+                os.environ["QG_USDJPY_INCLUDE_GLOBAL_MT5"]="1"
+                os.environ["QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY"]="1"
+                os.environ["QG_RUNTIME_DIR"]=""
+                os.environ["QG_MT5_FILES_DIR"]=str(mt5_files)
+                (mt5_files/"QuantGod_Dashboard.json").write_text(json.dumps({
+                    "watchlist":"USDJPYc",
+                    "runtime":{"tradeStatus":"READY","executionEnabled":True,"readOnlyMode":False,"tickAgeSeconds":1},
+                    "market":{"bid":155.92,"ask":155.942,"spread":2.2},
+                }), encoding="utf-8")
+                (runtime/"quality"/"QuantGod_MT5FastLaneQuality.json").write_text(json.dumps({
+                    "schema":"quantgod.mt5.fastlane.quality.v1",
+                    "heartbeatFound":False,
+                    "quality":"DEGRADED",
+                    "symbols":[{"symbol":"USDJPYc","quality":"DEGRADED","tickRows":0,"tickAgeSeconds":None,"indicatorAgeSeconds":2297925}],
+                }), encoding="utf-8")
+                (runtime/"adaptive"/"QuantGod_DynamicEntryGate.json").write_text(json.dumps({
+                    "entryGates":[{"symbol":"USDJPYc","direction":"LONG","passed":True,"state":"PASS"}],
+                }), encoding="utf-8")
+                (runtime/"ShadowCandidateOutcomeLedger.csv").write_text(
+                    "symbol,direction,scoreR,pips\n"
+                    "USDJPYc,LONG,0.42,4.2\n"
+                    "USDJPYc,LONG,0.27,2.7\n"
+                    "USDJPYc,LONG,0.13,1.3\n",
+                    encoding="utf-8",
+                )
+
+                plan=build_trigger_plan(runtime,["USDJPYc"],directions=["LONG"]); decision=plan["decisions"][0]
+                self.assertTrue(decision["confirmations"]["运行快照新鲜"])
+                self.assertTrue(decision["confirmations"]["快通道质量通过"])
+                self.assertEqual(decision["state"],"WAIT_TRIGGER_CONFIRMATION")
+        finally:
+            for key,value in old_env.items():
+                if value is None:
+                    os.environ.pop(key,None)
+                else:
+                    os.environ[key]=value
 
     def test_candidate_outcome_ledger_fields_count_as_shadow_samples(self):
         with tempfile.TemporaryDirectory() as tmp:

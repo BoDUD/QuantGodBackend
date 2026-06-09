@@ -13,16 +13,24 @@ except ModuleNotFoundError:  # pragma: no cover
     from autonomous_lifecycle.lifecycle import build_autonomous_lifecycle
 
 
-def build_agent_state(runtime_dir: Path, *, write: bool = False) -> Dict[str, Any]:
+def build_agent_state(
+    runtime_dir: Path,
+    *,
+    write: bool = False,
+    hfm_crypto_runtime_dir: Path | str | None = None,
+) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
+    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
     patch = build_config_patch(runtime_dir, write=write)
     decision = patch.get("sourceDecision") if isinstance(patch.get("sourceDecision"), dict) else {}
-    lifecycle = build_autonomous_lifecycle(runtime_dir, write=write)
+    lifecycle = build_autonomous_lifecycle(runtime_dir, write=write, hfm_crypto_runtime_dir=hfm_crypto_runtime)
     payload: Dict[str, Any] = {
         "ok": True,
         "schema": SCHEMA_STATE,
         "generatedAtIso": utc_now_iso(),
         "symbol": FOCUS_SYMBOL,
+        "runtimeDir": str(runtime_dir),
+        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
         "stage": patch.get("stage"),
         "executionStage": patch.get("executionStage") or patch.get("stage"),
         "stageZh": patch.get("stageZh"),

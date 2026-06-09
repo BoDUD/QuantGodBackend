@@ -31,12 +31,19 @@ def run_daily_autopilot_cycle(
     repo_root: Path,
     write: bool = True,
     bootstrap_samples: bool = False,
+    hfm_crypto_runtime_dir: Path | str | None = None,
 ) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     repo_root = Path(repo_root)
+    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
     started_at = utc_now_iso()
     steps: List[Dict[str, Any]] = []
-    for step in _build_steps(runtime_dir, repo_root, bootstrap_samples=bootstrap_samples):
+    for step in _build_steps(
+        runtime_dir,
+        repo_root,
+        bootstrap_samples=bootstrap_samples,
+        hfm_crypto_runtime_dir=hfm_crypto_runtime,
+    ):
         steps.append(_run_step(repo_root, step))
     failed = [step for step in steps if step.get("status") != "COMPLETED_BY_AGENT"]
     payload: Dict[str, Any] = {
@@ -46,6 +53,8 @@ def run_daily_autopilot_cycle(
         "startedAtIso": started_at,
         "completedAtIso": utc_now_iso(),
         "symbol": "USDJPYc",
+        "runtimeDir": str(runtime_dir),
+        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
         "status": "COMPLETED_BY_AGENT" if not failed else "FAILED_RETRYABLE",
         "completedByAgent": not failed,
         "autoAppliedByAgent": True,
@@ -60,7 +69,8 @@ def run_daily_autopilot_cycle(
             "closeAllowed": False,
             "cancelAllowed": False,
             "livePresetMutationAllowed": False,
-            "polymarketRealMoneyAllowed": False,
+            "externalMarketRealMoneyAllowed": False,
+            "hfmCryptoExecutionAllowed": False,
             "telegramCommandExecutionAllowed": False,
         },
     }
@@ -80,9 +90,16 @@ def read_latest_run(runtime_dir: Path) -> Dict[str, Any]:
     return {}
 
 
-def _build_steps(runtime_dir: Path, repo_root: Path, *, bootstrap_samples: bool) -> List[Dict[str, Any]]:
+def _build_steps(
+    runtime_dir: Path,
+    repo_root: Path,
+    *,
+    bootstrap_samples: bool,
+    hfm_crypto_runtime_dir: Path,
+) -> List[Dict[str, Any]]:
     py = sys.executable
     runtime_arg = ["--runtime-dir", str(runtime_dir)]
+    hfm_crypto_runtime_arg = ["--runtime-dir", str(hfm_crypto_runtime_dir)]
     steps: List[Dict[str, Any]] = [
         {
             "id": "automation_chain",
@@ -118,16 +135,16 @@ def _build_steps(runtime_dir: Path, repo_root: Path, *, bootstrap_samples: bool)
             "allowWarn": True,
         },
         {
-            "id": "polymarket_retune_planner",
-            "lane": "POLYMARKET_SHADOW",
-            "action": "BUILD_POLYMARKET_SHADOW_RETUNE_PLAN",
-            "summaryZh": "自动生成 Polymarket shadow-only 跟单重调方案，并清理已完成黄字待办。",
+            "id": "hfm_crypto_shadow_scan",
+            "lane": "HFM_CRYPTO_CFD_SHADOW",
+            "action": "BUILD_HFM_CRYPTO_CFD_SHADOW_STATE",
+            "summaryZh": "刷新 HFM Crypto CFD symbol 证据和 Moss 回测 profile 映射；只读不下单。",
             "command": [
                 py,
-                "tools/build_polymarket_retune_planner.py",
-                *runtime_arg,
-                "--dashboard-dir",
-                str(repo_root / "Dashboard"),
+                "tools/run_hfm_crypto_cfd.py",
+                *hfm_crypto_runtime_arg,
+                "build",
+                "--write",
             ],
             "timeoutSeconds": 120,
             "allowWarn": True,
@@ -288,7 +305,10 @@ def _write_run(runtime_dir: Path, payload: Dict[str, Any]) -> None:
 def _summary_zh(steps: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
     if failed:
         return f"Agent 调度完成 {len(steps) - len(failed)}/{len(steps)} 步；失败步骤会保留为可重试。"
-    return f"Agent 已自动完成 {len(steps)} 个调度步骤，并刷新回测、回放、parity、执行反馈、Case Memory、walk-forward 和 GA 证据。"
+    return (
+        f"Agent 已自动完成 {len(steps)} 个调度步骤，并刷新回测、回放、parity、"
+        "执行反馈、Case Memory、walk-forward 和 GA 证据。"
+    )
 
 
 def _trim(text: str, limit: int = 900) -> str:

@@ -16,7 +16,7 @@ OPS_TOPICS: List[str] = [
     "DAILY_AUTOPILOT_V2_REPORT",
     "GA_EVOLUTION_REPORT",
     "USDJPY_AUTONOMOUS_AGENT_REPORT",
-    "POLYMARKET_RETUNE_REPORT",
+    "HFM_CRYPTO_SHADOW_REPORT",
 ]
 
 SAFETY: Dict[str, Any] = {
@@ -30,5 +30,5 @@ SAFETY: Dict[str, Any] = {
     "cancelAllowed": False,
     "livePresetMutationAllowed": False,
     "writesMt5OrderRequest": False,
-    "polymarketRealMoneyAllowed": False,
+    "externalMarketRealMoneyAllowed": False,
 }

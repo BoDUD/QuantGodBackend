@@ -39,6 +39,6 @@ SAFETY = {
     "livePresetMutationAllowed": False,
     "telegramCommandExecutionAllowed": False,
     "webhookReceiverAllowed": False,
-    "polymarketRealMoneyAllowed": False,
+    "externalMarketRealMoneyAllowed": False,
     "walletIntegrationAllowed": False,
 }

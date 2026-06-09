@@ -44,7 +44,7 @@ EXECUTION_FLAG_KEYS = {
     "canOverrideKillSwitch",
     "writesMt5Preset",
     "writesMt5OrderRequest",
-    "polymarketOrderAllowed",
+    "externalMarketOrderAllowed",
     "walletIntegrationAllowed",
 }
 SECRET_LIKE_KEYS = {
@@ -88,7 +88,7 @@ def safety_payload() -> Dict[str, Any]:
         "emailDeliveryAllowed": False,
         "writesMt5Preset": False,
         "writesMt5OrderRequest": False,
-        "polymarketOrderAllowed": False,
+        "externalMarketOrderAllowed": False,
         "walletIntegrationAllowed": False,
     }
 

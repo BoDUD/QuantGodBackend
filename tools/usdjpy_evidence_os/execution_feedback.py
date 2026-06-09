@@ -246,7 +246,7 @@ def _normalize_row(index: int, row: Dict[str, Any], source: str) -> Dict[str, An
     tier = str(_first(row, "sourceTier", "SourceTier") or _source_tier(kind, event_type, fill_price))
     execution_mode = str(_first(row, "executionMode", "ExecutionMode", "lane", "mode") or _execution_mode(kind, tier))
     account = _account_identity(row)
-    return {
+    event = {
         "schema": "quantgod.live_execution_feedback.v1",
         "feedbackId": feedback_id,
         "createdAt": utc_now_iso(),
@@ -283,6 +283,218 @@ def _normalize_row(index: int, row: Dict[str, Any], source: str) -> Dict[str, An
         "sourceKeys": sorted(row.keys())[:20],
         "safety": dict(SAFETY_BOUNDARY),
     }
+    event["entryContext"] = _entry_context_bridge(row, event, source, kind, tier)
+    return event
+
+
+def _entry_context_bridge(
+    row: Dict[str, Any],
+    event: Dict[str, Any],
+    source: str,
+    source_kind: str,
+    source_tier: str,
+) -> Dict[str, Any]:
+    existing = _first_dict(row, "entryContext", "entryMemory", "signalContext")
+    if existing:
+        return existing
+    event_type = str(event.get("eventType") or "").upper()
+    historical = (
+        source_kind in {"live_feedback_history", "close_history", "trade_journal"}
+        or source_tier in {"mt5_close_history", "backfilled_history"}
+        or event_type in CLOSE_EVENT_TYPES | OUTCOME_EVENT_TYPES
+    )
+    if not historical:
+        return {
+            "contextQuality": "EXECUTION_FEEDBACK_CONTEXT",
+            "contextQualityReasonZh": "执行反馈行缺少完整入场因子；已保留基础身份字段供后续 fill/close 链接。",
+            "entryTime": event.get("entrySignalTime"),
+            "symbol": event.get("symbol"),
+            "side": event.get("side"),
+            "strategyVersion": event.get("strategyId"),
+            "candidateSource": source,
+        }
+    profit_r = _num(event.get("profitR"))
+    mfe_r = _num(event.get("mfeR"))
+    mae_r = abs(_num(event.get("maeR")))
+    price_move_pips = _price_move_pips(row, event)
+    duration_minutes = _duration_minutes_from_row(row, event)
+    entry_regime = str(_first(row, "entryRegime", "EntryRegime", "regime", "Regime") or "")
+    exit_regime = str(_first(row, "exitRegime", "ExitRegime") or "")
+    comment = str(_first(row, "comment", "Comment", "exitReason", "ExitReason") or "")
+    return {
+        "contextQuality": "BRIDGED_HISTORY_CONTEXT",
+        "contextQualityReasonZh": "历史平仓/反馈行缺少完整入场快照；已从 MT5 历史字段桥接基础上下文、regime、价格移动和保守 TP/SL 估算，只可用于复盘/降级，不能作为升王牌证据。",
+        "bridgeSource": "usdjpy_evidence_os.execution_feedback",
+        "entryTime": _first(row, "entryTime", "EntryTime", "openTime", "OpenTime", "entrySignalTime") or event.get("entrySignalTime"),
+        "symbol": event.get("symbol"),
+        "side": event.get("side"),
+        "strategyVersion": event.get("strategyId"),
+        "leverage": _num(_first(row, "leverage", "Leverage")),
+        "marginUsd": _num(_first(row, "margin", "Margin", "marginUsd", "MarginUsd")),
+        "notionalUsd": _num(_first(row, "notional", "Notional", "notionalUsd", "NotionalUsd")),
+        "candidateSource": source,
+        "reasons": _history_reasons(event, entry_regime, exit_regime, comment),
+        "scores": {
+            "totalScore": _score_or_bridge(row, 0.50, "compositeScore", "totalScore", "score"),
+            "dataCoverage": _score_or_bridge(row, 0.55, "dataCoverageScore", "dataCoverage"),
+            "proScore": _score_or_bridge(row, 0.50, "professionalScore", "proScore"),
+            "marketQuality": _score_or_bridge(row, _regime_quality(entry_regime, exit_regime), "marketQualityScore", "marketQuality"),
+            "entryTiming": _score_or_bridge(row, _history_entry_timing(profit_r, mfe_r, mae_r), "entryTimingScore", "entryTiming"),
+            "fundFlow": _score_or_bridge(row, 0.0, "fundFlowScore", "fundFlow"),
+            "executionRisk": _score_or_bridge(row, _history_execution_risk(event, mae_r), "executionRiskScore", "executionRisk"),
+            "resonanceCount": _num(_first(row, "resonanceCount", "resonance")) or 1,
+        },
+        "factors": {
+            "atrPips": _num(_first(row, "atr", "ATR", "atrPips", "AtrPips")),
+            "trend": _trend_score_from_regime(entry_regime, event.get("side")),
+            "sentiment": _num(_first(row, "sentimentScore", "sentiment")),
+            "oiChange": _num(_first(row, "openInterestChange", "oiChange", "openInterest")),
+            "news": _num(_first(row, "newsScore", "news")),
+            "smartMoney": _num(_first(row, "smartMoneyScore", "smartMoney")),
+            "predictionMarket": _num(_first(row, "predictionMarketScore", "predictionMarket")),
+            "kronos": _num(_first(row, "kronosScore", "kronos")),
+            "entryRegime": entry_regime,
+            "exitRegime": exit_regime,
+        },
+        "estimates": {
+            "ev": _score_or_bridge(row, profit_r, "estimatedEV", "ev", "expectedValue"),
+            "winProbability": _score_or_bridge(row, 0.55 if profit_r > 0 else 0.45 if profit_r < 0 else 0.50, "estimatedWinProbability", "winProbability", "winProb"),
+            "riskReward": _score_or_bridge(row, _history_risk_reward(profit_r, mfe_r, mae_r), "estimatedRiskReward", "riskReward", "rr"),
+            "positionScale": _score_or_bridge(row, 0.20, "positionScaling", "positionScale", "riskMultiplier"),
+        },
+        "riskPlan": {
+            "stopLossR": _score_or_bridge(row, max(1.0, mae_r) if mae_r else 1.0, "stopLossR", "slR", "initialStopR"),
+            "targetR": _score_or_bridge(row, max(1.2, mfe_r, abs(profit_r)) if (mfe_r or profit_r) else 1.2, "takeProfitR", "tpR", "targetR"),
+            "firstTakeProfitR": _score_or_bridge(row, 0.6, "tp1R", "firstTakeProfitR"),
+            "secondTakeProfitR": _score_or_bridge(row, max(1.2, mfe_r, abs(profit_r)) if (mfe_r or profit_r) else 1.2, "tp2R", "secondTakeProfitR"),
+            "trailStartR": _score_or_bridge(row, 0.8, "trailingStartR", "trailStartR"),
+            "givebackPct": _score_or_bridge(row, 0.45, "mfeGivebackPct", "givebackPct"),
+            "timeoutMinutes": _score_or_bridge(row, duration_minutes or 90.0, "maxHoldMinutes", "timeoutMinutes", "durationMinutes"),
+            "stopLossPips": _score_or_bridge(row, abs(price_move_pips) if price_move_pips else 6.0, "stopLossPriceMove", "stopLossPips", "slPips"),
+            "takeProfitPips": _score_or_bridge(row, max(abs(price_move_pips) * 1.4, 8.0) if price_move_pips else 8.0, "takeProfitPriceMove", "takeProfitPips", "tpPips"),
+        },
+        "factorAttributionSummary": _history_attribution_summary(event, entry_regime, exit_regime, profit_r, mfe_r, mae_r, comment),
+    }
+
+
+def _first_dict(row: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
+def _score_or_bridge(row: Dict[str, Any], bridge_value: float, *keys: str) -> float:
+    explicit = _first(row, *keys)
+    if explicit is not None:
+        return round(_num(explicit), 6)
+    return round(float(bridge_value or 0.0), 6)
+
+
+def _price_move_pips(row: Dict[str, Any], event: Dict[str, Any]) -> float:
+    explicit = _first(row, "priceMovePips", "PriceMovePips", "netPips", "NetPips")
+    if explicit is not None:
+        return _num(explicit)
+    expected = _num(event.get("expectedPrice"))
+    fill = _num(event.get("fillPrice"))
+    if not expected or not fill:
+        return 0.0
+    return round((fill - expected) / 0.01, 4)
+
+
+def _duration_minutes_from_row(row: Dict[str, Any], event: Dict[str, Any]) -> float:
+    explicit = _first(row, "durationMinutes", "DurationMinutes", "holdMinutes", "HoldMinutes")
+    if explicit is not None:
+        return _num(explicit)
+    return 0.0 if event.get("fillTime") == event.get("entrySignalTime") else 90.0
+
+
+def _history_reasons(event: Dict[str, Any], entry_regime: str, exit_regime: str, comment: str) -> List[str]:
+    reasons = [
+        "history_feedback_bridge",
+        f"event={event.get('eventType') or 'UNKNOWN'}",
+    ]
+    if entry_regime:
+        reasons.append(f"entryRegime={entry_regime}")
+    if exit_regime:
+        reasons.append(f"exitRegime={exit_regime}")
+    if comment:
+        reasons.append(comment[:80])
+    return reasons
+
+
+def _regime_quality(entry_regime: str, exit_regime: str) -> float:
+    entry = entry_regime.upper()
+    exit_ = exit_regime.upper()
+    if entry and exit_ and entry == exit_:
+        return 0.62
+    if "TREND" in entry and "RANGE" in exit_:
+        return 0.42
+    if "RANGE" in entry and "TREND" in exit_:
+        return 0.45
+    return 0.50
+
+
+def _history_entry_timing(profit_r: float, mfe_r: float, mae_r: float) -> float:
+    if profit_r > 0 and mae_r <= 0.35:
+        return 0.65
+    if profit_r < 0 and mae_r >= 0.65:
+        return 0.35
+    if mfe_r > 0.5 and profit_r <= 0:
+        return 0.42
+    return 0.50
+
+
+def _history_execution_risk(event: Dict[str, Any], mae_r: float) -> float:
+    spread = abs(_num(event.get("spreadAtEntry")))
+    slippage = abs(_num(event.get("slippagePips")))
+    risk = 0.20 + min(0.30, spread / 10.0) + min(0.30, slippage / 5.0) + min(0.20, mae_r / 5.0)
+    return min(1.0, risk)
+
+
+def _trend_score_from_regime(entry_regime: str, side: Any) -> float:
+    regime = entry_regime.upper()
+    direction = str(side or "").upper()
+    if "TREND_DOWN" in regime:
+        return -0.35 if direction in {"BUY", "LONG"} else 0.35
+    if "TREND_UP" in regime:
+        return 0.35 if direction in {"BUY", "LONG"} else -0.35
+    if "RANGE" in regime:
+        return 0.0
+    return 0.0
+
+
+def _history_risk_reward(profit_r: float, mfe_r: float, mae_r: float) -> float:
+    if mae_r > 0:
+        return max(0.5, min(3.0, mfe_r / mae_r))
+    if profit_r > 0:
+        return max(1.0, min(3.0, profit_r + 1.0))
+    return 1.2
+
+
+def _history_attribution_summary(
+    event: Dict[str, Any],
+    entry_regime: str,
+    exit_regime: str,
+    profit_r: float,
+    mfe_r: float,
+    mae_r: float,
+    comment: str,
+) -> str:
+    pieces = [
+        f"历史桥接 {event.get('strategyId') or 'UNKNOWN'} {event.get('side') or 'UNKNOWN'}",
+        f"profitR={profit_r:.4g}",
+        f"mfeR={mfe_r:.4g}",
+        f"maeR={mae_r:.4g}",
+    ]
+    if entry_regime:
+        pieces.append(f"entryRegime={entry_regime}")
+    if exit_regime:
+        pieces.append(f"exitRegime={exit_regime}")
+    if comment:
+        pieces.append(f"comment={comment[:80]}")
+    return "；".join(pieces)
 
 
 def _metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { createRequire } from 'node:module';
 
 const repo = process.cwd();
+const require = createRequire(import.meta.url);
+const caseMemoryRoutes = require(path.join(repo, 'Dashboard/case_memory_api_routes.js'));
 
 function read(rel) {
   return fs.readFileSync(path.join(repo, rel), 'utf8');
@@ -21,6 +24,9 @@ test('case memory API and runner expose P4-7 productionized endpoints', () => {
     '/api/case-memory/telegram-text',
     'run_case_memory.py',
     'Case Memory',
+    'research-fallback',
+    'CASE_MEMORY_ARTIFACTS_MISSING_IN_ACCOUNT_RUNTIME',
+    'runtimeScope',
   ]) {
     assert.match(`${server}\n${routes}\n${runner}`, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -31,6 +37,7 @@ test('case memory candidates remain shadow-only and readable', () => {
     'tools/case_memory/schema.py',
     'tools/case_memory/candidate_builder.py',
     'tools/case_memory/builder.py',
+    'tools/case_memory/long_term_memory.py',
     'tools/case_memory/report.py',
     'tools/case_memory/telegram_text.py',
     'tools/strategy_structure_lab/schema.py',
@@ -47,6 +54,11 @@ test('case memory candidates remain shadow-only and readable', () => {
     'SHADOW_STRATEGY_JSON_CANDIDATE',
     'BLOCKED_BY_PARITY',
     'case_memory_seed_pool',
+    'longTermTradeMemory',
+    'rollingReview',
+    'entryFeedbackPolicy',
+    'candidatePenaltyRules',
+    'writesMt5OrderRequest',
     'validate_strategy_json',
     'orderSendAllowed',
     'writesMt5OrderRequest',
@@ -62,4 +74,19 @@ test('case memory candidates remain shadow-only and readable', () => {
       assert.ok(line.length <= 160, `${file}:${index + 1} should not exceed 160 characters`);
     });
   }
+});
+
+test('case memory API falls back to repo research runtime when account runtime has no artifacts', () => {
+  const accountRuntime = path.join(repo, 'runtime', 'missing_case_memory_for_guard');
+  const scope = caseMemoryRoutes.resolveCaseMemoryRuntimeScope({
+    repoRoot: repo,
+    defaultRuntimeDir: accountRuntime,
+  });
+  assert.equal(scope.scope, 'research-fallback');
+  assert.equal(scope.accountRuntimeDir, accountRuntime);
+  assert.equal(scope.fallbackReason, 'CASE_MEMORY_ARTIFACTS_MISSING_IN_ACCOUNT_RUNTIME');
+  assert.equal(scope.orderSendAllowed, false);
+  assert.equal(scope.livePresetMutationAllowed, false);
+  assert.equal(scope.writesMt5OrderRequest, false);
+  assert.match(scope.artifactPath, /QuantGod_CaseMemoryStrategyCandidates\.json$/);
 });

@@ -25,8 +25,16 @@ def bar_replay_to_chinese_text(payload: Dict[str, Any]) -> str:
         "实盘修改：无",
         "",
         "入场候选对比：",
-        f"- 当前规则：入场 {_metric(entry, 0, 'sampleCount', 0)} 次，净值 {_metric(entry, 0, 'netR', 0)}R，最大不利 {_metric(entry, 0, 'maxAdverseR')}R",
-        f"- 放宽 RSI 一档：入场 {_metric(entry, 1, 'sampleCount', 0)} 次，净变化 {_metric(entry, 1, 'netRDelta', 0)}R，最大不利 {_metric(entry, 1, 'maxAdverseR')}R",
+        (
+            f"- 当前规则：入场 {_metric(entry, 0, 'sampleCount', 0)} 次，"
+            f"净值 {_metric(entry, 0, 'netR', 0)}R，"
+            f"最大不利 {_metric(entry, 0, 'maxAdverseR')}R"
+        ),
+        (
+            f"- 放宽 RSI 一档：入场 {_metric(entry, 1, 'sampleCount', 0)} 次，"
+            f"净变化 {_metric(entry, 1, 'netRDelta', 0)}R，"
+            f"最大不利 {_metric(entry, 1, 'maxAdverseR')}R"
+        ),
         f"结论：{summary.get('entryConclusion') or '待补样本'}",
         "",
         "出场候选对比：",
@@ -39,4 +47,3 @@ def bar_replay_to_chinese_text(payload: Dict[str, Any]) -> str:
         "因果边界：后验窗口只用于评分，不能决定当时是否入场。",
         "安全边界：不会下单、不会平仓、不会撤单、不会修改实盘 preset。",
     ])
-

@@ -486,27 +486,38 @@ def promotion_recommendations(version_gate: dict[str, Any], governance: dict[str
     return recommendations
 
 
-def polymarket_summary(runtime_dir: Path) -> dict[str, Any]:
-    worker = read_json(runtime_dir / "QuantGod_PolymarketRadarWorkerV2.json")
-    ai_score = read_json(runtime_dir / "QuantGod_PolymarketAiScoreV1.json")
-    auto_gov = read_json(runtime_dir / "QuantGod_PolymarketAutoGovernance.json")
-    daily_review = polymarket_daily_review(runtime_dir)
+def hfm_crypto_summary(runtime_dir: Path) -> dict[str, Any]:
+    state = read_json(runtime_dir / "hfm_crypto" / "QuantGod_HFMCryptoCfdState.json")
+    if not state:
+        state = read_json(runtime_dir / "QuantGod_HFMCryptoCfdState.json")
+    local = state.get("localEvidence") if isinstance(state.get("localEvidence"), dict) else {}
+    moss = state.get("mossBacktestProfile") if isinstance(state.get("mossBacktestProfile"), dict) else {}
+    metrics = moss.get("metrics") if isinstance(moss.get("metrics"), dict) else {}
+    target_symbols = as_list(state.get("targetSymbols"))
+    detected_symbols = as_list(local.get("canonicalSymbols"))
+    status = first(state.get("status"), default="WAITING_HFM_CRYPTO_BUILD")
+    summary = {
+        "status": status,
+        "statusZh": first(state.get("statusZh"), default="等待构建 HFM Crypto CFD 影子车道"),
+        "symbolEvidenceFound": bool(local.get("found")),
+        "targetSymbolCount": len(target_symbols),
+        "detectedSymbolCount": len(detected_symbols),
+        "mossProfileFound": bool(moss.get("profileFound")),
+        "mossRoiPct": metrics.get("roiPct"),
+        "mossSharpe": metrics.get("sharpe"),
+        "mossMaxDrawdownPct": metrics.get("maxDrawdownPct"),
+        "mossLiquidationCount": metrics.get("liquidationCount"),
+    }
     return {
-        "workerStatus": first(worker.get("status"), default="MISSING"),
-        "candidateQueueSize": first(worker.get("summary", {}).get("candidateQueueSize"), 0),
-        "uniqueMarkets": first(worker.get("summary", {}).get("uniqueMarkets"), 0),
-        "aiYellow": first(ai_score.get("summary", {}).get("yellow"), 0),
-        "aiGreen": first(ai_score.get("summary", {}).get("green"), 0),
-        "quarantine": first(auto_gov.get("summary", {}).get("quarantine"), 0),
-        "dailyTodoCount": len(daily_review["actionQueue"]),
-        "lossQuarantine": daily_review["summary"]["lossQuarantine"],
-        "executedProfitFactor": daily_review["summary"]["executedProfitFactor"],
-        "executedNetUSDC": daily_review["summary"]["executedNetUSDC"],
-        "shadowProfitFactor": daily_review["summary"]["shadowProfitFactor"],
-        "shadowNetUSDC": daily_review["summary"]["shadowNetUSDC"],
-        "dailyReview": daily_review,
+        **summary,
+        "state": state,
+        "dailyReview": {
+            "summary": {**summary, "todoCount": 0},
+            "actionQueue": [],
+        },
         "walletWriteAllowed": False,
         "orderSendAllowed": False,
+        "hfmCryptoExecutionAllowed": False,
     }
 
 
@@ -609,280 +620,6 @@ def no_trade_retune_plan(route_counts: Counter[str]) -> list[dict[str, Any]]:
     return plans
 
 
-def polymarket_daily_review(runtime_dir: Path) -> dict[str, Any]:
-    research = read_json(runtime_dir / "QuantGod_PolymarketResearch.json")
-    retune = read_json(runtime_dir / "QuantGod_PolymarketRetunePlanner.json")
-    auto_gov = read_json(runtime_dir / "QuantGod_PolymarketAutoGovernance.json")
-    outcome = read_json(runtime_dir / "QuantGod_PolymarketDryRunOutcomeWatcher.json")
-    gate = read_json(runtime_dir / "QuantGod_PolymarketExecutionGate.json")
-    micro_live = read_json(runtime_dir / "QuantGod_PolymarketMicroLiveUnlock.json")
-    summary = research.get("summary") if isinstance(research.get("summary"), dict) else {}
-    executed = summary.get("executed") if isinstance(summary.get("executed"), dict) else {}
-    shadow = summary.get("shadow") if isinstance(summary.get("shadow"), dict) else {}
-    outcome_summary = outcome.get("summary") if isinstance(outcome.get("summary"), dict) else {}
-    auto_summary = auto_gov.get("summary") if isinstance(auto_gov.get("summary"), dict) else {}
-    gate_summary = gate.get("summary") if isinstance(gate.get("summary"), dict) else {}
-    retune_counts = retune.get("recommendationCounts") if isinstance(retune.get("recommendationCounts"), dict) else {}
-    retune_recommendations = as_list(retune.get("recommendations"))
-    copy_review = retune.get("copyTradingReview") if isinstance(retune.get("copyTradingReview"), dict) else {}
-    evidence_times = [generated_at(item) for item in (research, retune, auto_gov, outcome, gate, micro_live)]
-    evidence_times = [item for item in evidence_times if item]
-    latest_evidence_at = max(evidence_times) if evidence_times else None
-    review_fresh_for_day = bool(latest_evidence_at and latest_evidence_at.astimezone(JST).date() >= utc_now().astimezone(JST).date())
-    retune_total_count = as_int(first(retune_counts.get("total"), 0), 0)
-    retune_plan_ready = bool(retune.get("status") == "OK" and retune_total_count > 0)
-    retune_refreshed_today = bool(review_fresh_for_day and retune_plan_ready)
-    retune_agent_status = (
-        "RETUNE_PLAN_REFRESHED_TODAY"
-        if retune_refreshed_today else
-        "RETUNE_PLAN_READY_STALE_REFRESH_QUEUED"
-        if retune_plan_ready else
-        "RETUNE_PLAN_MISSING"
-    )
-    global_blockers = [clean(item) for item in as_list(auto_gov.get("globalBlockers")) if clean(item)]
-    executed_pf = as_float(executed.get("profitFactor"), 0.0)
-    executed_net = as_float(executed.get("realizedPnl"), 0.0)
-    shadow_pf = as_float(shadow.get("profitFactor"), 0.0)
-    shadow_net = as_float(shadow.get("realizedPnl"), 0.0)
-    loss_quarantine = (
-        "GLOBAL_LOSS_QUARANTINE" in global_blockers
-        or "EXECUTED_PF_BELOW_1" in global_blockers
-        or executed_net < 0
-        or executed_pf < 1.0
-    )
-    group_rows = [
-        row for row in as_list(research.get("recentJournalGroups") or research.get("journalGroups"))
-        if isinstance(row, dict) and as_float(row.get("realizedPnl")) < 0
-    ]
-    top_loss_sources = [
-        compact_metric_group(row)
-        for row in sorted(group_rows, key=lambda item: as_float(item.get("realizedPnl")))[:5]
-    ]
-    experiment_rows = [
-        row for row in as_list(research.get("recentExperimentGroups") or research.get("experimentGroups"))
-        if isinstance(row, dict) and as_float(row.get("realizedPnl")) < 0
-    ]
-    retune_sources = [
-        compact_metric_group(row)
-        for row in sorted(experiment_rows, key=lambda item: as_float(item.get("realizedPnl")))[:3]
-    ]
-    copy_retune_sources = [
-        row for row in retune_recommendations
-        if isinstance(row, dict) and clean(row.get("routeFamily")) == "copy_archive"
-    ]
-    micro_live_gate = micro_live.get("gate") if isinstance(micro_live.get("gate"), dict) else {}
-    micro_live_gate_blockers = [clean(item) for item in as_list(micro_live_gate.get("blockers")) if clean(item)]
-    micro_live_strategy_gate_passed = micro_live.get("strategyGatePassed") if micro_live else None
-    if micro_live and micro_live_strategy_gate_passed is None:
-        micro_live_strategy_gate_passed = not bool(micro_live_gate_blockers)
-    micro_live_failed = bool(micro_live and micro_live_strategy_gate_passed is False)
-    action_queue: list[dict[str, Any]] = []
-    if micro_live_failed:
-        action_queue.append({
-            "type": "POLY_MICRO_LIVE_STRATEGY_GATE_REVIEW",
-            "state": "DONE" if retune_plan_ready else "DUE_TODAY",
-            "title": "Polymarket micro-live 未通过复盘",
-            "market": "COPY_TRADER_MICRO_LIVE",
-            "detail": (
-                f"micro-live 软件闸已自动关闭；blockers={', '.join(micro_live_gate_blockers) or 'strategy_gate_failed'}"
-            ),
-            "nextStep": (
-                "Agent 已生成 shadow-only retune；下一轮自动刷新跟单样本，达标后自动重新打开软件闸。"
-                if retune_plan_ready else
-                "把未通过的 replay/walk-forward/source bucket 原因进入每日复盘；继续 shadow-only 收样本并淘汰弱 trader/source。"
-            ),
-            "blockers": micro_live_gate_blockers or ["MICRO_LIVE_STRATEGY_GATE_FAILED"],
-            "completionEvidence": (
-                "agent_retune_plan_ready_waiting_next_refresh"
-                if retune_plan_ready else
-                "micro_live_unlock_strategy_gate_failed"
-            ),
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    if loss_quarantine:
-        action_queue.append({
-            "type": "POLY_LOSS_SOURCE_REVIEW",
-            "state": "DONE" if review_fresh_for_day or retune_plan_ready else "DUE_TODAY",
-            "title": "Polymarket 亏损来源复盘",
-            "market": "GLOBAL",
-            "detail": (
-                f"executed PF {executed_pf:.4g} / 胜率 {as_float(executed.get('winRatePct')):.2f}% "
-                f"/ 净 {executed_net:.4g} USDC"
-            ),
-            "nextStep": "按 experimentKey、marketScope、entryStatus 拆亏损来源；继续只读/dry-run。",
-            "blockers": global_blockers[:4],
-            "completionEvidence": (
-                "fresh_readonly_research_and_auto_governance"
-                if review_fresh_for_day else
-                "agent_retune_plan_ready_waiting_next_refresh"
-                if retune_plan_ready else
-                ""
-            ),
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    if copy_review.get("active"):
-        action_queue.append({
-            "type": "POLY_COPY_TRADING_RETUNE_REVIEW",
-            "state": "DONE" if retune_plan_ready else "DUE_TODAY",
-            "title": "Polymarket 跟单策略复盘",
-            "market": "COPY_ARCHIVE",
-            "detail": copy_review.get("summary", ""),
-            "nextStep": (
-                "Agent 已生成 shadow-only 跟单重调方案；下一轮自动刷新 copied trader、市场家族、来源质量和流动性分桶。"
-                if retune_plan_ready else
-                "跟单可覆盖任何市场模块；剪掉近期负收益 copied trader，只保留高流动性、高样本、正收益分桶继续 shadow-only 重放。"
-            ),
-            "blockers": ["COPY_TRADING_NOT_PROMOTABLE_YET"],
-            "completionEvidence": (
-                "fresh_copy_trading_retune_review"
-                if retune_refreshed_today else
-                "agent_copy_retune_plan_ready_waiting_next_refresh"
-                if retune_plan_ready else
-                ""
-            ),
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    elif clean(copy_review.get("status")) == "COPY_TRADER_DISCOVERY_SOURCE_MISSING":
-        action_queue.append({
-            "type": "POLY_COPY_TRADER_DISCOVERY_SOURCE_MISSING",
-            "state": "DUE_TODAY",
-            "title": "Polymarket 跟单来源缺失",
-            "market": "COPY_TRADER_DISCOVERY",
-            "detail": copy_review.get("summary", ""),
-            "nextStep": (
-                "先接入只读 copied-trader discovery，生成当前 trader/source ranking；"
-                "旧 copy_archive 只保留为历史对照，不能作为跟单晋级依据。"
-            ),
-            "blockers": (copy_review.get("sourceDiagnostic") or {}).get("blockers") or [
-                "COPY_TRADER_DISCOVERY_SOURCE_MISSING",
-            ],
-            "completionEvidence": "archive_replay_detected_no_current_trader_ranking",
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    if shadow_pf < 1.0 or shadow_net < 0:
-        action_queue.append({
-            "type": "POLY_SHADOW_RETUNE_REVIEW",
-            "state": "DONE" if retune_plan_ready else "DUE_TODAY",
-            "title": "Polymarket Shadow 参数复盘",
-            "market": "SHADOW",
-            "detail": f"shadow PF {shadow_pf:.4g} / 净 {shadow_net:.4g} USDC",
-            "nextStep": (
-                "Agent 已生成 shadow-only 参数重调方案；保持隔离，等待下一轮样本验证。"
-                if retune_plan_ready else
-                "优先保留接近 PF>=1 的实验，淘汰低胜率 autonomous 或弱市场家族变体。"
-            ),
-            "blockers": ["SHADOW_PF_BELOW_1"],
-            "completionEvidence": (
-                "fresh_retune_planner"
-                if retune_refreshed_today else
-                "agent_retune_plan_ready_waiting_next_refresh"
-                if retune_plan_ready else
-                ""
-            ),
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    if as_int(outcome_summary.get("wouldExit"), 0) > 0:
-        action_queue.append({
-            "type": "POLY_EXIT_POSTERIOR_REVIEW",
-            "state": "DONE" if review_fresh_for_day else "DUE_TODAY",
-            "title": "Polymarket 退出后验复盘",
-            "market": "DRY_RUN",
-            "detail": (
-                f"wouldExit {as_int(outcome_summary.get('wouldExit'))} / "
-                f"SL {as_int(outcome_summary.get('stopLoss'))} / trailing {as_int(outcome_summary.get('trailingExit'))}"
-            ),
-            "nextStep": "检查 stop-loss/trailing/time-exit 是否过早或价格源延迟；只更新研究参数建议。",
-            "blockers": ["EXIT_POSTERIOR_REVIEW"],
-            "completionEvidence": "fresh_dry_run_outcome_watcher" if review_fresh_for_day else "",
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    for source in retune_sources[:2]:
-        action_queue.append({
-            "type": "POLY_RETUNE_EXPERIMENT",
-            "state": "DONE" if retune_plan_ready else "DUE_TODAY",
-            "title": f"重调 {source['key']}",
-            "market": source.get("marketScope") or "experiment",
-            "detail": f"PF {source['profitFactor']} / 胜率 {source['winRatePct']}% / 净 {source['realizedPnl']}",
-            "nextStep": (
-                "Agent 已生成该实验的 shadow-only 重调方案；下一轮自动刷新样本。"
-                if retune_plan_ready else
-                "降低该实验优先级或收紧入场阈值，生成下一轮 shadow-only retune。"
-            ),
-            "source": source,
-            "blockers": ["NEGATIVE_EXPERIMENT_SOURCE"],
-            "completionEvidence": (
-                "fresh_shadow_only_retune_recommendation"
-                if retune_refreshed_today else
-                "agent_retune_plan_ready_waiting_next_refresh"
-                if retune_plan_ready else
-                ""
-            ),
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    active_queue = [item for item in action_queue if item.get("state") != "DONE"]
-    completed_queue = [item for item in action_queue if item.get("state") == "DONE"]
-    return {
-        "status": "REVIEW_REQUIRED" if active_queue else "DONE_HIDE_UNTIL_NEXT_REFRESH",
-        "summary": {
-            "lossQuarantine": bool(loss_quarantine),
-            "reviewFreshForDay": review_fresh_for_day,
-            "retunePlanReady": retune_plan_ready,
-            "retuneRefreshedToday": retune_refreshed_today,
-            "retuneAgentStatus": retune_agent_status,
-            "latestEvidenceAtIso": latest_evidence_at.isoformat() if latest_evidence_at else "",
-            "globalBlockers": global_blockers,
-            "executedClosed": as_int(executed.get("closed"), 0),
-            "executedWinRatePct": round(as_float(executed.get("winRatePct")), 2),
-            "executedProfitFactor": round(executed_pf, 4),
-            "executedNetUSDC": round(executed_net, 4),
-            "shadowClosed": as_int(shadow.get("closed"), 0),
-            "shadowWinRatePct": round(as_float(shadow.get("winRatePct")), 2),
-            "shadowProfitFactor": round(shadow_pf, 4),
-            "shadowNetUSDC": round(shadow_net, 4),
-            "quarantineCount": first(auto_summary.get("quarantine"), 0),
-            "autoCanaryEligible": first(auto_summary.get("autoCanaryEligible"), 0),
-            "gateCanBet": first(gate_summary.get("canBet"), 0),
-            "gateBlocked": first(gate_summary.get("blocked"), 0),
-            "microLiveStatus": micro_live.get("status", ""),
-            "microLiveStrategyGatePassed": (
-                bool(micro_live_strategy_gate_passed)
-                if micro_live_strategy_gate_passed is not None else
-                None
-            ),
-            "microLiveSoftwareSwitchesUnlocked": bool(micro_live.get("softwareSwitchesUnlocked")),
-            "microLivePrivateKeyConfigured": bool(micro_live.get("privateKeyConfigured")),
-            "microLiveBlockers": micro_live_gate_blockers,
-            "retuneTotal": retune_total_count,
-            "retuneRed": first(retune_counts.get("red"), 0),
-            "retuneYellow": first(retune_counts.get("yellow"), 0),
-            "retuneCopyTrading": first(retune_counts.get("copyTrading"), 0),
-            "wouldExit": as_int(outcome_summary.get("wouldExit"), 0),
-            "todoCount": len(active_queue),
-            "completedCount": len(completed_queue),
-        },
-        "topLossSources": top_loss_sources,
-        "retuneSources": retune_sources,
-        "copyTradingReview": copy_review,
-        "copyRetuneSources": copy_retune_sources[:3],
-        "retuneRecommendations": retune_recommendations[:6],
-        "actionQueue": active_queue[:6],
-        "completedActionQueue": completed_queue[:6],
-        "safety": {
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-            "startsExecutor": False,
-            "mutatesMt5": False,
-        },
-    }
-
-
 def mt5_terminal_risk(runtime_dir: Path, now: datetime) -> dict[str, Any]:
     mt5_root = runtime_dir.parent.parent if runtime_dir.name == "Files" and runtime_dir.parent.name == "MQL5" else None
     dashboard = read_json(runtime_dir / "QuantGod_Dashboard.json")
@@ -966,7 +703,7 @@ def codex_review_queue(
     governance: dict[str, Any],
     auto_tester: dict[str, Any],
     recovery_summary: dict[str, Any],
-    poly_summary: dict[str, Any],
+    hfm_crypto: dict[str, Any],
     mt5_risk: dict[str, Any],
     daily_iteration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1041,13 +778,13 @@ def codex_review_queue(
         })
         targets.add("code_or_data")
 
-    if clean(poly_summary.get("workerStatus")).upper() == "ERROR":
+    if clean(hfm_crypto.get("status")).upper() == "WAITING_HFM_CRYPTO_SYMBOLS":
         reasons.append({
-            "code": "POLYMARKET_WORKER_ERROR",
-            "target": "code_or_network",
-            "detail": "Polymarket worker status ERROR",
+            "code": "HFM_CRYPTO_SYMBOL_EVIDENCE_PENDING",
+            "target": "data",
+            "detail": "HFM Crypto CFD symbol evidence is not present in local MT5 Bases yet.",
         })
-        targets.add("code_or_network")
+        targets.add("data")
 
     if mt5_risk.get("requiresCodexReview"):
         reasons.append({
@@ -1156,7 +893,7 @@ def usdjpy_evolution_summary(runtime_dir: Path) -> dict[str, Any]:
 def daily_iteration_review(
     daily_pnl: dict[str, Any],
     deferred_action_queue: list[dict[str, Any]],
-    poly: dict[str, Any],
+    hfm_crypto: dict[str, Any],
     mt5_risk: dict[str, Any],
     max_actions: int,
     tester_tasks: list[dict[str, Any]] | None = None,
@@ -1166,6 +903,15 @@ def daily_iteration_review(
     code_queue: list[dict[str, Any]] = []
     strategy_queue: list[dict[str, Any]] = []
     evidence_queue: list[dict[str, Any]] = []
+    if clean(hfm_crypto.get("status")).upper() == "WAITING_HFM_CRYPTO_SYMBOLS":
+        evidence_queue.append({
+            "type": "HFM_CRYPTO_SYMBOL_EVIDENCE",
+            "status": "WAITING_SYMBOL_EVIDENCE",
+            "safeMode": "shadow-only",
+            "recommendation": "登录 HFM/MT5 并让 BTC/ETH/SOL 等 crypto CFD 产生 history 或 tick 目录后再纳入影子研究。",
+            "orderSendAllowed": False,
+            "hfmCryptoExecutionAllowed": False,
+        })
 
     if as_int(daily_pnl.get("closedTrades")) > 0:
         net = as_float(daily_pnl.get("netUSC"))
@@ -1302,187 +1048,6 @@ def daily_iteration_review(
                 "requiresStrategyIteration": True,
             })
 
-    poly_daily = poly.get("dailyReview") if isinstance(poly.get("dailyReview"), dict) else {}
-    poly_summary = poly_daily.get("summary") if isinstance(poly_daily.get("summary"), dict) else {}
-    top_losses = as_list(poly_daily.get("topLossSources"))
-    retunes = as_list(poly_daily.get("retuneSources"))
-    copy_review = poly_daily.get("copyTradingReview") if isinstance(poly_daily.get("copyTradingReview"), dict) else {}
-    copy_sources = as_list(poly_daily.get("copyRetuneSources"))
-    micro_live_blockers = [clean(item) for item in as_list(poly_summary.get("microLiveBlockers")) if clean(item)]
-    micro_live_gate_failed = bool(
-        poly_summary.get("microLiveStatus")
-        and poly_summary.get("microLiveStrategyGatePassed") is False
-    )
-    if micro_live_gate_failed:
-        retune_total = as_int(poly_summary.get("retuneTotal"), 0)
-        retune_plan_ready = bool(poly_summary.get("retunePlanReady") or retune_total > 0)
-        findings.append({
-            "code": "POLYMARKET_MICRO_LIVE_STRATEGY_GATE_FAILED",
-            "severity": "watch" if retune_plan_ready else "high",
-            "target": "strategy",
-            "title": "Polymarket micro-live 自动关闭",
-            "detail": (
-                f"status={poly_summary.get('microLiveStatus')} "
-                f"softwareUnlocked={poly_summary.get('microLiveSoftwareSwitchesUnlocked')} "
-                f"blockers={','.join(micro_live_blockers) or 'strategy_gate_failed'}"
-            ),
-            "rootCause": "跟单策略未通过 replay/walk-forward/source/runtime 任一硬门槛，软件开关已自动回到隔离状态。",
-            "nextStep": (
-                "Agent 已生成 shadow-only retune；下一轮自动刷新样本，达标后自动重新打开 micro-live 软件闸。"
-                if retune_plan_ready else
-                "进入每日复盘，按 trader/source bucket、shadow replay、walk-forward blockers 淘汰弱来源。"
-            ),
-            "requiresCodeChange": False,
-            "requiresStrategyIteration": not retune_plan_ready,
-            "iterationApplied": retune_plan_ready,
-            "completedByAgent": retune_plan_ready,
-            "autoAppliedByAgent": retune_plan_ready,
-            "requiresAutonomousGovernance": True,
-        })
-        strategy_queue.append({
-            "type": "POLYMARKET_MICRO_LIVE_GATE_REVIEW",
-            "status": (
-                "RETUNE_PLAN_READY_STALE_REFRESH_QUEUED"
-                if retune_plan_ready else
-                "LOCKED_AND_REVIEW_QUEUED"
-            ),
-            "safeMode": "shadow-only",
-            "recommendation": (
-                "micro-live 未通过时自动关闭真钱软件闸；复盘弱 trader/source 后继续 shadow-only，达标后自动恢复。"
-            ),
-            "blockers": micro_live_blockers or ["MICRO_LIVE_STRATEGY_GATE_FAILED"],
-            "iterationApplied": retune_plan_ready,
-            "completedByAgent": retune_plan_ready,
-            "autoAppliedByAgent": retune_plan_ready,
-            "requiresAutonomousGovernance": True,
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-    if poly_summary.get("lossQuarantine"):
-        worst = top_losses[0] if top_losses and isinstance(top_losses[0], dict) else {}
-        retune_total = as_int(poly_summary.get("retuneTotal"), 0)
-        retune_red = as_int(poly_summary.get("retuneRed"), 0)
-        retune_yellow = as_int(poly_summary.get("retuneYellow"), 0)
-        retune_plan_ready = bool(poly_summary.get("retunePlanReady") or retune_total > 0)
-        retune_refreshed_today = bool(poly_summary.get("retuneRefreshedToday") or (poly_summary.get("reviewFreshForDay") and retune_plan_ready))
-        retune_agent_status = clean(poly_summary.get("retuneAgentStatus")) or (
-            "RETUNE_PLAN_REFRESHED_TODAY" if retune_refreshed_today else
-            "RETUNE_PLAN_READY_STALE_REFRESH_QUEUED" if retune_plan_ready else
-            "RETUNE_PLAN_MISSING"
-        )
-        findings.append({
-            "code": "POLYMARKET_LOSS_QUARANTINE_ACTIVE",
-            "severity": "watch" if retune_plan_ready else "high",
-            "target": "strategy",
-            "title": "Polymarket 亏损隔离",
-            "detail": (
-                f"executedPF={poly_summary.get('executedProfitFactor')} "
-                f"shadowPF={poly_summary.get('shadowProfitFactor')} "
-                f"quarantine={poly_summary.get('quarantineCount')} "
-                f"retune={retune_red}R/{retune_yellow}Y"
-            ),
-            "rootCause": (
-                f"最大亏损来源 {worst.get('experimentKey', '--')} "
-                f"PF={worst.get('profitFactor', '--')} win={worst.get('winRatePct', '--')}% "
-                f"net={worst.get('realizedPnl', '--')} USDC；edge_filter/autonomous 族群胜率明显不足。"
-            ),
-            "nextStep": (
-                "Agent 已生成 shadow-only retune；下一轮自动刷新样本并由钱包证据门控判断是否恢复 micro-live。"
-                if retune_plan_ready else
-                "淘汰/重建低胜率 edge_filter，并按市场家族分桶；未达证据门前钱包自动保持隔离。"
-            ),
-            "requiresCodeChange": False if retune_plan_ready else True,
-            "requiresStrategyIteration": False if retune_plan_ready else True,
-            "iterationApplied": retune_plan_ready,
-            "completedByAgent": retune_plan_ready,
-            "autoAppliedByAgent": retune_plan_ready,
-            "requiresAutonomousGovernance": True,
-        })
-        strategy_queue.append({
-            "type": "POLYMARKET_FILTER_RETUNE",
-            "status": (
-                "APPLIED_SHADOW_ONLY"
-                if retune_refreshed_today else
-                "RETUNE_PLAN_READY_STALE_REFRESH_QUEUED"
-                if retune_plan_ready else
-                "REQUIRED"
-            ),
-            "targetFamilies": [clean(item.get("experimentKey")) for item in retunes[:3] if isinstance(item, dict)],
-            "safeMode": "shadow-only",
-            "recommendation": (
-                f"Agent 已生成 {retune_red} 红 / {retune_yellow} 黄 shadow-only 重调方案；下一轮自动刷新样本。"
-                if retune_plan_ready else
-                "raise score/liquidity thresholds, split market families, keep global loss quarantine"
-            ),
-            "agentRetuneStatus": retune_agent_status,
-            "iterationApplied": retune_plan_ready,
-            "completedByAgent": retune_plan_ready,
-            "autoAppliedByAgent": retune_plan_ready,
-            "requiresAutonomousGovernance": True,
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-        if copy_review.get("active"):
-            copy_iteration_plan = copy_review.get("iterationPlan") if isinstance(copy_review.get("iterationPlan"), dict) else {}
-            strategy_queue.append({
-                "type": "POLYMARKET_COPY_TRADING_RETUNE",
-                "status": (
-                    "RETUNE_SPEC_READY_SHADOW_ONLY"
-                    if retune_refreshed_today else
-                    "RETUNE_SPEC_READY_STALE_REFRESH_QUEUED"
-                    if retune_plan_ready else
-                    "REQUIRED"
-                ),
-                "operatorStatusLabel": (
-                    "Agent 已生成跟单重调方案"
-                    if retune_plan_ready else
-                    "跟单策略等待 Agent 生成重调"
-                ),
-                "targetFamilies": [clean(item.get("experimentKey")) for item in copy_sources[:3] if isinstance(item, dict)] or [clean(copy_review.get("bestExperimentKey"))],
-                "safeMode": "shadow-only",
-                "recommendation": (
-                    "Agent 已生成跟单 shadow-only 重调方案；可覆盖任何市场模块，按 copied trader、市场家族、来源质量、流动性和结算表现重新筛选。"
-                    if retune_plan_ready else
-                    "跟单可覆盖任何市场模块；按 copied trader、市场家族、来源质量、流动性和结算表现重新筛选。"
-                ),
-                "copyTradingStatus": copy_review.get("status", ""),
-                "copyTradingSummary": copy_review.get("summary", ""),
-                "agentRetuneStatus": retune_agent_status,
-                "iterationPlan": copy_iteration_plan,
-                "acceptanceCriteria": as_list(copy_iteration_plan.get("acceptanceCriteria")),
-                "acceptanceCriteriaZh": as_list(copy_iteration_plan.get("acceptanceCriteriaZh")),
-                "candidateVariants": as_list(copy_iteration_plan.get("candidateVariants")),
-                "iterationApplied": retune_plan_ready,
-                "completedByAgent": retune_plan_ready,
-                "autoAppliedByAgent": retune_plan_ready,
-                "requiresAutonomousGovernance": True,
-                "walletWriteAllowed": False,
-                "orderSendAllowed": False,
-            })
-        code_queue.append({
-            "type": "POLYMARKET_RETUNE_RULES",
-            "status": (
-                "APPLIED_SHADOW_ONLY"
-                if retune_refreshed_today else
-                "RETUNE_PLAN_READY_STALE_REFRESH_QUEUED"
-                if retune_plan_ready else
-                "PROPOSE_CODE_OR_CONFIG_PATCH"
-            ),
-            "safeMode": "research-only",
-            "recommendation": (
-                "Agent retune artifacts already encode stricter red/yellow filter families; next cycle refreshes evidence automatically"
-                if retune_plan_ready else
-                "encode stricter shadow-only filter families for the worst loss sources; do not enable real executor"
-            ),
-            "agentRetuneStatus": retune_agent_status,
-            "iterationApplied": retune_plan_ready,
-            "completedByAgent": retune_plan_ready,
-            "autoAppliedByAgent": retune_plan_ready,
-            "requiresAutonomousGovernance": True,
-            "walletWriteAllowed": False,
-            "orderSendAllowed": False,
-        })
-
     if mt5_risk.get("requiresCodexReview"):
         findings.append({
             "code": "MT5_PERMISSION_REVIEW_REQUIRED",
@@ -1590,14 +1155,10 @@ def build_completion_report(
     param_results: dict[str, Any],
     deferred_action_queue: list[dict[str, Any]],
     promotions: list[dict[str, Any]],
-    poly: dict[str, Any],
+    hfm_crypto: dict[str, Any],
     daily_iteration: dict[str, Any],
 ) -> dict[str, Any]:
     tester_tasks = completed_tester_report_tasks(param_status, param_results)
-    poly_daily = poly.get("dailyReview") if isinstance(poly.get("dailyReview"), dict) else {}
-    poly_summary = poly_daily.get("summary") if isinstance(poly_daily.get("summary"), dict) else {}
-    poly_losses = as_list(poly_daily.get("topLossSources"))
-    worst_poly = poly_losses[0] if poly_losses and isinstance(poly_losses[0], dict) else {}
     processed_items: list[dict[str, Any]] = []
     recommendations: list[dict[str, Any]] = []
 
@@ -1649,26 +1210,20 @@ def build_completion_report(
             "impact": "不是前端漏做，而是今日 tester 预算已用满；下一轮自动继续。",
         })
 
-    if poly_summary.get("lossQuarantine"):
+    if clean(hfm_crypto.get("status")).upper() == "WAITING_HFM_CRYPTO_SYMBOLS":
         processed_items.append({
-            "code": "POLYMARKET_LOSS_SOURCE_REVIEWED",
-            "status": "ITERATION_REQUIRED",
-            "title": "Polymarket 亏损来源已归因",
-            "result": (
-                f"executed PF {poly_summary.get('executedProfitFactor')}，shadow PF {poly_summary.get('shadowProfitFactor')}；"
-                f"最大亏损源 {worst_poly.get('experimentKey', '--')}。"
-            ),
-            "impact": "进入 shadow-only retune；真实钱包由自动证据门控放行或隔离。",
+            "code": "HFM_CRYPTO_SYMBOL_EVIDENCE_PENDING",
+            "status": "WAITING_SYMBOL_EVIDENCE",
+            "title": "HFM Crypto CFD symbol 证据待同步",
+            "result": hfm_crypto.get("statusZh", "等待构建 HFM Crypto CFD 影子车道"),
+            "impact": "HFM Crypto CFD 暂不参与任何执行，只等待本机 MT5 history/tick 证据。",
         })
         recommendations.append({
-            "priority": "high",
-            "scope": "Polymarket",
-            "title": "重建低胜率 edge_filter",
-            "recommendation": "淘汰当前亏损 filter，按 retune planner 的 red/yellow 队列重建严格分数、流动性、价格带和市场家族分桶。",
-            "reason": (
-                f"{worst_poly.get('experimentKey', '--')} PF={worst_poly.get('profitFactor', '--')}，"
-                f"win={worst_poly.get('winRatePct', '--')}%，net={worst_poly.get('realizedPnl', '--')} USDC。"
-            ),
+            "priority": "watch",
+            "scope": "HFM Crypto CFD",
+            "title": "补齐 crypto CFD 本地 symbol 证据",
+            "recommendation": "先让 HFM/MT5 产生 crypto CFD history 或 tick 目录，再把 Moss 回测 profile 映射进 shadow 观察。",
+            "reason": "当前没有本机 HFM crypto symbol evidence；执行权限仍关闭。",
             "safeMode": "shadow-only",
             "autoApply": False,
         })
@@ -1686,7 +1241,7 @@ def build_completion_report(
             "testerNoTradeCount": sum(1 for item in tester_tasks if as_int(item.get("closedTrades"), -1) == 0),
             "deferredCount": len(deferred_action_queue),
             "promotionReviewCount": len(promotions),
-            "polymarketLossQuarantine": bool(poly_summary.get("lossQuarantine")),
+            "hfmCryptoSymbolEvidenceFound": bool(hfm_crypto.get("symbolEvidenceFound")),
         },
         "processedItems": processed_items,
         "testerReports": tester_tasks[:8],
@@ -1759,7 +1314,7 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         ]
         action_queue = []
     promotions = promotion_recommendations(version_gate, governance)
-    poly = polymarket_summary(runtime_dir)
+    hfm_crypto = hfm_crypto_summary(runtime_dir)
     mt5_risk = mt5_terminal_risk(runtime_dir, now)
     usdjpy_evolution = usdjpy_evolution_summary(runtime_dir)
     tester_summary = auto_tester.get("summary", {}) if isinstance(auto_tester.get("summary"), dict) else {}
@@ -1767,7 +1322,7 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
     daily_iteration = daily_iteration_review(
         daily_pnl,
         deferred_action_queue,
-        poly,
+        hfm_crypto,
         mt5_risk,
         max_actions,
         tester_tasks,
@@ -1780,7 +1335,7 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         param_results,
         deferred_action_queue,
         promotions,
-        poly,
+        hfm_crypto,
         daily_iteration,
     )
     codex_review = codex_review_queue(
@@ -1790,7 +1345,7 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         governance,
         auto_tester,
         recovery_summary,
-        poly,
+        hfm_crypto,
         mt5_risk,
         daily_iteration,
     )
@@ -1859,10 +1414,10 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
             "recoveryYellowCount": first(recovery_summary.get("riskYellowCount"), 0),
             "mt5TradeDisabledCount": mt5_risk["tradeDisabledCount"],
             "mt5InvestorModeCount": mt5_risk["investorModeCount"],
-            "polymarketTodoCount": poly["dailyReview"]["summary"]["todoCount"],
-            "polymarketLossQuarantine": poly["dailyReview"]["summary"]["lossQuarantine"],
-            "polymarketExecutedPF": poly["dailyReview"]["summary"]["executedProfitFactor"],
-            "polymarketShadowPF": poly["dailyReview"]["summary"]["shadowProfitFactor"],
+            "hfmCryptoStatus": hfm_crypto["status"],
+            "hfmCryptoSymbolEvidenceFound": hfm_crypto["symbolEvidenceFound"],
+            "hfmCryptoDetectedSymbolCount": hfm_crypto["detectedSymbolCount"],
+            "hfmCryptoMossProfileFound": hfm_crypto["mossProfileFound"],
             "dailyIterationStatus": daily_iteration["status"],
             "dailyIterationRequired": daily_iteration["iterationRequired"],
             "usdJpyEvolutionStatus": usdjpy_evolution["status"],
@@ -1878,7 +1433,7 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         "researchBacklogQueue": research_backlog_queue[:6],
         "strategyActions": strategy_actions,
         "promotionRecommendations": promotions,
-        "polymarket": poly,
+        "hfmCrypto": hfm_crypto,
         "usdJpyEvolution": usdjpy_evolution,
         "dailyIteration": daily_iteration,
         "completionReport": completion_report,
@@ -1919,8 +1474,8 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
             "TesterCanRun": str(bool(tester_summary.get("canRunTerminal"))).lower(),
             "Mt5InvestorModeCount": mt5_risk["investorModeCount"],
             "Mt5TradeDisabledCount": mt5_risk["tradeDisabledCount"],
-            "PolymarketWorkerStatus": payload["polymarket"]["workerStatus"],
-            "PolymarketQueue": payload["polymarket"]["candidateQueueSize"],
+            "HfmCryptoStatus": hfm_crypto["status"],
+            "HfmCryptoDetectedSymbolCount": hfm_crypto["detectedSymbolCount"],
             "UsdJpyEvolutionStatus": usdjpy_evolution["status"],
             "UsdJpyParamCandidateCount": usdjpy_evolution["paramCandidateCount"],
             "CodexReviewRequired": str(codex_review["required"]).lower(),
@@ -1940,8 +1495,8 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
             "TesterCanRun",
             "Mt5InvestorModeCount",
             "Mt5TradeDisabledCount",
-            "PolymarketWorkerStatus",
-            "PolymarketQueue",
+            "HfmCryptoStatus",
+            "HfmCryptoDetectedSymbolCount",
             "UsdJpyEvolutionStatus",
             "UsdJpyParamCandidateCount",
             "CodexReviewRequired",

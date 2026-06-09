@@ -192,7 +192,7 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
             self.assertEqual(healthy["checks"][0]["key"], "agentV25Loop")
             self.assertTrue((runtime_dir / "agent" / "QuantGod_AgentOpsHealth.json").exists())
 
-    def test_agent_ops_health_keeps_polymarket_strategy_warn_out_of_system_health(self):
+    def test_agent_ops_health_keeps_hfm_crypto_strategy_warn_out_of_system_health(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)
             heartbeat_dir = runtime_dir / "agent"
@@ -231,7 +231,7 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
 
             with patch("tools.agent_ops_health._daily_autopilot_health") as daily, patch(
                 "tools.agent_ops_health._telegram_health"
-            ) as telegram, patch("tools.agent_ops_health._polymarket_health") as polymarket:
+            ) as telegram, patch("tools.agent_ops_health._hfm_crypto_health") as hfm_crypto:
                 daily.return_value = {
                     "status": "PASS",
                     "statusZh": "自动化健康",
@@ -247,18 +247,17 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
                     "commandsAllowed": False,
                     "detailZh": "Telegram Gateway 正常。",
                 }
-                polymarket.return_value = {
+                hfm_crypto.return_value = {
                     "status": "WARN",
                     "statusZh": "需要观察",
-                    "stage": "QUARANTINED",
-                    "stageZh": "隔离",
-                    "retunePlanReady": True,
-                    "todoCount": 0,
-                    "retuneRed": 3,
-                    "retuneYellow": 2,
-                    "detailZh": "Polymarket 有 3 个红项 / 2 个黄项，仅进入 shadow retune。",
-                    "walletIntegrationAllowed": False,
-                    "polymarketRealMoneyAllowed": False,
+                    "stage": "WAITING_SYMBOL_EVIDENCE",
+                    "stageZh": "等待 HFM crypto symbol 证据",
+                    "symbolEvidenceFound": False,
+                    "detectedSymbolCount": 0,
+                    "mossProfileFound": False,
+                    "detailZh": "等待本机 HFM/MT5 Bases 里出现 crypto CFD 证据。",
+                    "walletAuthorizationAllowed": False,
+                    "hfmCryptoExecutionAllowed": False,
                 }
 
                 health = build_agent_ops_health(runtime_dir, repo_root=Path(__file__).resolve().parents[1], write=False)
@@ -393,6 +392,48 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
                 self.assertEqual(report["recentFeedback"][0]["profitR"], -0.0443)
                 self.assertIn("QuantGod_LiveExecutionFeedbackHistory.jsonl", sources)
                 self.assertNotIn("QuantGod_CloseHistory.csv", sources)
+        finally:
+            if old_mt5_files_dir is None:
+                os.environ.pop("QG_MT5_FILES_DIR", None)
+            else:
+                os.environ["QG_MT5_FILES_DIR"] = old_mt5_files_dir
+
+    def test_execution_feedback_bridges_history_entry_context_for_memory(self):
+        old_mt5_files_dir = os.environ.get("QG_MT5_FILES_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as runtime_tmp, tempfile.TemporaryDirectory() as mt5_tmp:
+                runtime_dir = Path(runtime_tmp)
+                mt5_files = Path(mt5_tmp)
+                os.environ["QG_MT5_FILES_DIR"] = str(mt5_files)
+                (mt5_files / "QuantGod_LiveExecutionFeedbackHistory.jsonl").write_text(
+                    '{"schema":"quantgod.live_execution_feedback.v1","feedbackId":"history-bridge-close",'
+                    '"eventType":"ORDER_CLOSE","eventTimeServer":"2026.06.05 11:37:59",'
+                    '"symbol":"USDJPYc","side":"BUY","policyId":"USDJPY_LIVE_LOOP",'
+                    '"strategyId":"RSI_Reversal","intentId":"history-bridge-position",'
+                    '"expectedPrice":159.965,"fillPrice":159.889,"slippagePips":0,'
+                    '"spreadAtEntry":2.7,"latencyMs":0,"profitR":-0.0553,"mfeR":0,"maeR":0,'
+                    '"entryRegime":"RANGE","exitRegime":"TREND_DOWN","exitReason":"HISTORY_EXIT"}\n',
+                    encoding="utf-8",
+                )
+
+                report = build_execution_feedback(runtime_dir, write=True)
+
+                self.assertEqual(report["sampleCount"], 1)
+                ledger_rows = [
+                    json.loads(line)
+                    for line in (runtime_dir / "execution" / "QuantGod_LiveExecutionFeedback.jsonl")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                    if line.strip()
+                ]
+                event = ledger_rows[0]
+                context = event["entryContext"]
+                self.assertEqual(context["contextQuality"], "BRIDGED_HISTORY_CONTEXT")
+                self.assertEqual(context["factors"]["entryRegime"], "RANGE")
+                self.assertEqual(context["factors"]["exitRegime"], "TREND_DOWN")
+                self.assertGreater(context["riskPlan"]["stopLossPips"], 0)
+                self.assertIn("只可用于复盘/降级", context["contextQualityReasonZh"])
+                self.assertFalse(event["safety"]["orderSendAllowed"])
         finally:
             if old_mt5_files_dir is None:
                 os.environ.pop("QG_MT5_FILES_DIR", None)
@@ -1234,28 +1275,6 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
     def test_telegram_gateway_collects_scheduled_operator_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)
-            (runtime_dir / "QuantGod_PolymarketRetunePlanner.json").write_text(
-                """
-                {
-                  "status": "OK",
-                  "decision": "SHADOW_ONLY_RETUNE_NO_BETTING",
-                  "recommendationCounts": {"red": 1, "yellow": 2, "green": 0, "gray": 0},
-                  "copyTradingReview": {
-                    "status": "COPY_TRADING_RETUNE_REQUIRED",
-                    "agentRetuneStatus": "COMPLETED_BY_AGENT",
-                    "operatorStatusLabel": "仍在隔离",
-                    "completedByAgent": true,
-                    "autoAppliedByAgent": true,
-                    "summary": "跟单策略已由 Agent 自动生成 retune plan；继续 shadow-only。",
-                    "bestMetrics": {"source": "sports", "closed": 179, "profitFactor": 0.9821, "winRatePct": 49.72},
-                    "capitalSimulation": {"cashScaledUSDC": "-$0.06", "ledgerNetUSDC": "-$4.23"},
-                    "nextActions": ["继续模拟重调，不连接真实钱包"]
-                  }
-                }
-                """,
-                encoding="utf-8",
-            )
-
             status = collect_scheduled_events(runtime_dir, repo_root=Path(__file__).resolve().parents[1], refresh=True)
 
             self.assertTrue(status["scheduledCollector"])
@@ -1263,13 +1282,13 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
             self.assertIn("DAILY_AUTOPILOT_V2_REPORT", topics)
             self.assertIn("GA_EVOLUTION_REPORT", topics)
             self.assertIn("USDJPY_AUTONOMOUS_AGENT_REPORT", topics)
-            self.assertIn("POLYMARKET_RETUNE_REPORT", topics)
+            self.assertIn("HFM_CRYPTO_SHADOW_REPORT", topics)
             queued_status = gateway_status(runtime_dir)
             self.assertGreaterEqual(queued_status["queuedCount"], 4)
             self.assertGreaterEqual(queued_status["pendingCount"], 4)
             queue_text = (runtime_dir / "notifications" / "QuantGod_NotificationEventQueue.jsonl").read_text(encoding="utf-8")
-            self.assertIn("POLYMARKET_RETUNE_REPORT", queue_text)
-            self.assertIn("不连接真实钱包", queue_text)
+            self.assertIn("HFM_CRYPTO_SHADOW_REPORT", queue_text)
+            self.assertIn("不触发 MT5 crypto 下单", queue_text)
             second = collect_scheduled_events(runtime_dir, repo_root=Path(__file__).resolve().parents[1], refresh=True)
             queued_again = sum(int(row.get("queued") or 0) for row in second["collectedEvents"])
             self.assertEqual(queued_again, 0)

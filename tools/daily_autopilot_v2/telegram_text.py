@@ -16,6 +16,13 @@ def _num(value: Any, digits: int = 2) -> str:
         return "—"
 
 
+def _join_entry_modes(lane: Dict[str, Any]) -> str:
+    modes = lane.get("allowedEntryModes")
+    if isinstance(modes, list):
+        return ",".join(str(item) for item in modes)
+    return str(modes) if modes not in (None, "") else ""
+
+
 def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
     morning = payload.get("morningPlan") if isinstance(payload.get("morningPlan"), dict) else {}
     evening = payload.get("eveningReview") if isinstance(payload.get("eveningReview"), dict) else {}
@@ -31,8 +38,8 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
     live = morning.get("liveLane") if isinstance(morning.get("liveLane"), dict) else {}
     mt5 = morning.get("mt5ShadowLane") if isinstance(morning.get("mt5ShadowLane"), dict) else {}
     mt5_summary = mt5.get("summary") if isinstance(mt5.get("summary"), dict) else {}
-    polymarket = morning.get("polymarketShadowLane") if isinstance(morning.get("polymarketShadowLane"), dict) else {}
-    poly_summary = polymarket.get("summary") if isinstance(polymarket.get("summary"), dict) else {}
+    hfm_crypto = morning.get("hfmCryptoShadowLane") if isinstance(morning.get("hfmCryptoShadowLane"), dict) else {}
+    hfm_crypto_summary = hfm_crypto.get("summary") if isinstance(hfm_crypto.get("summary"), dict) else {}
     news_gate = morning.get("newsGate") if isinstance(morning.get("newsGate"), dict) else {}
     spread_gate = morning.get("spreadGate") if isinstance(morning.get("spreadGate"), dict) else {}
     usd_deployment_gate = morning.get("usdDeploymentGate") if isinstance(morning.get("usdDeploymentGate"), dict) else {}
@@ -66,9 +73,21 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
         "【QuantGod 今日自动作战计划】",
         "",
         f"账户模式：{_fmt(morning.get('accountMode'), 'cent')} / {_fmt(morning.get('accountCurrencyUnit'), 'USC')}",
-        f"美分账户：{_fmt(cent_lane.get('accountAlias'), 'hfm_cent')} / {_fmt(cent_lane.get('defaultStage'), 'CENT_MICRO_LIVE')}；允许 {_fmt(','.join(cent_lane.get('allowedEntryModes', [])) if isinstance(cent_lane.get('allowedEntryModes'), list) else cent_lane.get('allowedEntryModes'), 'OPPORTUNITY_ENTRY,STANDARD_ENTRY')}",
-        f"美元账户：{_fmt(usd_lane.get('accountAlias'), 'hfm_usd')} / {_fmt(usd_deployment_gate.get('targetStage') or usd_lane.get('defaultStage'), 'USD_PAPER_MIRROR')}；严格部署 {_fmt(','.join(usd_lane.get('allowedEntryModes', [])) if isinstance(usd_lane.get('allowedEntryModes'), list) else usd_lane.get('allowedEntryModes'), 'STANDARD_ENTRY')}",
-        f"全局 USDJPY 风险：{_fmt(exposure_guard.get('direction'), 'LONG')} 同向预算 {_fmt(exposure_guard.get('sameDirectionMultiAccountRiskBudget'), '0.35')}R，美元账户优先。",
+        (
+            f"美分账户：{_fmt(cent_lane.get('accountAlias'), 'hfm_cent')} / "
+            f"{_fmt(cent_lane.get('defaultStage'), 'CENT_MICRO_LIVE')}；"
+            f"允许 {_fmt(_join_entry_modes(cent_lane), 'OPPORTUNITY_ENTRY,STANDARD_ENTRY')}"
+        ),
+        (
+            f"美元账户：{_fmt(usd_lane.get('accountAlias'), 'hfm_usd')} / "
+            f"{_fmt(usd_deployment_gate.get('targetStage') or usd_lane.get('defaultStage'), 'USD_PAPER_MIRROR')}；"
+            f"严格部署 {_fmt(_join_entry_modes(usd_lane), 'STANDARD_ENTRY')}"
+        ),
+        (
+            f"全局 USDJPY 风险：{_fmt(exposure_guard.get('direction'), 'LONG')} "
+            f"同向预算 {_fmt(exposure_guard.get('sameDirectionMultiAccountRiskBudget'), '0.35')}R，"
+            "美元账户优先。"
+        ),
         f"实盘车道：{_fmt(live.get('symbol'), 'USDJPYc')} {_fmt(live.get('strategy'), 'RSI_Reversal')} {_fmt(live.get('direction'), 'LONG')}",
         f"当前阶段：{_fmt(live.get('stageZh') or live.get('stage'))}",
         f"建议阶段仓位：{_num(live.get('stageMaxLot'))} / 最大上限 {_num(live.get('maxLot') or 2.0)}",
@@ -77,10 +96,10 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
         f"- 路线：{_fmt(mt5_summary.get('routeCount'), '0')} 条",
         f"- 快速模拟：{fast_shadow}，测试器：{tester_only}，暂停：{paused}",
         "",
-        "Polymarket 模拟车道：",
-        f"- 状态：{_fmt(polymarket.get('stageZh') or polymarket.get('stage'))}",
-        f"- 模拟 PF：{_fmt(poly_summary.get('shadowProfitFactor'), '0')}，模拟净值：{_fmt(poly_summary.get('shadowNetUSDC'), '0')} USDC",
-        "- 只做模拟账本和事件风险，不连接真实钱包。",
+        "HFM Crypto CFD 影子车道：",
+        f"- 状态：{_fmt(hfm_crypto.get('stageZh') or hfm_crypto.get('stage'))}",
+        f"- Moss ROI：{_fmt(hfm_crypto_summary.get('mossRoiPct'), '—')}%，Sharpe：{_fmt(hfm_crypto_summary.get('mossSharpe'), '—')}",
+        "- 只做 symbol/Moss 回测映射，不触发 MT5 crypto 下单。",
         "",
         "新闻门禁：",
         f"- 模式：{_fmt(news_gate.get('mode'), 'SOFT')}；风险：{_fmt(news_gate.get('riskLevel'), 'UNKNOWN')}",
@@ -89,11 +108,24 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
         f"- 说明：{_fmt(news_gate.get('reasonZh'), '普通新闻不挡 RSI 买入，高冲击新闻才硬挡。')}",
         "",
         "USDJPY 点差门禁：",
-        f"- 当前点差：{_num(spread_gate.get('spreadPips'), 2)} pips；等级：{_fmt(spread_gate.get('tierZh') or spread_gate.get('tier'), '待同步')}",
-        f"- 正常/轻微/硬阻断：{_num(spread_gate.get('normalLimitPips'), 1)} / {_num(spread_gate.get('softLimitPips'), 1)} / {_num(spread_gate.get('hardLimitPips'), 1)} pips",
+        (
+            f"- 当前点差：{_num(spread_gate.get('spreadPips'), 2)} pips；"
+            f"等级：{_fmt(spread_gate.get('tierZh') or spread_gate.get('tier'), '待同步')}"
+        ),
+        (
+            f"- 正常/轻微/硬阻断：{_num(spread_gate.get('normalLimitPips'), 1)} / "
+            f"{_num(spread_gate.get('softLimitPips'), 1)} / "
+            f"{_num(spread_gate.get('hardLimitPips'), 1)} pips"
+        ),
         f"- 处理：{_fmt(spread_gate.get('reasonZh'), '2.2 pips 是正常上限，不再单独作为硬阻断线。')}",
-        f"- 美分账户：{_fmt(spread_gate.get('centActionZh'), '按 quorum 和账户车道处理。')}；美元账户：{_fmt(spread_gate.get('usdActionZh'), '只部署已验证结构。')}",
-        f"- USD 部署门：{_fmt(usd_deployment_gate.get('action'), 'PAPER_MIRROR')}；{_fmt(usd_deployment_gate.get('reasonZh'), 'STANDARD_ENTRY / NORMAL 点差 / 美分验证通过后才小仓实盘。')}",
+        (
+            f"- 美分账户：{_fmt(spread_gate.get('centActionZh'), '按 quorum 和账户车道处理。')}；"
+            f"美元账户：{_fmt(spread_gate.get('usdActionZh'), '只部署已验证结构。')}"
+        ),
+        (
+            f"- USD 部署门：{_fmt(usd_deployment_gate.get('action'), 'PAPER_MIRROR')}；"
+            f"{_fmt(usd_deployment_gate.get('reasonZh'), 'STANDARD_ENTRY / NORMAL 点差 / 美分验证通过后才小仓实盘。')}"
+        ),
         "",
         "今日禁止：",
     ]
@@ -115,7 +147,10 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
         f"新闻风险复盘：{news_mode} / {news_risk}；普通新闻不硬阻断，高冲击新闻硬阻断。",
         "",
         "执行一致性复盘：",
-        f"- Strategy JSON 与 EA 一致性：{_fmt(consistency.get('parityStatus'), 'MISSING')}；晋级门：{_fmt(consistency.get('parityGateStatus'), 'MISSING')}",
+        (
+            f"- Strategy JSON 与 EA 一致性：{_fmt(consistency.get('parityStatus'), 'MISSING')}；"
+            f"晋级门：{_fmt(consistency.get('parityGateStatus'), 'MISSING')}"
+        ),
         (
             f"- 实盘执行质量：平均滑点 {_fmt(consistency.get('avgSlippagePips'), '0')} pips；"
             f"平均延迟 {_fmt(consistency.get('avgLatencyMs'), '0')}ms；"

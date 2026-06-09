@@ -129,7 +129,7 @@ def mt5_account_registry() -> Dict[str, Any]:
             ],
         },
         "safety": {
-            "polymarketLogicUnchanged": True,
+            "externalMarketRemoved": True,
             "mt5Only": True,
             "orderSendAllowed": False,
             "livePresetMutationAllowed": False,

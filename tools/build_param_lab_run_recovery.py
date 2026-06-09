@@ -152,14 +152,17 @@ def report_state_from_task(task: dict[str, Any], result: dict[str, Any]) -> str:
     status = str(result.get("status") or task.get("status") or "").upper()
     metrics = safe_dict(result.get("metrics")) or safe_dict(task.get("metrics"))
     parse_status = str(metrics.get("parseStatus") or "").upper()
-    report_exists = bool(metrics.get("reportExists"))
+    html_report_exists = bool(metrics.get("htmlReportExists"))
+    report_exists = bool(metrics.get("reportExists")) and str(metrics.get("evidenceSource") or "") != "agent_artifacts"
+    if status in {"TERMINAL_EXIT_NONZERO_REPORT_MISSING", "REPORT_MISSING_AFTER_RUN", "REPORT_MISSING", "PENDING_REPORT"}:
+        return "missing"
     if status == "REPORT_FOUND_UNPARSED" or parse_status == "REPORT_FOUND_UNPARSED":
         return "malformed"
-    if status.startswith("PARSED") or parse_status.startswith("PARSED"):
+    if (status.startswith("PARSED") or parse_status.startswith("PARSED")) and html_report_exists:
         return "parsed"
     if report_exists and not parse_status:
         return "parsed"
-    if status in {"REPORT_MISSING_AFTER_RUN", "REPORT_MISSING", "PENDING_REPORT"} or parse_status in {"PENDING_REPORT", "REPORT_MISSING"}:
+    if parse_status in {"PENDING_REPORT", "REPORT_MISSING"}:
         return "missing"
     if str(task.get("terminalExitCode") or "") not in {"", "None"}:
         return "missing"

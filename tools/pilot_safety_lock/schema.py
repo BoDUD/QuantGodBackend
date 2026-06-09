@@ -25,7 +25,7 @@ SAFETY_DEFAULTS: Dict[str, Any] = {
     "webhookReceiverAllowed": False,
     "credentialStorageAllowed": False,
     "walletIntegrationAllowed": False,
-    "polymarketOrderAllowed": False,
+    "externalMarketOrderAllowed": False,
 }
 
 DANGEROUS_KEYS = {
@@ -53,7 +53,7 @@ EXECUTION_TRUE_KEYS = {
     "telegramCommandExecutionAllowed",
     "webhookReceiverAllowed",
     "credentialStorageAllowed",
-    "polymarketOrderAllowed",
+    "externalMarketOrderAllowed",
     "walletIntegrationAllowed",
 }
 

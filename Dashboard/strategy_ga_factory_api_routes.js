@@ -33,10 +33,10 @@ function isStrategyGAFactoryPath(requestUrl) {
   return pathname === '/api/strategy-ga-factory' || pathname.startsWith('/api/strategy-ga-factory/');
 }
 
-function runPythonJson(repoRoot, args, timeoutMs = 120000) {
+function runPythonJson(repoRoot, args, timeoutMs = 120000, scriptName = 'run_strategy_ga_factory.py') {
   return new Promise((resolve) => {
     const pythonBin = process.env.QG_PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
-    const script = path.join(repoRoot, 'tools', 'run_strategy_ga_factory.py');
+    const script = path.join(repoRoot, 'tools', scriptName);
     if (!fs.existsSync(script)) {
       resolve({ ok: false, skipped: true, reason: 'script_not_found', script });
       return;
@@ -97,6 +97,43 @@ async function handle(req, res, ctx) {
   }
   if (req.method === 'POST' && pathname === '/api/strategy-ga-factory/build') {
     const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'build', '--write']);
+    sendJson(res, statusCodeFor(payload), payload);
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/strategy-ga-factory/intent-plan') {
+    const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'intent-status']);
+    sendJson(res, statusCodeFor(payload), payload);
+    return;
+  }
+  if (req.method === 'POST' && pathname === '/api/strategy-ga-factory/intent-plan/build') {
+    const prompt = url.searchParams.get('prompt') || '';
+    const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'intent-plan', '--write', '--prompt', prompt]);
+    sendJson(res, statusCodeFor(payload), payload);
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/strategy-ga-factory/hyperliquid-shadow') {
+    const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'status'], 120000, 'run_hyperliquid_shadow_lane.py');
+    sendJson(res, statusCodeFor(payload), payload);
+    return;
+  }
+  if (req.method === 'POST' && pathname === '/api/strategy-ga-factory/hyperliquid-shadow/build') {
+    const targetAgentUrl = url.searchParams.get('targetAgentUrl') || '';
+    const targetAgentProfileJson = url.searchParams.get('targetAgentProfileJson') || '';
+    const payload = await runPythonJson(
+      ctx.repoRoot,
+      [
+        '--runtime-dir',
+        runtimeDir,
+        'build',
+        '--write',
+        '--target-agent-url',
+        targetAgentUrl,
+        '--target-agent-profile-json',
+        targetAgentProfileJson,
+      ],
+      120000,
+      'run_hyperliquid_shadow_lane.py',
+    );
     sendJson(res, statusCodeFor(payload), payload);
     return;
   }

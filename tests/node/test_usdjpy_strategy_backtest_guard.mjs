@@ -205,7 +205,7 @@ test('USDJPY Strategy JSON backtest does not introduce live execution or wallets
   ].map(read).join('\n');
 
   assert.doesNotMatch(source, /TRADE_ACTION_DEAL|PositionClose|OrderSendAsync|CTrade/);
-  assert.doesNotMatch(source, /privateKeyAllowed\s*["']?\s*:\s*true|polymarketRealMoneyAllowed\s*["']?\s*:\s*true/i);
+  assert.doesNotMatch(source, /privateKeyAllowed\s*["']?\s*:\s*true|externalMarketRealMoneyAllowed\s*["']?\s*:\s*true/i);
   assert.match(source, /orderSendAllowed["']?\s*:\s*False/);
   assert.match(source, /livePresetMutationAllowed["']?\s*:\s*False/);
 });

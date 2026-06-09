@@ -32,8 +32,14 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertTrue(policy["focusOnly"])
             self.assertEqual(policy["accountLanePolicy"]["usdAccountOpportunityEntryMode"], "PAPER_MIRROR_ONLY")
             self.assertEqual(policy["accountLanePolicy"]["usdAccountLiveEntryModes"], ["STANDARD_ENTRY"])
+            self.assertTrue(policy["accountLanePolicy"]["centOpportunityLiveAccountOnly"])
+            self.assertEqual(policy["accountLanePolicy"]["centOpportunityLotCap"], 0.10)
+            self.assertEqual(
+                policy["accountLanePolicy"]["centOpportunitySamplingGate"]["mode"],
+                "CENT_SMALL_LOT_SAMPLE_USD_PAPER_MIRROR",
+            )
             self.assertIn("usdDeploymentGate", policy)
-            self.assertTrue(policy["accountLanePolicy"]["polymarketLogicUnchanged"])
+            self.assertTrue(policy["accountLanePolicy"]["externalMarketRemoved"])
             self.assertGreaterEqual(policy["standardEntryCount"] + policy["opportunityEntryCount"], 1)
             self.assertGreaterEqual(policy["evidence"]["candidateSignalCount"], 1)
             output = runtime / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json"
@@ -99,6 +105,14 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertIn(decision["entryMode"], {ENTRY_STANDARD, ENTRY_OPPORTUNITY, ENTRY_BLOCKED})
             self.assertFalse(decision["safety"]["orderSendAllowed"])
             self.assertTrue((runtime / "adaptive" / "QuantGod_USDJPYEADryRunDecision.json").exists())
+            feedback_path = runtime / "evidence_os" / "QuantGod_LiveExecutionFeedback.jsonl"
+            self.assertTrue(feedback_path.exists())
+            feedback = json.loads(feedback_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(feedback["eventType"], "DRY_RUN_ENTRY_CONTEXT")
+            self.assertEqual(feedback["executionMode"], "SHADOW")
+            self.assertEqual(feedback["entryContext"]["contextQuality"], "RAW")
+            self.assertFalse(feedback["safety"]["orderSendAllowed"])
+            self.assertIn("factorAvailability", feedback["entryContext"])
 
     def test_strategy_factory_catalog_and_signals_are_shadow_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -225,6 +239,39 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertTrue(policy["evidence"]["fastlaneOk"])
             self.assertTrue(any("HFM EA Dashboard 新鲜快照" in "；".join(item["reasons"]) for item in policy["strategies"]))
 
+    def test_empty_fastlane_with_stale_rsi_indicator_falls_back_to_fresh_dashboard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            sample_runtime(runtime, overwrite=True)
+            (runtime / "QuantGod_Dashboard.json").write_text(
+                json.dumps({
+                    "watchlist": FOCUS_SYMBOL,
+                    "runtime": {"tradeStatus": "READY", "executionEnabled": True, "readOnlyMode": False, "tickAgeSeconds": 1},
+                    "market": {"bid": 155.92, "ask": 155.942, "spread": 2.2},
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            quality_path = runtime / "quality" / "QuantGod_MT5FastLaneQuality.json"
+            quality_path.write_text(
+                json.dumps({
+                    "schema": "quantgod.mt5.fastlane.quality.v1",
+                    "heartbeatFound": False,
+                    "quality": "DEGRADED",
+                    "symbols": [{
+                        "symbol": FOCUS_SYMBOL,
+                        "quality": "DEGRADED",
+                        "tickRows": 0,
+                        "tickAgeSeconds": None,
+                        "indicatorAgeSeconds": 2297925,
+                    }],
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            policy = build_usdjpy_policy(runtime)
+            self.assertTrue(policy["evidence"]["fastlaneOk"])
+            self.assertTrue(any("HFM EA Dashboard 新鲜快照" in "；".join(item["reasons"]) for item in policy["strategies"]))
+
     def test_stale_degraded_fastlane_exporter_falls_back_to_fresh_dashboard(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
@@ -266,6 +313,107 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertTrue(policy["evidence"]["fastlaneOk"])
             self.assertTrue(any("HFM EA Dashboard 新鲜快照" in "；".join(item["reasons"]) for item in policy["strategies"]))
 
+    def test_global_mt5_dashboard_can_replace_stale_repo_snapshot(self):
+        old_env = {
+            key: os.environ.get(key)
+            for key in ("QG_USDJPY_INCLUDE_GLOBAL_MT5", "QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY", "QG_RUNTIME_DIR", "QG_MT5_FILES_DIR")
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                runtime = root / "runtime"
+                mt5_files = root / "mt5_files"
+                runtime.mkdir()
+                mt5_files.mkdir()
+                sample_runtime(runtime, overwrite=True)
+                snapshot_path = runtime / "QuantGod_MT5RuntimeSnapshot_USDJPYc.json"
+                snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+                snapshot["runtimeAgeSeconds"] = 9999
+                snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+                old_time = time.time() - 3600
+                os.utime(snapshot_path, (old_time, old_time))
+                os.environ["QG_USDJPY_INCLUDE_GLOBAL_MT5"] = "1"
+                os.environ["QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY"] = "1"
+                os.environ["QG_RUNTIME_DIR"] = ""
+                os.environ["QG_MT5_FILES_DIR"] = str(mt5_files)
+                (mt5_files / "QuantGod_Dashboard.json").write_text(
+                    json.dumps({
+                        "watchlist": FOCUS_SYMBOL,
+                        "runtime": {"tradeStatus": "READY", "executionEnabled": True, "readOnlyMode": False, "tickAgeSeconds": 1},
+                        "market": {"bid": 155.92, "ask": 155.942, "spread": 2.2},
+                    }, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+                snapshot = focus_runtime_snapshot(runtime)
+                self.assertIsNotNone(snapshot)
+                self.assertEqual(snapshot["_filePath"], str(mt5_files / "QuantGod_Dashboard.json"))
+                self.assertTrue(snapshot["runtimeFresh"])
+                self.assertLess(snapshot["runtimeAgeSeconds"], 30)
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_embedded_global_dashboard_rsi_diagnostics_can_replace_stale_standalone(self):
+        old_env = {
+            key: os.environ.get(key)
+            for key in ("QG_USDJPY_INCLUDE_GLOBAL_MT5", "QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY", "QG_RUNTIME_DIR", "QG_MT5_FILES_DIR")
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                runtime = root / "runtime"
+                mt5_files = root / "mt5_files"
+                runtime.mkdir()
+                mt5_files.mkdir()
+                sample_runtime(runtime, overwrite=True)
+                old_diag = {
+                    "schema": "quantgod.mt5.usdjpy_rsi_entry_diagnostics.v1",
+                    "symbol": FOCUS_SYMBOL,
+                    "state": "NEWS_BLOCK",
+                    "summary": "旧诊断应被新 dashboard 覆盖",
+                    "guards": {"spreadAllowed": False, "spreadPips": 6.5},
+                }
+                diag_path = runtime / "QuantGod_USDJPYRsiEntryDiagnostics.json"
+                diag_path.write_text(json.dumps(old_diag, ensure_ascii=False), encoding="utf-8")
+                old_time = time.time() - 3600
+                os.utime(diag_path, (old_time, old_time))
+                os.environ["QG_USDJPY_INCLUDE_GLOBAL_MT5"] = "1"
+                os.environ["QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY"] = "1"
+                os.environ["QG_RUNTIME_DIR"] = ""
+                os.environ["QG_MT5_FILES_DIR"] = str(mt5_files)
+                (mt5_files / "QuantGod_Dashboard.json").write_text(
+                    json.dumps({
+                        "watchlist": FOCUS_SYMBOL,
+                        "runtime": {"tradeStatus": "READY", "executionEnabled": True, "readOnlyMode": False, "tickAgeSeconds": 1},
+                        "market": {"bid": 155.92, "ask": 155.942, "spread": 2.2},
+                        "usdJpyRsiEntryDiagnostics": {
+                            "schema": "quantgod.mt5.usdjpy_rsi_entry_diagnostics.v1",
+                            "symbol": FOCUS_SYMBOL,
+                            "state": "WAITING_RSI_SIGNAL",
+                            "summary": "新 dashboard 诊断",
+                            "guards": {"spreadAllowed": True, "spreadPips": 2.2},
+                            "rsi": {"signalReady": False, "signalDirection": "NONE"},
+                        },
+                    }, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+                policy = build_usdjpy_policy(runtime)
+                joined_reasons = "；".join("；".join(item["reasons"]) for item in policy["strategies"])
+                self.assertNotIn("旧诊断应被新 dashboard 覆盖", joined_reasons)
+                self.assertFalse(policy["spreadGate"]["hardBlock"])
+                self.assertEqual(policy["spreadGate"]["tier"], "NORMAL")
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def test_entry_trigger_decisions_shape_is_accepted_by_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
@@ -303,6 +451,9 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertEqual(policy["evidence"]["runtimeFreshnessTier"], "SOFT_STALE")
             self.assertEqual(rsi_long["entryMode"], ENTRY_OPPORTUNITY)
             self.assertTrue(rsi_long["allowed"])
+            self.assertLessEqual(rsi_long["recommendedLot"], 0.10)
+            self.assertTrue(rsi_long["centSamplingGate"]["active"])
+            self.assertEqual(rsi_long["centSamplingGate"]["recommendedLotAfterCap"], rsi_long["recommendedLot"])
             self.assertEqual(rsi_long["entryStrictness"], "RUNTIME_SOFT_STALE_STAGE_DOWNGRADED")
 
     def test_hard_stale_runtime_blocks_even_when_signals_pass(self):
@@ -385,6 +536,9 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertEqual(rsi_long["signalQuorum"], 2)
             self.assertEqual(rsi_long["entryMode"], ENTRY_OPPORTUNITY)
             self.assertTrue(rsi_long["allowed"])
+            self.assertLessEqual(rsi_long["recommendedLot"], 0.10)
+            self.assertTrue(rsi_long["centSamplingGate"]["active"])
+            self.assertFalse(rsi_long["centSamplingGate"]["usdLiveAllowed"])
 
     def test_soft_wide_spread_downgrades_cent_opportunity_instead_of_blocking(self):
         with tempfile.TemporaryDirectory() as tmp:

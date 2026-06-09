@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from agent_ops_health import build_agent_ops_health
+from hfm_crypto_cfd.runtime_scope import hfm_crypto_runtime_scope_meta, resolve_hfm_crypto_runtime_dir
 
 
 def load_env(path: Path) -> None:
@@ -36,15 +37,25 @@ def main(argv: list[str] | None = None) -> int:
     load_env(root / ".env.usdjpy.local")
     parser = argparse.ArgumentParser(description="QuantGod Agent Ops Health")
     parser.add_argument("--runtime-dir", default=os.environ.get("QG_RUNTIME_DIR", str(root / "runtime")))
+    parser.add_argument("--hfm-crypto-runtime-dir", default=os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""))
     parser.add_argument("--repo-root", default=str(root))
     sub = parser.add_subparsers(dest="command", required=True)
     status = sub.add_parser("status")
     status.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     runtime_dir = Path(args.runtime_dir)
+    hfm_crypto_runtime_dir = resolve_hfm_crypto_runtime_dir(runtime_dir, args.hfm_crypto_runtime_dir)
+    hfm_crypto_runtime_scope = hfm_crypto_runtime_scope_meta(runtime_dir, args.hfm_crypto_runtime_dir)
     repo_root = Path(args.repo_root)
     if args.command == "status":
-        return emit(build_agent_ops_health(runtime_dir, repo_root=repo_root, write=args.write))
+        payload = build_agent_ops_health(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
+        return emit(payload)
     return 1
 
 

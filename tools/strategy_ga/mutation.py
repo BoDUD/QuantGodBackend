@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict
 
+from .personality_lock import personality_lock_report
+
 
 def mutate_seed(parent: Dict[str, Any], seed_id: str, generation: int, offset: int) -> Dict[str, Any]:
     """Mutate only strategy parameters, never safety or live permissions."""
@@ -23,9 +25,10 @@ def mutate_seed(parent: Dict[str, Any], seed_id: str, generation: int, offset: i
     exit_cfg["breakevenDelayR"] = round(max(0, min(3, float(exit_cfg.get("breakevenDelayR", 1.0)) + (offset % 3) * 0.05)), 2)
     exit_cfg["trailStartR"] = round(max(0, min(5, float(exit_cfg.get("trailStartR", 1.5)) + (offset % 4 - 1) * 0.1)), 2)
     exit_cfg["mfeGivebackPct"] = round(max(0.1, min(0.9, float(exit_cfg.get("mfeGivebackPct", 0.6)) + (offset % 5 - 2) * 0.02)), 2)
-    risk["opportunityLotMultiplier"] = round(max(0.1, min(1.0, float(risk.get("opportunityLotMultiplier", 0.35)) + (offset % 3) * 0.03)), 2)
+    risk["opportunityLotMultiplier"] = float((parent.get("risk") or {}).get("opportunityLotMultiplier", risk.get("opportunityLotMultiplier", 0.35)))
     risk["stage"] = "SHADOW"
     risk["maxLot"] = min(2.0, float(risk.get("maxLot", 2.0)))
+    seed["personalityLockAudit"] = personality_lock_report(parent, seed)
     return seed
 
 

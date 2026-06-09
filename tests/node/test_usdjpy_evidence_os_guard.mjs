@@ -99,7 +99,7 @@ test('evidence OS remains read-only and feeds GA scoring', () => {
   assert.match(source, /DAILY_AUTOPILOT_V2_REPORT/);
   assert.match(source, /GA_EVOLUTION_REPORT/);
   assert.match(source, /USDJPY_AUTONOMOUS_AGENT_REPORT/);
-  assert.match(source, /POLYMARKET_RETUNE_REPORT/);
+  assert.match(source, /HFM_CRYPTO_SHADOW_REPORT/);
   assert.match(source, /dispatch_pending/);
   assert.match(source, /gateway_status/);
   assert.match(source, /deliveryObservability/);
@@ -129,7 +129,7 @@ test('evidence OS remains read-only and feeds GA scoring', () => {
   assert.match(source, /QG_AGENT_V25_LOCK_DIR/);
   assert.match(source, /acquire_loop_lock/);
   assert.match(source, /release_loop_lock/);
-  assert.match(source, /polymarketRetune/);
+  assert.match(source, /hfmCryptoShadow/);
   assert.match(source, /telegramGateway/);
   assert.match(source, /dailyAutopilot/);
   assert.match(source, /QG_AGENT_V25_INTERVAL_SECONDS/);

@@ -23,7 +23,7 @@ EXECUTION_FLAGS = {
     "webhookReceiverAllowed",
     "emailDeliveryAllowed",
     "brokerExecutionAllowed",
-    "polymarketOrderAllowed",
+    "externalMarketOrderAllowed",
     "walletIntegrationAllowed",
 }
 
@@ -68,7 +68,7 @@ def safety_payload() -> dict[str, Any]:
         "webhookReceiverAllowed": False,
         "emailDeliveryAllowed": False,
         "brokerExecutionAllowed": False,
-        "polymarketOrderAllowed": False,
+        "externalMarketOrderAllowed": False,
         "walletIntegrationAllowed": False,
     }
 

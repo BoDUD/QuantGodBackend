@@ -70,7 +70,7 @@ test('P4-10I exposes guarded RSI lineage closure markers', () => {
 
 test('P4-6 guard blocks trading verbs and direct wallet semantics', () => {
   const joined = files.map((file) => readFileSync(file, 'utf8')).join('\n');
-  for (const forbidden of ['OrderSend(', 'CTrade', 'TRADE_ACTION_DEAL', 'PositionClose(', 'livePresetMutationAllowed: true', 'polymarketRealMoneyAllowed: true']) {
+  for (const forbidden of ['OrderSend(', 'CTrade', 'TRADE_ACTION_DEAL', 'PositionClose(', 'livePresetMutationAllowed: true', 'externalMarketRealMoneyAllowed: true']) {
     assert.equal(joined.includes(forbidden), false, `forbidden token ${forbidden}`);
   }
 });

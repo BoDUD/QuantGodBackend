@@ -34,7 +34,7 @@ MT5_SHADOW_STAGES = {
     STAGE_PAUSED,
 }
 
-POLYMARKET_STAGES = {
+HFM_CRYPTO_SHADOW_STAGES = {
     STAGE_REJECTED,
     STAGE_SHADOW,
     STAGE_FAST_SHADOW,
@@ -98,4 +98,3 @@ def normalize_legacy_stage(stage: str) -> str:
     if text in {"ROLLBACK_PAUSED", "HARD_ROLLBACK", "AUTO_ROLLBACK"}:
         return STAGE_ROLLBACK
     return text if text in STAGE_ZH else STAGE_REJECTED
-

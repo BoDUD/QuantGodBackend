@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from .builder import build_case_memory_candidates
 from .io_utils import append_jsonl_unique, load_json, utc_now_iso, write_json
+from .long_term_memory import build_long_term_trade_memory
 from .schema import (
     AGENT_VERSION,
     CASE_MEMORY_SOURCES,
@@ -23,6 +24,7 @@ def build_case_memory_report(
     limit: int = 8,
 ) -> Dict[str, Any]:
     payload = build_case_memory_candidates(runtime_dir, write_case_memory=write, limit=limit)
+    long_term_memory = build_long_term_trade_memory(runtime_dir)
     candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
     ga_seeds = payload.get("gaSeeds") if isinstance(payload.get("gaSeeds"), list) else []
     report: Dict[str, Any] = {
@@ -37,6 +39,7 @@ def build_case_memory_report(
         "gaSeedCount": len(ga_seeds),
         "candidates": candidates,
         "gaSeeds": ga_seeds,
+        "longTermTradeMemory": long_term_memory,
         "parityGate": payload.get("parityGate") or {},
         "sources": CASE_MEMORY_SOURCES,
         "nextActionZh": _next_action(payload),

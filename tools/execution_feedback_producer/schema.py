@@ -31,5 +31,5 @@ SAFETY: Final[dict[str, object]] = {
     "cancelAllowed": False,
     "livePresetMutationAllowed": False,
     "telegramCommandExecutionAllowed": False,
-    "polymarketRealMoneyAllowed": False,
+    "externalMarketRealMoneyAllowed": False,
 }

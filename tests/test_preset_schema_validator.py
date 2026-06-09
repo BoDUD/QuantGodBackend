@@ -9,6 +9,9 @@ DEFAULT_PRESET = REPO_ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_LivePilot.se
 REQUIRED_KEYS = [
     "Watchlist", "DashboardBuild",
     "EnablePilotAutoTrading", "EnablePilotStartupEntryGuard",
+    "PilotStartupEntryGuardMode",
+    "PilotStartupEntryFastWarmupMinutes",
+    "PilotStartupEntryFastWarmupM1Bars",
     "EnablePilotRsiH1Live", "EnablePilotRsiH1Candidate",
     "EnablePilotBBH1Live", "EnablePilotBBH1Candidate",
     "EnablePilotMacdH1Live", "EnablePilotMacdH1Candidate",
@@ -17,6 +20,9 @@ REQUIRED_KEYS = [
     "EnableUsdJpyTokyoBreakoutShadowResearch",
     "EnableUsdJpyNightReversionShadowResearch",
     "EnableUsdJpyH4PullbackShadowResearch",
+    "EnableHfmCryptoSpecExporter",
+    "HfmCryptoSpecExportSymbols",
+    "HfmCryptoSpecExportMaxSymbols",
     "PilotLotSize", "PilotMaxTotalPositions",
     "PilotMaxFloatingLossUSC", "PilotMaxRealizedLossDayUSC",
     "ReadOnlyMode", "ShadowMode",
@@ -31,7 +37,11 @@ NUMERIC_RANGES = {
     "PilotRsiOverbought": (50, 100),
     "PilotRsiOversold": (0, 50),
     "PilotRsiCrossbackThreshold": (0, 5),
+    "PilotStartupEntryMinWaitMinutes": (0, 60),
+    "PilotStartupEntryFastWarmupMinutes": (0, 30),
+    "PilotStartupEntryFastWarmupM1Bars": (0, 10),
     "PilotNewsHighImpactPreBlockMinutes": (0, 180),
+    "HfmCryptoSpecExportMaxSymbols": (1, 500),
 }
 
 
@@ -72,6 +82,9 @@ class PresetSchemaValidatorTests(unittest.TestCase):
     def test_watchlist_contains_usdjpy(self):
         watchlist = self.values.get("Watchlist", "").upper()
         self.assertIn("USDJPY", watchlist, "Live preset should include USDJPY")
+
+    def test_startup_guard_mode_is_known(self):
+        self.assertIn(self.values.get("PilotStartupEntryGuardMode"), {"H1_STRICT", "FAST_WARMUP", "BACKTEST_OFF"})
 
 
 if __name__ == "__main__":

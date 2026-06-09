@@ -261,6 +261,127 @@ def _account_lane(account_registry: Dict[str, Any], mode: str) -> Dict[str, Any]
     return {}
 
 
+def _cent_opportunity_lot_cap(
+    *,
+    account_registry: Dict[str, Any],
+    spread_gate: Dict[str, Any],
+    min_lot: float,
+    max_lot: float,
+    step: float,
+) -> float:
+    cent_lane = _account_lane(account_registry, "cent")
+    stage_lot = cent_lane.get("stageLot") if isinstance(cent_lane.get("stageLot"), dict) else {}
+    lane_max = _num(cent_lane.get("maxLot"), max_lot)
+    configured_cap = _num(stage_lot.get("OPPORTUNITY_ENTRY"), _env_float("QG_CENT_OPPORTUNITY_LOT", 0.10))
+    cap = min(max_lot, lane_max, configured_cap)
+    spread_cap_value = spread_gate.get("maxCentOpportunityLot")
+    if spread_cap_value not in (None, ""):
+        cap = min(cap, _num(spread_cap_value, cap))
+    if cap < min_lot or spread_gate.get("hardBlock"):
+        return 0.0
+    return _round_lot(cap, step=step, min_lot=min_lot, max_lot=max_lot)
+
+
+def _cent_opportunity_sampling_gate(
+    *,
+    account_registry: Dict[str, Any],
+    spread_gate: Dict[str, Any],
+    min_lot: float,
+    max_lot: float,
+    step: float,
+) -> Dict[str, Any]:
+    cent_lane = _account_lane(account_registry, "cent")
+    usd_lane = _account_lane(account_registry, "standard_usd")
+    cap = _cent_opportunity_lot_cap(
+        account_registry=account_registry,
+        spread_gate=spread_gate,
+        min_lot=min_lot,
+        max_lot=max_lot,
+        step=step,
+    )
+    return {
+        "schema": "quantgod.usdjpy_cent_opportunity_sampling_gate.v1",
+        "mode": "CENT_SMALL_LOT_SAMPLE_USD_PAPER_MIRROR",
+        "accountAlias": cent_lane.get("accountAlias") or "hfm_cent",
+        "accountMode": "cent",
+        "entryMode": ENTRY_OPPORTUNITY,
+        "allowedLiveAccountMode": "cent",
+        "usdAccountAlias": usd_lane.get("accountAlias") or "hfm_usd",
+        "usdAccountMode": "paper_mirror_only",
+        "usdLiveAllowed": False,
+        "maxOpportunityLot": cap,
+        "spreadTier": spread_gate.get("tier") or "UNKNOWN",
+        "spreadAction": spread_gate.get("centAction") or spread_gate.get("action") or "UNKNOWN",
+        "requiresRuntimeFreshness": ["FRESH", "SOFT_STALE"],
+        "requiresHardGatePass": True,
+        "requiresNewsNotHard": True,
+        "sampleGoals": cent_lane.get("sampleGoals") if isinstance(cent_lane.get("sampleGoals"), dict) else {},
+        "reasonZh": (
+            f"机会入场只允许美分账户小仓采样，单笔上限 {cap:.2f} lot；"
+            "美元账户只做 paper mirror，不能实盘接探索单。"
+        ),
+    }
+
+
+def _apply_cent_sampling_gate_to_live_policy(
+    *,
+    entry_mode: str,
+    allowed: bool,
+    recommended_lot: float,
+    strictness: str,
+    reasons: List[str],
+    sampling_gate: Dict[str, Any],
+    hard_status: str,
+    runtime_tier: str,
+    news_gate: Dict[str, Any],
+    spread_gate: Dict[str, Any],
+    min_lot: float,
+    max_lot: float,
+    step: float,
+) -> tuple[str, bool, float, str, List[str], Dict[str, Any]]:
+    gate = dict(sampling_gate)
+    gate["active"] = entry_mode == ENTRY_OPPORTUNITY
+    gate["passed"] = True
+    gate["blockers"] = []
+    if entry_mode != ENTRY_OPPORTUNITY:
+        return entry_mode, allowed, recommended_lot, strictness, reasons, gate
+
+    blockers: List[Dict[str, Any]] = []
+
+    def block(code: str, reason: str, value: Any = None, limit: Any = None) -> None:
+        blockers.append({"code": code, "reasonZh": reason, "value": value, "limit": limit})
+
+    cap = _num(gate.get("maxOpportunityLot"), 0.0)
+    if hard_status != "PASS":
+        block("CENT_HARD_GATE_REQUIRED", "机会入场也必须先通过硬风控。", hard_status, "PASS")
+    if runtime_tier not in {"FRESH", "SOFT_STALE"}:
+        block("CENT_RUNTIME_FRESH_OR_SOFT_STALE_REQUIRED", "机会入场需要 FRESH 或 SOFT_STALE runtime。", runtime_tier, "FRESH/SOFT_STALE")
+    news_risk = str(news_gate.get("riskLevel") or "UNKNOWN").upper()
+    if news_gate.get("hardBlock") or news_risk == "HARD":
+        block("CENT_NEWS_NOT_HARD_REQUIRED", "高冲击新闻窗口不允许机会入场。", news_risk, "not HARD")
+    if spread_gate.get("hardBlock"):
+        block("CENT_SPREAD_NOT_HARD_REQUIRED", "严重偏宽点差不允许机会入场。", spread_gate.get("tier"), "not HARD_WIDE")
+    if cap < min_lot:
+        block("CENT_OPPORTUNITY_LOT_CAP_TOO_SMALL", "美分账户机会入场仓位上限小于最小下单手数。", cap, min_lot)
+
+    gate["passed"] = not blockers
+    gate["blockers"] = blockers
+    if blockers:
+        return ENTRY_BLOCKED, False, 0.0, "BLOCKED_CENT_SAMPLING_GATE", [
+            *reasons,
+            "美分账户小仓采样门未通过，机会入场阻断。",
+        ], gate
+
+    lot = min(recommended_lot, cap)
+    lot = _round_lot(lot, step=step, min_lot=min_lot, max_lot=max_lot) if allowed else 0.0
+    gate["recommendedLotBeforeCap"] = round(float(recommended_lot or 0.0), 2)
+    gate["recommendedLotAfterCap"] = lot
+    return entry_mode, allowed, lot, strictness, [
+        *reasons,
+        gate.get("reasonZh") or "机会入场已收敛为美分账户小仓采样。",
+    ], gate
+
+
 def _bucket_source_count(bucket: Dict[str, Any], *keys: str) -> int:
     counts = bucket.get("sourceTierCounts") if isinstance(bucket.get("sourceTierCounts"), dict) else {}
     return sum(int(_num(counts.get(key), 0.0)) for key in keys)
@@ -458,11 +579,20 @@ def _runtime_ok(snapshot: Dict[str, Any]) -> tuple[bool, List[str]]:
 
 def _load_rsi_entry_diagnostics(runtime_dir: Path) -> Dict[str, Any]:
     diagnostics = first_json(runtime_dir, "QuantGod_USDJPYRsiEntryDiagnostics.json") or {}
+    dashboard = focus_runtime_snapshot(runtime_dir) or {}
+    embedded = dashboard.get("usdJpyRsiEntryDiagnostics")
+    if isinstance(embedded, dict) and embedded:
+        dashboard_age = _num(dashboard.get("_fileAgeSeconds"), 999999.0)
+        diagnostics_age = _num(diagnostics.get("_fileAgeSeconds"), 999999.0)
+        if not diagnostics or dashboard_age < diagnostics_age:
+            result = dict(embedded)
+            result.setdefault("_source", "QuantGod_Dashboard.json.usdJpyRsiEntryDiagnostics")
+            result.setdefault("_dashboardFilePath", dashboard.get("_filePath"))
+            result.setdefault("_fileAgeSeconds", dashboard.get("_fileAgeSeconds"))
+            return result
     if diagnostics:
         return diagnostics
-    dashboard = first_json(runtime_dir, "QuantGod_Dashboard.json") or {}
-    embedded = dashboard.get("usdJpyRsiEntryDiagnostics")
-    return embedded if isinstance(embedded, dict) else {}
+    return {}
 
 
 def _rsi_diagnostic_ready(diagnostics: Dict[str, Any]) -> bool:
@@ -729,6 +859,13 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
     fast_ok, fast_reasons = _fastlane_ok(quality)
     diagnostics = _load_rsi_entry_diagnostics(runtime_dir)
     spread_gate = _build_spread_gate(snapshot or {}, diagnostics)
+    cent_sampling_gate = _cent_opportunity_sampling_gate(
+        account_registry=account_registry,
+        spread_gate=spread_gate,
+        min_lot=min_lot,
+        max_lot=max_lot,
+        step=step,
+    )
     policies: List[PolicyItem] = []
     for route in scoreboard.get("routes", []):
         status = route.get("status")
@@ -821,8 +958,24 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
                 max_lot=max_lot,
                 step=step,
             )
+            entry_mode, allowed, lot, strictness, reasons, policy_cent_sampling_gate = _apply_cent_sampling_gate_to_live_policy(
+                entry_mode=entry_mode,
+                allowed=allowed,
+                recommended_lot=lot,
+                strictness=strictness,
+                reasons=reasons,
+                sampling_gate=cent_sampling_gate,
+                hard_status=hard_status,
+                runtime_tier=runtime_tier,
+                news_gate=news_gate,
+                spread_gate=spread_gate,
+                min_lot=min_lot,
+                max_lot=max_lot,
+                step=step,
+            )
         else:
             reasons.append("新闻风险只记录到 shadow / replay，不阻断 MT5 模拟策略。")
+            policy_cent_sampling_gate = {}
         policies.append(PolicyItem(
             symbol=FOCUS_SYMBOL,
             strategy=strategy,
@@ -849,6 +1002,7 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
             tacticalConfirmations={**tactical_confirmations, "policyTriggerStatus": trigger_status, "triggerScore": trigger_score},
             entryDecision=entry_mode,
             spreadGate=dict(spread_gate) if live_route else {},
+            centSamplingGate=policy_cent_sampling_gate,
         ))
 
     policies.sort(key=lambda item: (item.entryMode == ENTRY_BLOCKED, -item.score, -item.recommendedLot, item.strategy))
@@ -906,7 +1060,10 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
             "usdDeploymentLiveMode": "STANDARD_ENTRY_NORMAL_SPREAD_NEWS_NONE_ONLY",
             "usdDeploymentTargetStage": usd_deployment_gate.get("targetStage"),
             "usdDeploymentLiveAllowed": bool(usd_deployment_gate.get("liveAllowed")),
-            "polymarketLogicUnchanged": True,
+            "centOpportunitySamplingGate": cent_sampling_gate,
+            "centOpportunityLotCap": cent_sampling_gate.get("maxOpportunityLot"),
+            "centOpportunityLiveAccountOnly": True,
+            "externalMarketRemoved": True,
         },
         "maxLot": max_lot,
         "standardEntryCount": sum(1 for item in policies if item.entryMode == ENTRY_STANDARD),
@@ -936,6 +1093,7 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
             "spreadGateHardBlock": bool(spread_gate.get("hardBlock")),
             "usdDeploymentLiveAllowed": bool(usd_deployment_gate.get("liveAllowed")),
             "usdDeploymentTargetStage": usd_deployment_gate.get("targetStage"),
+            "centOpportunityLotCap": cent_sampling_gate.get("maxOpportunityLot"),
             "decisionModel": "HARD_GATES_PLUS_SIGNAL_QUORUM_V1",
             "hardGatePassCount": sum(1 for item in policies if item.hardGateStatus == "PASS"),
             "quorumEligibleCount": sum(1 for item in policies if int(item.signalQuorum) >= int(item.signalQuorumRequired)),

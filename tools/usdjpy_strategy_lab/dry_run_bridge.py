@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+from .entry_context_feedback import append_entry_context_feedback
 from .policy_builder import build_usdjpy_policy
 from .schema import ENTRY_BLOCKED, ENTRY_OPPORTUNITY, ENTRY_STANDARD, FOCUS_SYMBOL, READ_ONLY_SAFETY, assert_no_secret_or_execution_flags, utc_now_iso
 
@@ -35,6 +36,15 @@ def build_dry_run_decision(runtime_dir: Path, *, write: bool = False) -> Dict[st
         "topLiveEligiblePolicy": policy.get("topLiveEligiblePolicy"),
         "safety": dict(READ_ONLY_SAFETY),
     }
+    if write:
+        payload["entryContextFeedback"] = append_entry_context_feedback(
+            runtime_dir,
+            policy=policy,
+            top_policy=top,
+            generated_at=payload["generatedAt"],
+            event_type="DRY_RUN_ENTRY_CONTEXT",
+            source_name="QuantGod_USDJPYEADryRunDecision.json",
+        )
     assert_no_secret_or_execution_flags(payload)
     if write:
         adaptive_dir = runtime_dir / "adaptive"

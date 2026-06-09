@@ -1,5 +1,6 @@
 import tempfile
 import json
+import sqlite3
 import sys
 import types
 import unittest
@@ -34,6 +35,18 @@ from tools.usdjpy_strategy_backtest.walk_forward import build_seed_walk_forward
 
 
 class USDJPYStrategyBacktestTests(unittest.TestCase):
+    def test_sqlite_connect_retries_transient_database_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "tools.usdjpy_strategy_backtest.sqlite_store.init_schema",
+                side_effect=[sqlite3.OperationalError("database is locked"), None],
+            ) as init_schema_mock, patch("tools.usdjpy_strategy_backtest.sqlite_store.time.sleep") as sleep_mock:
+                conn = connect(Path(tmp))
+                conn.close()
+
+            self.assertEqual(init_schema_mock.call_count, 2)
+            sleep_mock.assert_called_once()
+
     def test_sample_and_run_write_usdjpy_backtest_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)
@@ -370,6 +383,11 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
             seed["indicators"]["supportResistance"]["lookbackBars"],
             mutated["indicators"]["supportResistance"]["lookbackBars"],
         )
+        self.assertEqual(
+            seed["risk"]["opportunityLotMultiplier"],
+            mutated["risk"]["opportunityLotMultiplier"],
+        )
+        self.assertTrue(mutated["personalityLockAudit"]["passed"])
 
     def test_backtest_loads_latest_sqlite_window_when_history_expands(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -652,6 +670,144 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
             self.assertGreaterEqual(repair["exit"]["timeStopBars"]["H1"], 3)
             self.assertTrue(validate_strategy_json(repair)["valid"])
 
+    def test_ga_quality_repair_adds_bb_long_walk_forward_balancer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            ga_dir = runtime_dir / "ga"
+            ga_dir.mkdir(parents=True)
+            parent = base_strategy_seed("PARENT-BB-LONG-WF", family="BB_Triple", direction="LONG")
+            parent["indicators"]["bollinger"]["period"] = 20
+            parent["indicators"]["bollinger"]["deviations"] = 2.0
+            parent["indicators"]["bollinger"]["reclaimBufferPips"] = 0.0
+            row = {
+                "generation": 28,
+                "rank": 2,
+                "fitness": -3.68,
+                "blockerCode": "WALK_FORWARD_UNSTABLE",
+                "strategyJson": parent,
+                "fitnessBreakdown": {
+                    "sampleCount": 15,
+                    "strategyBacktest": {"netR": 0.52, "tradeCount": 15, "profitFactor": 1.08},
+                    "walkForward": {
+                        "summary": {
+                            "trainNetR": -1.05,
+                            "validationNetR": -0.18,
+                            "forwardNetR": 1.28,
+                            "stabilityScore": 0.63,
+                            "overfitPenalty": 0.35,
+                        }
+                    },
+                },
+            }
+            (ga_dir / "QuantGod_GACandidateRuns.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            repair = quality_repair_seed_pool(runtime_dir, generation_number=29, limit=3)[0]
+            bollinger = repair["indicators"]["bollinger"]
+
+            self.assertEqual(repair["qualityProfile"], "BB_LONG_WALK_FORWARD_BALANCER")
+            self.assertEqual(repair["direction"], "LONG")
+            self.assertGreaterEqual(bollinger["period"], 24)
+            self.assertGreaterEqual(bollinger["deviations"], 2.15)
+            self.assertGreaterEqual(bollinger["reclaimBufferPips"], 1.0)
+            self.assertLessEqual(repair["exit"]["timeStopBars"]["H1"], 3)
+            self.assertLessEqual(repair["risk"]["opportunityLotMultiplier"], 0.28)
+            self.assertEqual(repair["risk"]["stage"], "SHADOW")
+            self.assertTrue(validate_strategy_json(repair)["valid"])
+
+    def test_ga_quality_repair_recovers_bb_long_positive_forward_edge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            ga_dir = runtime_dir / "ga"
+            ga_dir.mkdir(parents=True)
+            parent = base_strategy_seed("PARENT-BB-LONG-EDGE", family="BB_Triple", direction="LONG")
+            parent["indicators"]["bollinger"]["period"] = 28
+            parent["indicators"]["bollinger"]["deviations"] = 2.7
+            parent["indicators"]["bollinger"]["reclaimBufferPips"] = 6.0
+            row = {
+                "generation": 29,
+                "rank": 2,
+                "fitness": -4.45,
+                "blockerCode": "OVERFIT_RISK",
+                "strategyJson": parent,
+                "fitnessBreakdown": {
+                    "sampleCount": 15,
+                    "netR": -1.87,
+                    "strategyBacktest": {"netR": -1.87, "tradeCount": 15, "profitFactor": 0.7},
+                    "walkForward": {
+                        "summary": {
+                            "trainNetR": -6.82,
+                            "validationNetR": 1.6,
+                            "forwardNetR": 0.15,
+                            "stabilityScore": 0.71,
+                            "overfitPenalty": 0.35,
+                        }
+                    },
+                },
+            }
+            (ga_dir / "QuantGod_GACandidateRuns.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            repair = quality_repair_seed_pool(runtime_dir, generation_number=30, limit=3)[0]
+            bollinger = repair["indicators"]["bollinger"]
+
+            self.assertEqual(repair["qualityProfile"], "BB_LONG_POSITIVE_EDGE_RECOVERY")
+            self.assertEqual(repair["direction"], "LONG")
+            self.assertLessEqual(bollinger["deviations"], 2.75)
+            self.assertLessEqual(bollinger["reclaimBufferPips"], 6.6)
+            self.assertGreaterEqual(repair["exit"]["timeStopBars"]["H1"], 4)
+            self.assertLessEqual(repair["risk"]["opportunityLotMultiplier"], 0.3)
+            self.assertEqual(repair["risk"]["stage"], "SHADOW")
+            self.assertTrue(validate_strategy_json(repair)["valid"])
+
+    def test_ga_quality_repair_clips_bb_long_segment_loss_while_preserving_positive_net(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            ga_dir = runtime_dir / "ga"
+            ga_dir.mkdir(parents=True)
+            parent = base_strategy_seed("PARENT-BB-LONG-POSITIVE-SEGMENT", family="BB_Triple", direction="LONG")
+            parent["indicators"]["bollinger"]["timeframe"] = "M15"
+            parent["indicators"]["bollinger"]["period"] = 18
+            parent["indicators"]["bollinger"]["deviations"] = 2.2
+            parent["indicators"]["bollinger"]["reclaimBufferPips"] = 2.0
+            parent["exit"]["timeStopBars"]["H1"] = 8
+            parent["exit"]["trailStartR"] = 1.5
+            parent["exit"]["mfeGivebackPct"] = 0.7
+            row = {
+                "generation": 29,
+                "rank": 2,
+                "fitness": -2.18,
+                "blockerCode": "WALK_FORWARD_UNSTABLE",
+                "strategyJson": parent,
+                "fitnessBreakdown": {
+                    "sampleCount": 234,
+                    "netR": 3.17,
+                    "strategyBacktest": {"netR": 3.17, "tradeCount": 58, "profitFactor": 1.13},
+                    "walkForward": {
+                        "summary": {
+                            "trainNetR": -49.11,
+                            "validationNetR": -6.99,
+                            "forwardNetR": 0.56,
+                            "stabilityScore": 0.37,
+                            "overfitPenalty": 0.7,
+                        }
+                    },
+                },
+            }
+            (ga_dir / "QuantGod_GACandidateRuns.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            repair = quality_repair_seed_pool(runtime_dir, generation_number=30, limit=3)[0]
+            bollinger = repair["indicators"]["bollinger"]
+
+            self.assertEqual(repair["qualityProfile"], "BB_LONG_SEGMENT_LOSS_CLIPPER")
+            self.assertEqual(repair["direction"], "LONG")
+            self.assertEqual(bollinger["timeframe"], "M15")
+            self.assertGreaterEqual(bollinger["period"], 20)
+            self.assertLessEqual(bollinger["deviations"], 2.6)
+            self.assertGreaterEqual(bollinger["reclaimBufferPips"], 2.5)
+            self.assertLessEqual(repair["exit"]["timeStopBars"]["H1"], 5)
+            self.assertLessEqual(repair["exit"]["mfeGivebackPct"], 0.5)
+            self.assertEqual(repair["risk"]["stage"], "SHADOW")
+            self.assertTrue(validate_strategy_json(repair)["valid"])
+
     def test_ga_quality_repair_adds_tokyo_range_family_template(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)
@@ -719,6 +875,65 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
             self.assertIn("RSI_REVERSAL_STABILITY_REPAIR", profiles)
             self.assertIn("MACD_HISTOGRAM_STABILIZER", profiles)
             self.assertIn("H4_PULLBACK_STABILIZER", profiles)
+            self.assertTrue(all(validate_strategy_json(seed)["valid"] for seed in repairs))
+
+    def test_ga_quality_repair_diversifies_when_rsi_repair_is_overcrowded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            ga_dir = runtime_dir / "ga"
+            ga_dir.mkdir(parents=True)
+            parents = [
+                base_strategy_seed("PARENT-RSI-CROWD-1", family="RSI_Reversal", direction="LONG"),
+                base_strategy_seed("PARENT-RSI-CROWD-2", family="RSI_Reversal", direction="LONG"),
+                base_strategy_seed("PARENT-RSI-CROWD-3", family="RSI_Reversal", direction="LONG"),
+                base_strategy_seed("PARENT-RSI-CROWD-4", family="RSI_Reversal", direction="LONG"),
+                base_strategy_seed("PARENT-BB-CROWD", family="BB_Triple", direction="SHORT"),
+                base_strategy_seed("PARENT-MACD-CROWD", family="MACD_Divergence", direction="LONG"),
+                base_strategy_seed("PARENT-H4-CROWD", family="USDJPY_H4_TREND_PULLBACK", direction="SHORT"),
+                base_strategy_seed("PARENT-TOKYO-CROWD", family="USDJPY_TOKYO_RANGE_BREAKOUT", direction="SHORT"),
+            ]
+            blockers = [
+                "OVERFIT_RISK",
+                "RSI_MIN_TRADE_GATE",
+                "WALK_FORWARD_UNSTABLE",
+                "OVERFIT_RISK_HIGH",
+                "OVERFIT_RISK",
+                "WALK_FORWARD_UNSTABLE",
+                "WALK_FORWARD_UNSTABLE",
+                "WALK_FORWARD_UNSTABLE",
+            ]
+            rows = []
+            for index, (parent, blocker) in enumerate(zip(parents, blockers), start=1):
+                rows.append(
+                    {
+                        "generation": 26,
+                        "rank": index,
+                        "fitness": -0.5 - index,
+                        "blockerCode": blocker,
+                        "strategyJson": parent,
+                        "fitnessBreakdown": {
+                            "sampleCount": 24,
+                            "strategyBacktest": {"netR": 1.0, "tradeCount": 24},
+                            "walkForward": {"summary": {"stabilityScore": 0.2}},
+                        },
+                    }
+                )
+            (ga_dir / "QuantGod_GACandidateRuns.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            repairs = quality_repair_seed_pool(runtime_dir, generation_number=27, limit=8)
+            families = [seed["strategyFamily"] for seed in repairs]
+            non_rsi_families = {family for family in families if family != "RSI_Reversal"}
+
+            self.assertLessEqual(families.count("RSI_Reversal"), 2)
+            self.assertGreaterEqual(len(non_rsi_families), 4)
+            self.assertIn("BB_Triple", non_rsi_families)
+            self.assertIn("MACD_Divergence", non_rsi_families)
+            self.assertIn("USDJPY_H4_TREND_PULLBACK", non_rsi_families)
+            self.assertIn("USDJPY_TOKYO_RANGE_BREAKOUT", non_rsi_families)
+            self.assertTrue(all(seed["risk"]["stage"] == "SHADOW" for seed in repairs))
             self.assertTrue(all(validate_strategy_json(seed)["valid"] for seed in repairs))
 
     def test_ga_quality_repair_expands_rsi_overfit_samples_first(self):

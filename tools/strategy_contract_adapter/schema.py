@@ -37,7 +37,7 @@ SAFETY_BOUNDARY: Dict[str, Any] = {
     "livePresetMutationAllowed": False,
     "writesMt5OrderRequest": False,
     "gaDirectLiveAllowed": False,
-    "polymarketRealMoneyAllowed": False,
+    "externalMarketRealMoneyAllowed": False,
     "telegramCommandExecutionAllowed": False,
 }
 

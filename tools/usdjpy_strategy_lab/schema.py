@@ -222,6 +222,7 @@ class PolicyItem:
     tacticalConfirmations: Dict[str, Any] = field(default_factory=dict)
     entryDecision: str = ENTRY_BLOCKED
     spreadGate: Dict[str, Any] = field(default_factory=dict)
+    centSamplingGate: Dict[str, Any] = field(default_factory=dict)
     safety: Dict[str, Any] = field(default_factory=lambda: dict(READ_ONLY_SAFETY))
 
     def to_dict(self) -> Dict[str, Any]:

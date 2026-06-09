@@ -41,12 +41,17 @@ class AutomationChainRunner:
         symbols = self._symbols_arg()
         steps = [
             ChainStep("fastlane_quality", "P3-7 快通道质量", [self.python_bin, self._script("run_mt5_fastlane.py"), "--runtime-dir", runtime, "quality", "--symbols", symbols], required=False),
+            ChainStep("execution_feedback_producer", "执行反馈 entryContext 生产", [self.python_bin, self._script("run_execution_feedback_producer.py"), "--runtime-dir", runtime, "build", "--write"], required=False),
+            ChainStep("case_memory", "四层交易记忆刷新", [self.python_bin, self._script("run_case_memory.py"), "--runtime-dir", runtime, "build", "--write", "--limit", "8"], required=False),
             ChainStep("adaptive_policy", "P3-6 自适应策略", [self.python_bin, self._script("run_adaptive_policy.py"), "--runtime-dir", runtime, "build", "--symbols", symbols], required=True),
             ChainStep("dynamic_sltp", "P3-8 动态止盈止损", [self.python_bin, self._script("run_dynamic_sltp.py"), "--runtime-dir", runtime, "build", "--symbols", symbols], required=True),
             ChainStep("entry_trigger", "P3-9 入场触发", [self.python_bin, self._script("run_entry_trigger_lab.py"), "--runtime-dir", runtime, "build", "--symbols", symbols], required=True),
             ChainStep("usdjpy_strategy_policy", "USDJPY 策略政策", [self.python_bin, self._script("run_usdjpy_strategy_lab.py"), "--runtime-dir", runtime, "build", "--write"], required=True),
             ChainStep("usdjpy_ea_dry_run", "USDJPY EA 干跑决策", [self.python_bin, self._script("run_usdjpy_strategy_lab.py"), "--runtime-dir", runtime, "dry-run", "--write"], required=True),
             ChainStep("usdjpy_live_loop", "USDJPY 实盘恢复闭环", [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "once"], required=True),
+            ChainStep("fastlane_quality_final", "P3-7 快通道质量收尾刷新", [self.python_bin, self._script("run_mt5_fastlane.py"), "--runtime-dir", runtime, "quality", "--symbols", symbols], required=False),
+            ChainStep("strategy_parity", "P4-2 Strategy/Replay/EA parity", [self.python_bin, self._script("run_strategy_parity.py"), "--runtime-dir", runtime, "build", "--write"], required=False),
+            ChainStep("entry_latency", "USDJPY 入场延迟归因", [self.python_bin, self._script("run_entry_latency.py"), "--runtime-dir", runtime, "build", "--write"], required=False),
         ]
         if send:
             steps.append(ChainStep("usdjpy_live_loop_telegram", "USDJPY 闭环 Telegram 中文推送", [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "telegram-text", "--refresh", "--send"], required=False, timeout_seconds=60))
@@ -118,6 +123,45 @@ class AutomationChainRunner:
 
     def _live_loop_file(self) -> Optional[Dict[str, Any]]:
         return self._read_json("live", "QuantGod_USDJPYLiveLoopStatus.json")
+
+    def _entry_latency_file(self) -> Optional[Dict[str, Any]]:
+        return self._read_json("latency", "QuantGod_EntryLatencyReport.json")
+
+    def _ga_factory_summary(self) -> Dict[str, Any]:
+        state = self._read_json("ga_factory", "QuantGod_GAFactoryState.json") or {}
+        elite_archive = self._read_json("ga_factory", "QuantGod_GAEliteArchive.json") or {}
+        elites = elite_archive.get("elites") if isinstance(elite_archive.get("elites"), list) else []
+        top_elites = []
+        for row in elites[:4]:
+            if not isinstance(row, dict):
+                continue
+            top_elites.append({
+                "seedId": row.get("seedId"),
+                "strategyId": row.get("strategyId"),
+                "fitness": row.get("fitness"),
+                "promotionStage": row.get("promotionStage"),
+                "directLiveAllowed": bool(row.get("directLiveAllowed")),
+                "blockerCode": row.get("blockerCode"),
+            })
+        safety = state.get("safety") if isinstance(state.get("safety"), dict) else {}
+        return {
+            "available": bool(state or elites),
+            "status": state.get("status"),
+            "statusZh": state.get("statusZh"),
+            "currentGeneration": state.get("currentGeneration"),
+            "candidateCount": state.get("candidateCount"),
+            "eliteCount": state.get("eliteCount"),
+            "graveyardCount": state.get("graveyardCount"),
+            "nextGeneration": state.get("nextGeneration"),
+            "topElites": top_elites,
+            "bestElite": top_elites[0] if top_elites else None,
+            "safety": {
+                "orderSendAllowed": bool(safety.get("orderSendAllowed")),
+                "writesMt5OrderRequest": bool(safety.get("writesMt5OrderRequest")),
+                "gaDirectLiveAllowed": bool(safety.get("gaDirectLiveAllowed")),
+                "livePresetMutationAllowed": bool(safety.get("livePresetMutationAllowed")),
+            },
+        }
 
     def _dashboard_snapshot_covers_symbol(self, symbol: str) -> bool:
         path = self.runtime_dir / "QuantGod_Dashboard.json"
@@ -247,6 +291,479 @@ class AutomationChainRunner:
             return blockers
         return []
 
+    def _command_text(self, command: List[str]) -> str:
+        return " ".join(str(part) for part in command)
+
+    def _safe_iteration_script_names(self) -> set[str]:
+        return {
+            "run_mt5_fastlane.py",
+            "run_adaptive_policy.py",
+            "run_entry_trigger_lab.py",
+            "run_usdjpy_strategy_lab.py",
+            "run_usdjpy_live_loop.py",
+            "run_entry_latency.py",
+            "run_execution_feedback_producer.py",
+            "run_case_memory.py",
+            "run_strategy_ga.py",
+            "run_strategy_ga_factory.py",
+            "run_strategy_parity.py",
+            "run_automation_chain.py",
+        }
+
+    def _safe_iteration_action(
+        self,
+        action_id: str,
+        label_zh: str,
+        priority: int,
+        reason_zh: str,
+        next_required_action_zh: str,
+        commands: List[List[str]],
+        expected_evidence: List[str],
+    ) -> Dict[str, Any]:
+        return {
+            "actionId": action_id,
+            "labelZh": label_zh,
+            "priority": priority,
+            "mode": "SHADOW_SIMULATION_ONLY",
+            "reasonZh": reason_zh,
+            "nextRequiredActionZh": next_required_action_zh,
+            "commands": [self._command_text(command) for command in commands],
+            "commandArgv": commands,
+            "expectedEvidence": expected_evidence,
+            "safety": {
+                "advisoryOnly": True,
+                "simulationOrShadowOnly": True,
+                "orderSendAllowed": False,
+                "writesMt5OrderRequest": False,
+                "brokerExecutionAllowed": False,
+                "livePresetMutationAllowed": False,
+            },
+        }
+
+    def _safe_iteration_plan(
+        self,
+        entry_latency: Optional[Dict[str, Any]],
+        live_loop: Optional[Dict[str, Any]],
+        policy_summary: Dict[str, Any],
+        ga_factory_summary: Dict[str, Any],
+        state: str,
+    ) -> Dict[str, Any]:
+        latency = entry_latency or {}
+        readiness = latency.get("entryReadiness") if isinstance(latency.get("entryReadiness"), dict) else {}
+        failed_gap_ids = [str(item) for item in readiness.get("failedGapIds", []) if item]
+        failed_gap_set = set(failed_gap_ids)
+        runtime = str(self.runtime_dir)
+        symbols = self._symbols_arg()
+        actions: List[Dict[str, Any]] = []
+
+        if "market_data_ready" in failed_gap_set:
+            actions.append(self._safe_iteration_action(
+                "refresh_fastlane_quality",
+                "刷新快通道行情证据",
+                10,
+                "快通道行情缺口仍未通过。",
+                "先刷新 MT5 tick、指标和 dashboard heartbeat，再重新生成策略政策。",
+                [[self.python_bin, self._script("run_mt5_fastlane.py"), "--runtime-dir", runtime, "quality", "--symbols", symbols]],
+                ["QuantGod_MT5FastLaneQuality.json", "heartbeatFresh=true", "tick/indicator age within threshold"],
+            ))
+
+        if failed_gap_set.intersection({"policy_entry_mode", "signal_quorum", "shadow_sample_non_negative"}):
+            actions.append(self._safe_iteration_action(
+                "refresh_execution_feedback_memory",
+                "刷新执行反馈与四层记忆",
+                18,
+                "策略证据不足时，先把 shadow/live 结果整理成 entryContext ledger，再刷新 case memory，避免下游只靠桥接/代理样本判断王牌。",
+                "运行 execution feedback producer 和 case memory；只写 runtime 证据，不写订单、不改 preset。",
+                [
+                    [self.python_bin, self._script("run_execution_feedback_producer.py"), "--runtime-dir", runtime, "build", "--write"],
+                    [self.python_bin, self._script("run_case_memory.py"), "--runtime-dir", runtime, "build", "--write", "--limit", "8"],
+                ],
+                [
+                    "execution/QuantGod_LiveExecutionFeedbackProducerReport.json",
+                    "case_memory/QuantGod_CaseMemoryStrategyCandidates.json",
+                    "fineFactorMemoryHealth.rawCoverageRatio improves when raw fields exist",
+                ],
+            ))
+            actions.append(self._safe_iteration_action(
+                "refresh_policy_shadow_evidence",
+                "刷新政策与影子样本",
+                20,
+                "策略仍未给出可复核 entryMode、信号 quorum 或非负影子样本。",
+                "继续生成 adaptive policy、entry trigger 和 USDJPY live-loop 影子证据，直到 RSI_Reversal LONG 达到 quorum 且影子样本不为负。",
+                [
+                    [self.python_bin, self._script("run_adaptive_policy.py"), "--runtime-dir", runtime, "build", "--symbols", symbols],
+                    [self.python_bin, self._script("run_entry_trigger_lab.py"), "--runtime-dir", runtime, "build", "--symbols", symbols],
+                    [self.python_bin, self._script("run_usdjpy_strategy_lab.py"), "--runtime-dir", runtime, "build", "--write"],
+                    [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "once"],
+                ],
+                ["signalQuorum >= signalQuorumRequired", "entryMode=STANDARD_ENTRY/OPPORTUNITY_ENTRY", "影子样本未显示负期望=true"],
+            ))
+            if "policy_ea_signal_alignment" in failed_gap_set:
+                actions.append(self._safe_iteration_action(
+                    "build_signal_direction_shadow_strategy_intent",
+                    "生成当前信号方向影子策略种子",
+                    28,
+                    "EA 实时 RSI 已给出 SELL，但 SELL 侧因 live loss review 被降级，不能直接开闸，需要先为当前信号方向补齐影子/回测证据。",
+                    "用 Strategy JSON GA Factory 生成 USDJPY SHORT 影子/回测种子，验证方向一致性、动态止盈止损、样本质量和 live loss review 恢复条件；不改变实盘 preset，不写订单。",
+                    [
+                        [
+                            self.python_bin,
+                            self._script("run_strategy_ga_factory.py"),
+                            "--runtime-dir",
+                            runtime,
+                            "intent-plan",
+                            "--write",
+                            "--prompt",
+                            "USDJPY RSI_Reversal SHORT 低风险影子/回测策略；当前 EA RSI 给出 SELL，但 SELL live side 已因 live_loss_review 降级，只在 SHADOW/TESTER_ONLY 内补齐样本、动态止盈止损、方向一致性和恢复评审证据，不改 live preset，不写订单，回撤扩大就停手。",
+                        ],
+                        [self.python_bin, self._script("run_strategy_ga_factory.py"), "--runtime-dir", runtime, "build", "--write"],
+                    ],
+                    ["QuantGod_StrategyGAFactoryIntentPlan.json", "direction=SHORT remains SHADOW/TESTER_ONLY", "dynamic SLTP matches SHORT", "orderSendAllowed=false"],
+                ))
+            if "policy_ea_signal_alignment" not in failed_gap_set:
+                actions.append(self._safe_iteration_action(
+                    "build_shadow_strategy_intent",
+                    "生成影子策略迭代种子",
+                    30,
+                    "当前策略性格还没把入场信号和影子样本推到可复核状态。",
+                    "用 Strategy JSON GA Factory 生成低风险 USDJPY 影子/模拟种子，重点约束回撤和追单频率，不改变实盘执行闸门。",
+                    [
+                        [
+                            self.python_bin,
+                            self._script("run_strategy_ga_factory.py"),
+                            "--runtime-dir",
+                            runtime,
+                            "intent-plan",
+                            "--write",
+                            "--prompt",
+                            "USDJPY RSI_Reversal LONG 低风险影子策略，目标先证明本 lane 正收益，并与 BTC/crypto 合计达到 50 USD 后仍保持非负期望；信号 quorum 不足时减少追单，优先等待确认，回撤扩大就停手。",
+                        ],
+                        [self.python_bin, self._script("run_strategy_ga_factory.py"), "--runtime-dir", runtime, "build", "--write"],
+                    ],
+                    ["QuantGod_StrategyGAFactoryIntentPlan.json", "QuantGod_GAFactoryReflectionReport.json", "personality lock passed"],
+                ))
+
+        if failed_gap_set.intersection({"policy_ea_signal_alignment", "shadow_sample_non_negative", "signal_quorum"}) or (
+            ga_factory_summary.get("available") and str(state or "").startswith("BLOCKED")
+        ):
+            actions.append(self._safe_iteration_action(
+                "refresh_strategy_parity_evidence",
+                "刷新 Strategy/Replay/EA parity 证据",
+                32,
+                "GA 候选晋级需要最新 Strategy JSON、Python replay 和 MQL5 EA parity 证据；旧 parity 会把高分候选错误归类到缺证据 blocker。",
+                "在推进下一代 GA 前刷新 P4-2 parity，只更新审计证据，不改变实盘 preset，不写订单。",
+                [[self.python_bin, self._script("run_strategy_parity.py"), "--runtime-dir", runtime, "build", "--write"]],
+                ["parity/QuantGod_StrategyParityReport.json", "evidence_os/QuantGod_StrategyParityReport.json", "promotionGate.status"],
+            ))
+
+        if ga_factory_summary.get("available") and str(state or "").startswith("BLOCKED"):
+            actions.append(self._safe_iteration_action(
+                "advance_ga_shadow_generation",
+                "推进 GA 影子下一代",
+                35,
+                "GA Factory 已就绪，可继续在 TESTER_ONLY/FAST_SHADOW 范围做下一代 mutation/crossover 或扩大搜索。",
+                "运行一代 Strategy JSON GA，再重新归档 Factory；只允许 SHADOW/TESTER/PAPER_SIM 阶段，不进入实盘。",
+                [
+                    [self.python_bin, self._script("run_strategy_ga.py"), "--runtime-dir", runtime, "run-generation", "--write"],
+                    [self.python_bin, self._script("run_strategy_ga_factory.py"), "--runtime-dir", runtime, "build", "--write"],
+                ],
+                ["QuantGod_GAFactoryState.json currentGeneration increases", "elite directLiveAllowed=false", "orderSendAllowed=false"],
+            ))
+
+        if failed_gap_set.intersection({"ea_startup_guard_clear", "ea_spread_gate", "ea_entry_guard_ready"}):
+            actions.append(self._safe_iteration_action(
+                "refresh_ea_entry_diagnostics",
+                "刷新 EA 入场守门诊断",
+                40,
+                "EA 守门仍未进入可复核状态。",
+                "刷新入场延迟报告和 USDJPY live-loop，只观察启动保护、点差、新闻和 RSI 信号是否解除。",
+                [
+                    [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "once"],
+                    [self.python_bin, self._script("run_mt5_fastlane.py"), "--runtime-dir", runtime, "quality", "--symbols", symbols],
+                    [self.python_bin, self._script("run_entry_latency.py"), "--runtime-dir", runtime, "build", "--write"],
+                ],
+                ["startupGuardActive=false", "spreadAllowed=true", "EA state=READY/READY_SIGNAL/NEWS_BLOCK"],
+            ))
+
+        order_status = ""
+        for stage in latency.get("timeline", []) or []:
+            if isinstance(stage, dict) and stage.get("stage") == "order_attempt":
+                order_status = str(stage.get("status") or "")
+                break
+        if order_status in {"NO_ATTEMPT", "STALE_ATTEMPT"}:
+            actions.append(self._safe_iteration_action(
+                "inspect_readonly_order_feedback",
+                "复核只读订单反馈",
+                50,
+                "当前没有新鲜订单反馈证据，或只有过期历史事件。",
+                "仅检查执行反馈文件的新鲜度；在单独执行 lane 通过前不写 MT5 request。",
+                [[self.python_bin, self._script("run_entry_latency.py"), "--runtime-dir", runtime, "build", "--write"]],
+                ["fresh send/fill/reject/entry feedback only after reviewed execution lane", "orderSendAllowed=false"],
+            ))
+
+        if not actions and str(state or "").startswith("BLOCKED"):
+            actions.append(self._safe_iteration_action(
+                "rerun_safe_automation_chain",
+                "重跑安全自动化链",
+                60,
+                "阻断仍存在，但没有可定位的入场缺口字段。",
+                "重跑 USDJPY 自动化链刷新证据，再按新的 readiness gaps 判断下一步。",
+                [[self.python_bin, self._script("run_automation_chain.py"), "--runtime-dir", runtime, "--symbols", symbols, "once"]],
+                ["QuantGod_AutomationChainLatest.json", "readinessGaps"],
+            ))
+
+        actions.sort(key=lambda item: int(item.get("priority") or 99))
+        return {
+            "schema": "quantgod.safe_autonomous_iteration_plan.v1",
+            "mode": "SHADOW_SIMULATION_ONLY",
+            "state": "ITERATION_REQUIRED" if actions else "WAIT_FOR_NEXT_SIGNAL_OR_EXECUTION_REVIEW",
+            "stateZh": "需要继续影子/模拟迭代" if actions else "暂未发现新的安全迭代动作",
+            "readinessScore": readiness.get("score"),
+            "readyForEntryReview": bool(readiness.get("readyForEntryReview")),
+            "failedGapIds": failed_gap_ids,
+            "actionCount": len(actions),
+            "actions": actions,
+            "liveLoopState": (live_loop or {}).get("state"),
+            "standardCount": policy_summary.get("standardCount", 0),
+            "opportunityCount": policy_summary.get("opportunityCount", 0),
+            "gaFactorySummary": ga_factory_summary,
+            "safety": {
+                "advisoryOnly": True,
+                "simulationOrShadowOnly": True,
+                "orderSendAllowed": False,
+                "writesMt5OrderRequest": False,
+                "brokerExecutionAllowed": False,
+                "livePresetMutationAllowed": False,
+            },
+        }
+
+    def _validate_safe_iteration_command(self, command: List[str]) -> None:
+        if not command or len(command) < 2:
+            raise ValueError("安全迭代命令缺少脚本。")
+        script = Path(str(command[1])).name
+        if script not in self._safe_iteration_script_names():
+            raise ValueError(f"安全迭代命令不在白名单：{script}")
+        lowered = " ".join(str(part).lower() for part in command)
+        forbidden_tokens = (
+            "ordersend",
+            "order-send",
+            "quick-trade",
+            "privatekey",
+            "private_key",
+            "wallet",
+            "--send",
+            "telegram-text",
+            "live-preset",
+            "preset-mutation",
+            "broker-order",
+        )
+        blocked = [token for token in forbidden_tokens if token in lowered]
+        if blocked:
+            raise ValueError(f"安全迭代命令包含禁止片段：{', '.join(blocked)}")
+
+    def _safe_iteration_timeout_seconds(self, action: Dict[str, Any], command: List[str]) -> int:
+        action_id = str(action.get("actionId") or "")
+        script = Path(str(command[1])).name if len(command) > 1 else ""
+        if action_id == "advance_ga_shadow_generation" and script == "run_strategy_ga.py":
+            return 420
+        if action_id == "advance_ga_shadow_generation":
+            return 240
+        return 180
+
+    def _run_safe_iteration_command(self, action: Dict[str, Any], command: List[str]) -> Dict[str, Any]:
+        self._validate_safe_iteration_command(command)
+        step = ChainStep(
+            str(action.get("actionId") or "safe_iteration"),
+            str(action.get("labelZh") or "安全迭代动作"),
+            command,
+            required=False,
+            timeout_seconds=self._safe_iteration_timeout_seconds(action, command),
+        )
+        result = self._run_step(step)
+        result["actionId"] = action.get("actionId")
+        result["mode"] = "SHADOW_SIMULATION_ONLY"
+        result["safety"] = {
+            "advisoryOnly": True,
+            "simulationOrShadowOnly": True,
+            "orderSendAllowed": False,
+            "writesMt5OrderRequest": False,
+            "brokerExecutionAllowed": False,
+            "livePresetMutationAllowed": False,
+        }
+        return result
+
+    def run_safe_iteration_cycle(
+        self,
+        *,
+        refresh_before: bool = True,
+        refresh_after: bool = True,
+        max_actions: Optional[int] = None,
+        write: bool = True,
+    ) -> Dict[str, Any]:
+        before = self.run_once(send=False, write=write) if refresh_before else self.build_status()
+        plan = before.get("safeIterationPlan") if isinstance(before.get("safeIterationPlan"), dict) else {}
+        actions = plan.get("actions") if isinstance(plan.get("actions"), list) else []
+        if max_actions is not None:
+            actions = actions[: max(0, int(max_actions))]
+
+        command_results: List[Dict[str, Any]] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            commands = action.get("commandArgv") if isinstance(action.get("commandArgv"), list) else []
+            for command in commands:
+                if not isinstance(command, list):
+                    continue
+                command_results.append(self._run_safe_iteration_command(action, [str(part) for part in command]))
+
+        after = self.run_once(send=False, write=write) if refresh_after else self.build_status()
+        payload = {
+            "schema": "quantgod.safe_iteration_cycle.v1",
+            "generatedAt": now_iso(),
+            "runtimeDir": str(self.runtime_dir),
+            "symbols": self.symbols,
+            "mode": "SHADOW_SIMULATION_ONLY",
+            "before": {
+                "state": before.get("state"),
+                "stateZh": before.get("stateZh"),
+                "entryReadiness": (before.get("entryLatencyReport") or {}).get("entryReadiness"),
+                "gaFactorySummary": before.get("gaFactorySummary"),
+                "safeIterationActionCount": plan.get("actionCount"),
+            },
+            "after": {
+                "state": after.get("state"),
+                "stateZh": after.get("stateZh"),
+                "entryReadiness": (after.get("entryLatencyReport") or {}).get("entryReadiness"),
+                "gaFactorySummary": after.get("gaFactorySummary"),
+                "safeIterationActionCount": (after.get("safeIterationPlan") or {}).get("actionCount"),
+            },
+            "executedActionCount": len({str(result.get("actionId") or "") for result in command_results if result.get("actionId")}),
+            "executedCommandCount": len(command_results),
+            "commandResults": command_results,
+            "safety": {
+                "advisoryOnly": True,
+                "simulationOrShadowOnly": True,
+                "orderSendAllowed": False,
+                "writesMt5OrderRequest": False,
+                "brokerExecutionAllowed": False,
+                "livePresetMutationAllowed": False,
+                "telegramCommandExecutionAllowed": False,
+            },
+        }
+        validate_safe_payload(payload)
+        if write:
+            target = self.runtime_dir / "automation" / "QuantGod_SafeIterationCycleLatest.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        return payload
+
+    def _loop_measure(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        readiness = snapshot.get("entryReadiness") if isinstance(snapshot.get("entryReadiness"), dict) else {}
+        ga = snapshot.get("gaFactorySummary") if isinstance(snapshot.get("gaFactorySummary"), dict) else {}
+        best = ga.get("bestElite") if isinstance(ga.get("bestElite"), dict) else {}
+        return {
+            "state": snapshot.get("state"),
+            "readinessScore": readiness.get("score"),
+            "readyForEntryReview": bool(readiness.get("readyForEntryReview")),
+            "failedGapIds": readiness.get("failedGapIds") if isinstance(readiness.get("failedGapIds"), list) else [],
+            "gaGeneration": ga.get("currentGeneration"),
+            "bestFitness": best.get("fitness"),
+            "bestEliteSeedId": best.get("seedId"),
+            "bestEliteStage": best.get("promotionStage"),
+            "bestEliteDirectLiveAllowed": bool(best.get("directLiveAllowed")),
+        }
+
+    def _metric_delta(self, after: Any, before: Any) -> Optional[float]:
+        if not isinstance(after, (int, float)) or not isinstance(before, (int, float)):
+            return None
+        return round(float(after) - float(before), 6)
+
+    def run_safe_iteration_loop(
+        self,
+        *,
+        cycles: int = 2,
+        max_actions: Optional[int] = None,
+        write: bool = True,
+    ) -> Dict[str, Any]:
+        cycle_limit = max(0, min(int(cycles), 10))
+        cycle_reports: List[Dict[str, Any]] = []
+        stop_reason = "CYCLE_LIMIT_REACHED"
+        for index in range(cycle_limit):
+            cycle = self.run_safe_iteration_cycle(
+                refresh_before=True,
+                refresh_after=True,
+                max_actions=max_actions,
+                write=write,
+            )
+            before_measure = self._loop_measure(cycle.get("before") if isinstance(cycle.get("before"), dict) else {})
+            after_measure = self._loop_measure(cycle.get("after") if isinstance(cycle.get("after"), dict) else {})
+            cycle_reports.append({
+                "cycleIndex": index + 1,
+                "executedActionCount": cycle.get("executedActionCount"),
+                "executedCommandCount": cycle.get("executedCommandCount"),
+                "before": before_measure,
+                "after": after_measure,
+                "readinessScoreDelta": self._metric_delta(after_measure.get("readinessScore"), before_measure.get("readinessScore")),
+                "gaGenerationDelta": self._metric_delta(after_measure.get("gaGeneration"), before_measure.get("gaGeneration")),
+                "bestFitnessDelta": self._metric_delta(after_measure.get("bestFitness"), before_measure.get("bestFitness")),
+                "commandFailures": [
+                    {
+                        "actionId": row.get("actionId"),
+                        "summaryZh": row.get("summaryZh") or row.get("reason"),
+                        "exitCode": row.get("exitCode"),
+                    }
+                    for row in cycle.get("commandResults", [])
+                    if isinstance(row, dict) and not row.get("ok")
+                ],
+                "safety": cycle.get("safety"),
+            })
+            if after_measure.get("readyForEntryReview"):
+                stop_reason = "READY_FOR_ENTRY_REVIEW"
+                break
+            if not cycle.get("executedCommandCount"):
+                stop_reason = "NO_SAFE_ACTIONS"
+                break
+            if cycle_reports[-1]["commandFailures"]:
+                stop_reason = "COMMAND_FAILURE"
+                break
+
+        first_before = cycle_reports[0]["before"] if cycle_reports else {}
+        last_after = cycle_reports[-1]["after"] if cycle_reports else {}
+        payload = {
+            "schema": "quantgod.safe_iteration_loop.v1",
+            "generatedAt": now_iso(),
+            "runtimeDir": str(self.runtime_dir),
+            "symbols": self.symbols,
+            "mode": "SHADOW_SIMULATION_ONLY",
+            "requestedCycleCount": cycle_limit,
+            "executedCycleCount": len(cycle_reports),
+            "maxActionsPerCycle": max_actions,
+            "stopReason": stop_reason,
+            "cycles": cycle_reports,
+            "summary": {
+                "initial": first_before,
+                "final": last_after,
+                "readinessScoreDelta": self._metric_delta(last_after.get("readinessScore"), first_before.get("readinessScore")),
+                "gaGenerationDelta": self._metric_delta(last_after.get("gaGeneration"), first_before.get("gaGeneration")),
+                "bestFitnessDelta": self._metric_delta(last_after.get("bestFitness"), first_before.get("bestFitness")),
+            },
+            "safety": {
+                "advisoryOnly": True,
+                "simulationOrShadowOnly": True,
+                "orderSendAllowed": False,
+                "writesMt5OrderRequest": False,
+                "brokerExecutionAllowed": False,
+                "livePresetMutationAllowed": False,
+                "telegramCommandExecutionAllowed": False,
+            },
+        }
+        validate_safe_payload(payload)
+        if write:
+            target = self.runtime_dir / "automation" / "QuantGod_SafeIterationLoopLatest.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        return payload
+
     def build_status(self) -> Dict[str, Any]:
         if not latest_path(self.runtime_dir).exists():
             return build_empty_status(self.runtime_dir, self.symbols)
@@ -262,6 +779,8 @@ class AutomationChainRunner:
         policy = self._policy_file()
         dry_run = self._dry_run_file()
         live_loop = self._live_loop_file()
+        entry_latency = self._entry_latency_file()
+        ga_factory_summary = self._ga_factory_summary()
         policy_summary = self._summarize_policy(policy)
         failed_required = [s for s in steps if s.get("required") and not s.get("ok")]
         blocked_reasons: List[str] = []
@@ -273,6 +792,7 @@ class AutomationChainRunner:
         blocked_reasons = self._actionable_blockers(blocked_reasons)
         state, state_zh = self._status_from_live_loop(live_loop, policy_summary, failed_required, missing)
         top_level_blocked_reasons = self._top_level_blocked_reasons(state, blocked_reasons)
+        safe_iteration_plan = self._safe_iteration_plan(entry_latency, live_loop, policy_summary, ga_factory_summary, state)
         report = {
             "schema": "quantgod.automation_chain.v1",
             "generatedAt": now_iso(),
@@ -280,9 +800,12 @@ class AutomationChainRunner:
             "symbols": self.symbols,
             "singleSourceOfTruth": "USDJPY_LIVE_LOOP",
             "sourceFiles": {
+                "executionFeedbackProducer": str(self.runtime_dir / "execution" / "QuantGod_LiveExecutionFeedbackProducerReport.json"),
+                "caseMemory": str(self.runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"),
                 "policy": str(self.runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json"),
                 "dryRun": str(self.runtime_dir / "adaptive" / "QuantGod_USDJPYEADryRunDecision.json"),
                 "liveLoop": str(self.runtime_dir / "live" / "QuantGod_USDJPYLiveLoopStatus.json"),
+                "entryLatency": str(self.runtime_dir / "latency" / "QuantGod_EntryLatencyReport.json"),
             },
             "state": state,
             "stateZh": state_zh,
@@ -295,6 +818,11 @@ class AutomationChainRunner:
             "topShadowPolicy": (live_loop or {}).get("topShadowPolicy") or (policy or {}).get("topShadowPolicy"),
             "dryRunDecision": dry_run,
             "liveLoopStatus": live_loop,
+            "entryLatencyReport": entry_latency,
+            "entryLatencySummary": (entry_latency or {}).get("summary"),
+            "entryLatencyTimeline": (entry_latency or {}).get("timeline", []),
+            "gaFactorySummary": ga_factory_summary,
+            "safeIterationPlan": safe_iteration_plan,
             "standardCount": policy_summary["standardCount"],
             "opportunityCount": policy_summary["opportunityCount"],
             "blockedCount": policy_summary["blockedCount"],

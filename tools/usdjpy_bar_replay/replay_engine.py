@@ -124,7 +124,10 @@ def build_bar_replay_report(runtime_dir: Path, write: bool = False) -> Dict[str,
         "causalReplay": {
             "posteriorMayAffectTrigger": False,
             "posteriorUsedForScoringOnly": True,
-            "explanationZh": "每一步只使用当时样本已存在的 RSI、session、spread、news、cooldown 和守门状态；未来后验窗口只用于事后评分。",
+            "explanationZh": (
+                "每一步只使用当时样本已存在的 RSI、session、spread、news、cooldown 和守门状态；"
+                "未来后验窗口只用于事后评分。"
+            ),
         },
         "summary": {
             "sampleCount": len(samples),

@@ -5,6 +5,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+try:
+    from tools.usdjpy_strategy_lab.data_loader import focus_runtime_snapshot as usdjpy_focus_runtime_snapshot
+except Exception:  # pragma: no cover - direct script imports can run without package root.
+    try:
+        from usdjpy_strategy_lab.data_loader import focus_runtime_snapshot as usdjpy_focus_runtime_snapshot  # type: ignore[no-redef]
+    except Exception:
+        usdjpy_focus_runtime_snapshot = None  # type: ignore[assignment]
+
 def read_json(path: Path) -> Optional[Dict[str, Any]]:
     try:
         if not path.exists():
@@ -35,6 +43,10 @@ def read_csv_rows(path: Path, limit: int = 5000) -> List[Dict[str, str]]:
     return rows
 
 def discover_runtime_snapshot(runtime_dir: Path, symbol: str) -> Optional[Dict[str, Any]]:
+    if str(symbol or "").upper().startswith("USDJPY") and usdjpy_focus_runtime_snapshot is not None:
+        payload = usdjpy_focus_runtime_snapshot(runtime_dir, symbol)
+        if payload:
+            return payload
     for candidate in [runtime_dir / f"QuantGod_MT5RuntimeSnapshot_{symbol}.json", runtime_dir / f"QuantGod_RuntimeSnapshot_{symbol}.json", runtime_dir / "QuantGod_Dashboard.json"]:
         payload = read_json(candidate)
         if payload:
@@ -92,7 +104,7 @@ def _empty_fastlane_exporter(payload: Dict[str, Any], item: Optional[Dict[str, A
         tick_rows = float(row.get("tickRows") or 0)
     except Exception:
         tick_rows = 0.0
-    return tick_rows <= 0 and row.get("tickAgeSeconds") in (None, "", "null") and row.get("indicatorAgeSeconds") in (None, "", "null")
+    return tick_rows <= 0 and row.get("tickAgeSeconds") in (None, "", "null")
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:

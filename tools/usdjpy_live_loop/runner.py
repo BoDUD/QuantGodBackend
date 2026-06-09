@@ -8,10 +8,12 @@ from typing import Any
 try:
     from tools.usdjpy_strategy_lab.data_loader import focus_runtime_snapshot
     from tools.usdjpy_strategy_lab.dry_run_bridge import build_dry_run_decision
+    from tools.usdjpy_strategy_lab.entry_context_feedback import append_entry_context_feedback
     from tools.usdjpy_strategy_lab.policy_builder import _runtime_freshness, build_usdjpy_policy
 except ModuleNotFoundError:  # CLI execution from tools/
     from usdjpy_strategy_lab.data_loader import focus_runtime_snapshot
     from usdjpy_strategy_lab.dry_run_bridge import build_dry_run_decision
+    from usdjpy_strategy_lab.entry_context_feedback import append_entry_context_feedback
     from usdjpy_strategy_lab.policy_builder import _runtime_freshness, build_usdjpy_policy
 
 from .preset import load_live_preset
@@ -202,6 +204,14 @@ def build_live_loop(repo_root: Path, runtime_dir: Path, *, write: bool = False, 
     }
     if write:
         live_dir = runtime_dir / "live"
+        payload["entryContextFeedback"] = append_entry_context_feedback(
+            runtime_dir,
+            policy=policy,
+            top_policy=top,
+            generated_at=payload["generatedAt"],
+            event_type="LIVE_LOOP_ENTRY_CONTEXT",
+            source_name="QuantGod_USDJPYLiveLoopStatus.json",
+        )
         _write_json(live_dir / "QuantGod_USDJPYLiveLoopStatus.json", payload)
         _write_json(live_dir / "QuantGod_USDJPYLiveIntent.json", intent)
         daily = {

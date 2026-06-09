@@ -137,8 +137,16 @@ def build_walk_forward_report(runtime_dir: Path, write: bool = False) -> Dict[st
         "schema": SCHEMA_WALK_FORWARD,
         "generatedAtIso": utc_now_iso(),
         "symbol": FOCUS_SYMBOL,
-        "status": "WALK_FORWARD_READY" if any(item["summary"]["sampleCount"] for item in candidates) else "NO_REPLAY_EVENTS",
-        "statusZh": "已生成 USDJPY walk-forward 参数筛选" if any(item["summary"]["sampleCount"] for item in candidates) else "缺少回放事件，等待 P3-19 回放补样本",
+        "status": (
+            "WALK_FORWARD_READY"
+            if any(item["summary"]["sampleCount"] for item in candidates)
+            else "NO_REPLAY_EVENTS"
+        ),
+        "statusZh": (
+            "已生成 USDJPY walk-forward 参数筛选"
+            if any(item["summary"]["sampleCount"] for item in candidates)
+            else "缺少回放事件，等待 P3-19 回放补样本"
+        ),
         "safety": READ_ONLY_SAFETY,
         "splitPolicy": {
             "segments": list(SEGMENTS),
@@ -210,8 +218,16 @@ def build_live_config_proposal(runtime_dir: Path, write: bool = False) -> Dict[s
         "schema": SCHEMA_PROPOSAL,
         "generatedAtIso": utc_now_iso(),
         "symbol": FOCUS_SYMBOL,
-        "status": "LIVE_CONFIG_PROPOSAL_READY" if eligible else ("TESTER_ONLY_READY" if tester else "NO_LIVE_CONFIG_CHANGE"),
-        "statusZh": "已有候选可进入自主治理门；通过后只写受控 patch" if eligible else ("已有候选可进入 tester-only，暂不改实盘" if tester else "没有稳定候选，暂不改实盘"),
+        "status": (
+            "LIVE_CONFIG_PROPOSAL_READY"
+            if eligible
+            else ("TESTER_ONLY_READY" if tester else "NO_LIVE_CONFIG_CHANGE")
+        ),
+        "statusZh": (
+            "已有候选可进入自主治理门；通过后只写受控 patch"
+            if eligible
+            else ("已有候选可进入 tester-only，暂不改实盘" if tester else "没有稳定候选，暂不改实盘")
+        ),
         "eligibleChanges": eligible,
         "testerOnlyChanges": tester,
         "autoApplyAllowed": "stage_gated",

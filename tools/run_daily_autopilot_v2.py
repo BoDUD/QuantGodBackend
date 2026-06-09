@@ -11,6 +11,7 @@ from typing import Dict
 from daily_autopilot_v2.orchestrator import run_daily_autopilot_cycle
 from daily_autopilot_v2.report import build_daily_autopilot_v2
 from daily_autopilot_v2.telegram_text import daily_autopilot_v2_to_chinese_text
+from hfm_crypto_cfd.runtime_scope import hfm_crypto_runtime_scope_meta, resolve_hfm_crypto_runtime_dir
 from usdjpy_evidence_os.telegram_gateway import dispatch_text
 
 
@@ -57,7 +58,7 @@ def review_text(payload: Dict[str, object]) -> str:
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
     live = payload.get("liveLane") if isinstance(payload.get("liveLane"), dict) else {}
     mt5 = payload.get("mt5ShadowLane") if isinstance(payload.get("mt5ShadowLane"), dict) else {}
-    poly = payload.get("polymarketShadowLane") if isinstance(payload.get("polymarketShadowLane"), dict) else {}
+    hfm_crypto = payload.get("hfmCryptoShadowLane") if isinstance(payload.get("hfmCryptoShadowLane"), dict) else {}
     history = payload.get("historyProductionStatus") if isinstance(payload.get("historyProductionStatus"), dict) else {}
     consistency = payload.get("executionConsistencyReview") if isinstance(payload.get("executionConsistencyReview"), dict) else {}
     lines = [
@@ -67,7 +68,7 @@ def review_text(payload: Dict[str, object]) -> str:
         f"回滚：{'是' if payload.get('rollbackTriggered') else '否'}",
         f"净 R：{metrics.get('netR', 0)}｜最大不利 R：{metrics.get('maxAdverseR', '—')}｜利润捕获：{metrics.get('profitCaptureRatio', '—')}",
         f"错失机会：{metrics.get('missedOpportunity', 0)}｜早出场改善：{metrics.get('earlyExit', 0)}",
-        f"MT5 模拟路线：{(mt5.get('summary') or {}).get('routeCount', 0)}｜Polymarket：{poly.get('stageZh') or poly.get('stage', '模拟观察')}",
+        f"MT5 模拟路线：{(mt5.get('summary') or {}).get('routeCount', 0)}｜HFM Crypto CFD：{hfm_crypto.get('stageZh') or hfm_crypto.get('stage', '等待 symbol 证据')}",
         f"GA 历史样本：{history.get('statusZh', '等待生产状态')}｜{history.get('reasonZh', '未 PASS 时只允许 shadow/tester 观察')}",
         "",
         "【QuantGod 执行一致性复盘】",
@@ -75,7 +76,7 @@ def review_text(payload: Dict[str, object]) -> str:
         f"实盘执行质量：滑点 {consistency.get('avgSlippagePips', 0)} pips｜延迟 {consistency.get('avgLatencyMs', 0)}ms｜拒单 {consistency.get('rejectCount', 0)}",
         f"Agent 结论：{consistency.get('agentConclusionZh', '继续收集 parity 和执行反馈。')}",
         "",
-        "复盘已由 Agent 自动完成；不等待人工确认，不修改 live preset，不连接 Polymarket 钱包。",
+        "复盘已由 Agent 自动完成；不等待人工确认，不修改 live preset，不触发 HFM crypto 下单。",
     ]
     return "\n".join(lines)
 
@@ -91,6 +92,7 @@ def main(argv=None) -> int:
     load_env(root / ".env.usdjpy.local")
     parser = argparse.ArgumentParser(description="QuantGod Daily Autopilot 2.0 for USDJPY cent-account autonomous agent")
     parser.add_argument("--runtime-dir", default=os.environ.get("QG_RUNTIME_DIR", str(root / "runtime")))
+    parser.add_argument("--hfm-crypto-runtime-dir", default=os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""))
     parser.add_argument("--repo-root", default=str(root))
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
@@ -118,19 +120,42 @@ def main(argv=None) -> int:
     review_text_parser.add_argument("--send", action="store_true")
     args = parser.parse_args(argv)
     runtime_dir = Path(args.runtime_dir)
+    hfm_crypto_runtime_dir = resolve_hfm_crypto_runtime_dir(runtime_dir, args.hfm_crypto_runtime_dir)
+    hfm_crypto_runtime_scope = hfm_crypto_runtime_scope_meta(runtime_dir, args.hfm_crypto_runtime_dir)
     repo_root = Path(args.repo_root)
     if args.command == "status":
-        return emit(build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=False))
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=False,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
+        return emit(payload)
     if args.command == "build":
-        return emit(build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=args.write))
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
+        return emit(payload)
     if args.command == "run-cycle":
         run_payload = run_daily_autopilot_cycle(
             runtime_dir,
             repo_root=repo_root,
             write=args.write or True,
             bootstrap_samples=args.bootstrap_samples,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
         )
-        payload = build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=args.write or True)
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write or True,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
         payload["orchestrationRun"] = run_payload
         if args.view == "daily-todo":
             daily_todo = payload.get("dailyTodo") if isinstance(payload.get("dailyTodo"), dict) else {}
@@ -142,20 +167,44 @@ def main(argv=None) -> int:
             return emit(daily_review)
         return emit(payload)
     if args.command == "daily-todo":
-        payload = build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=args.write)
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
         return emit(payload.get("dailyTodo") or {"ok": False, "error": "daily_todo_missing"})
     if args.command == "daily-review":
-        payload = build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=args.write)
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
         return emit(payload.get("dailyReview") or {"ok": False, "error": "daily_review_missing"})
     if args.command == "telegram-text":
-        payload = build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=args.write or args.refresh)
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write or args.refresh,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
         content = daily_autopilot_v2_to_chinese_text(payload)
         result = {"ok": True, "text": content, "dailyAutopilotV2": payload}
         if args.send:
             result["telegramGateway"] = send_telegram(runtime_dir, "DAILY_AUTOPILOT_V2_REPORT", content)
         return emit(result)
     if args.command == "daily-todo-telegram-text":
-        payload = build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=args.write or args.refresh)
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write or args.refresh,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
         daily_todo = payload.get("dailyTodo") if isinstance(payload.get("dailyTodo"), dict) else {}
         content = todo_text(daily_todo)
         result = {"ok": True, "text": content, "dailyTodo": daily_todo}
@@ -163,7 +212,13 @@ def main(argv=None) -> int:
             result["telegramGateway"] = send_telegram(runtime_dir, "DAILY_TODO_AGENT_REPORT", content)
         return emit(result)
     if args.command == "daily-review-telegram-text":
-        payload = build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=args.write or args.refresh)
+        payload = build_daily_autopilot_v2(
+            runtime_dir,
+            repo_root=repo_root,
+            write=args.write or args.refresh,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
+        payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope
         daily_review = payload.get("dailyReview") if isinstance(payload.get("dailyReview"), dict) else {}
         content = review_text(daily_review)
         result = {"ok": True, "text": content, "dailyReview": daily_review}

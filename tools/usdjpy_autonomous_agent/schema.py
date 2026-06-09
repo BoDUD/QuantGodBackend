@@ -71,7 +71,8 @@ HARD_SAFETY = {
     "deepSeekCanOverrideReplayScore": False,
     "posteriorMayAffectTrigger": False,
     "posteriorUsedForScoringOnly": True,
-    "polymarketRealMoneyAllowed": False,
+    "externalMarketRealMoneyAllowed": False,
+    "hfmCryptoExecutionAllowed": False,
 }
 
 

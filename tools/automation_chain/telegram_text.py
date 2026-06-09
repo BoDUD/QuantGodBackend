@@ -18,6 +18,22 @@ def build_automation_telegram_text(report: Dict[str, Any]) -> str:
     top_live = report.get("topLiveEligiblePolicy") or {}
     top_shadow = report.get("topShadowPolicy") or {}
     dry_run = report.get("dryRunDecision") or {}
+    latency = report.get("entryLatencyReport") or {}
+    latency_summary = latency.get("summary") or {}
+    iteration_plan = report.get("safeIterationPlan") or {}
+    ga_summary = report.get("gaFactorySummary") or iteration_plan.get("gaFactorySummary") or {}
+    best_elite = ga_summary.get("bestElite") or {}
+    latency_timeline = []
+    for stage in latency.get("timeline", []) or []:
+        latency_timeline.append(
+            f"- {stage.get('labelZh', stage.get('stage'))}：{stage.get('statusZh', stage.get('status'))}"
+            f"｜{stage.get('reasonZh', '')}"
+        )
+    iteration_actions = []
+    for action in iteration_plan.get("actions", []) or []:
+        iteration_actions.append(
+            f"- {action.get('labelZh', action.get('actionId'))}：{action.get('nextRequiredActionZh', action.get('reasonZh', ''))}"
+        )
     steps = []
     for step in report.get("steps", []):
         mark = "通过" if step.get("ok") else "未通过"
@@ -50,9 +66,18 @@ def build_automation_telegram_text(report: Dict[str, Any]) -> str:
         f"- 实盘候选：{top_live.get('strategy', '暂无')}｜{top_live.get('direction', 'UNKNOWN')}｜{top_live.get('entryMode', 'UNKNOWN')}｜建议仓位 {top_live.get('recommendedLot', 0)}",
         f"- 影子第一名：{top_shadow.get('strategy', '暂无')}｜{top_shadow.get('direction', 'UNKNOWN')}｜{top_shadow.get('entryMode', 'UNKNOWN')}",
         f"- EA 干跑：{dry_run.get('decision', '暂无')}｜{dry_run.get('strategy', 'UNKNOWN')}｜{dry_run.get('direction', 'UNKNOWN')}",
+        f"- 入场慢点：{latency_summary.get('stateZh', '暂无')}｜{latency_summary.get('primaryReasonZh', '')}",
         "",
         "链路步骤：",
         _items(steps, 10),
+        "",
+        "入场延迟时间线：",
+        _items(latency_timeline, 8),
+        "",
+        "下一轮安全迭代：",
+        f"- 就绪分：{iteration_plan.get('readinessScore', '暂无')}｜模式：{iteration_plan.get('mode', 'SHADOW_SIMULATION_ONLY')}",
+        f"- GA 精英：第 {ga_summary.get('currentGeneration', '暂无')} 代｜{best_elite.get('seedId', '暂无')}｜fitness {best_elite.get('fitness', '暂无')}｜{best_elite.get('promotionStage', 'SHADOW')}",
+        _items(iteration_actions, 6),
         "",
         "缺失证据：",
         _items(missing, 8),

@@ -38,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Required: confirms copying local account context into gitignored isolated tester runtime.",
     )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Inspect account-context readiness and write status without copying sensitive account files.",
+    )
     return parser.parse_args()
 
 
@@ -86,6 +91,177 @@ def path_under(path: Path, root: Path) -> bool:
         return False
 
 
+def file_probe(path: Path, *, include_hash: bool = False) -> dict[str, Any]:
+    exists = path.exists()
+    probe: dict[str, Any] = {
+        "path": str(path),
+        "exists": exists,
+    }
+    if exists:
+        stat = path.stat()
+        probe["bytes"] = stat.st_size
+        probe["mtimeIso"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+        if include_hash:
+            probe["sha256Prefix"] = sha256_prefix(path)
+    return probe
+
+
+def build_status(
+    *,
+    mode: str,
+    source_root: Path,
+    tester_root: Path,
+    login: str,
+    server: str,
+    copied_files: list[dict[str, Any]] | None = None,
+    copied_trees: list[dict[str, Any]] | None = None,
+    sensitive_copy_allowed: bool = False,
+) -> dict[str, Any]:
+    copied_files = copied_files or []
+    copied_trees = copied_trees or []
+    account_trade_root = tester_root / "Bases" / server / "trades" / login
+    selected_symbols = tester_root / "Bases" / server / "symbols" / f"selected-{login}.dat"
+    required_target_checks = {
+        "Config/accounts.dat": file_probe(tester_root / "Config" / "accounts.dat", include_hash=sensitive_copy_allowed),
+        "Config/servers.dat": file_probe(tester_root / "Config" / "servers.dat", include_hash=sensitive_copy_allowed),
+        f"Bases/{server}": {
+            "path": str(tester_root / "Bases" / server),
+            "exists": (tester_root / "Bases" / server).exists(),
+        },
+        f"Bases/{server}/trades/{login}": {
+            "path": str(account_trade_root),
+            "exists": account_trade_root.exists(),
+        },
+        f"Bases/{server}/symbols/selected-{login}.dat": file_probe(selected_symbols, include_hash=sensitive_copy_allowed),
+    }
+    source_checks = {
+        "terminal64.exe": file_probe(source_root / "terminal64.exe"),
+        "Config/accounts.dat": file_probe(source_root / "Config" / "accounts.dat"),
+        "Config/servers.dat": file_probe(source_root / "Config" / "servers.dat"),
+        f"Bases/{server}": {
+            "path": str(source_root / "Bases" / server),
+            "exists": (source_root / "Bases" / server).exists(),
+        },
+    }
+    missing_target = [
+        key
+        for key, value in required_target_checks.items()
+        if not bool(value.get("exists"))
+    ]
+    missing_source = [
+        key
+        for key, value in source_checks.items()
+        if not bool(value.get("exists"))
+    ]
+    ready = (
+        required_target_checks["Config/accounts.dat"]["exists"]
+        and required_target_checks["Config/servers.dat"]["exists"]
+        and required_target_checks[f"Bases/{server}"]["exists"]
+        and (
+            required_target_checks[f"Bases/{server}/trades/{login}"]["exists"]
+            or required_target_checks[f"Bases/{server}/symbols/selected-{login}.dat"]["exists"]
+        )
+    )
+    blockers: list[str] = []
+    if missing_source:
+        blockers.append("source_mt5_account_context_not_found")
+    if missing_target:
+        blockers.append("isolated_tester_account_context_not_ready")
+    if missing_target and not sensitive_copy_allowed:
+        blockers.append("sensitive_account_context_sync_required")
+    separate_sync_required = bool(missing_target and not missing_source and not sensitive_copy_allowed)
+    command_preview = [
+        "python3",
+        "tools/sync_isolated_mt5_account_context.py",
+        "--allow-sensitive-account-context",
+    ]
+    return {
+        "schemaVersion": 1,
+        "generatedAtIso": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+        "sourceRoot": str(source_root),
+        "testerRoot": str(tester_root),
+        "source": {
+            "root": str(source_root),
+            "terminalExists": source_checks["terminal64.exe"]["exists"],
+            "accountContextExists": source_checks["Config/accounts.dat"]["exists"],
+            "serverContextExists": source_checks["Config/servers.dat"]["exists"],
+            "brokerBaseExists": source_checks[f"Bases/{server}"]["exists"],
+            "missing": missing_source,
+        },
+        "target": {
+            "root": str(tester_root),
+            "accountContextExists": required_target_checks["Config/accounts.dat"]["exists"],
+            "serverContextExists": required_target_checks["Config/servers.dat"]["exists"],
+            "brokerBaseExists": required_target_checks[f"Bases/{server}"]["exists"],
+            "tradeContextExists": required_target_checks[f"Bases/{server}/trades/{login}"]["exists"],
+            "selectedSymbolsExists": required_target_checks[f"Bases/{server}/symbols/selected-{login}.dat"]["exists"],
+            "missing": missing_target,
+        },
+        "login": login,
+        "server": server,
+        "ready": ready,
+        "sensitiveCopyAllowed": sensitive_copy_allowed,
+        "strategyBlocked": False,
+        "environmentBlocked": not ready,
+        "sensitiveAccountContextSyncRequired": bool(missing_target and not sensitive_copy_allowed),
+        "sourceChecks": source_checks,
+        "requiredTargetChecks": required_target_checks,
+        "missingTarget": missing_target,
+        "missingSource": missing_source,
+        "blockers": blockers,
+        "copiedFileCount": len(copied_files),
+        "copiedTreeCount": len(copied_trees),
+        "copiedFiles": [
+            {
+                "relativePath": item["relativePath"],
+                "bytes": item["bytes"],
+                "sha256Prefix": item["sha256Prefix"],
+            }
+            for item in copied_files
+        ],
+        "copiedTrees": copied_trees,
+        "separateSyncReview": {
+            "status": "SEPARATE_SENSITIVE_ACCOUNT_CONTEXT_SYNC_REQUIRED" if separate_sync_required else (
+                "ACCOUNT_CONTEXT_SYNCED" if ready else "ACCOUNT_CONTEXT_PREFLIGHT_BLOCKED"
+            ),
+            "statusZh": (
+                "源账户上下文存在，隔离 tester 目标缺文件；需要单独受控同步，本 preflight 不复制。"
+                if separate_sync_required
+                else (
+                    "隔离 tester 账户上下文已就绪。"
+                    if ready
+                    else "账户上下文 preflight 仍被源或目标缺失挡住。"
+                )
+            ),
+            "sourceAccountContextExists": bool(source_checks["Config/accounts.dat"]["exists"]),
+            "targetAccountContextExists": bool(required_target_checks["Config/accounts.dat"]["exists"]),
+            "missingTarget": missing_target,
+            "missingSource": missing_source,
+            "requiresSeparateControlledSync": separate_sync_required,
+            "sensitiveCopyAllowedHere": sensitive_copy_allowed,
+            "commandPreview": command_preview if separate_sync_required else [],
+            "writesOnlyUnderTesterRoot": True,
+            "launchesTerminal": False,
+            "writesLivePreset": False,
+            "writesMt5OrderRequest": False,
+            "brokerCallsMade": False,
+        },
+        "nextActionZh": (
+            "隔离 tester 账户上下文已就绪，可在 tester-only lock/window 内重试。"
+            if ready
+            else "隔离 tester 账户上下文不完整；需要单独受控同步账户上下文后再重试 Strategy Tester。"
+        ),
+        "hardGuards": [
+            "Local filesystem operation only; no network transfer.",
+            "Writes only under repo runtime/HFM_MT5_Tester_Isolated when sensitive sync is explicitly allowed.",
+            "Does not launch terminal64.exe or Strategy Tester.",
+            "Does not mutate live HFM presets or live-pilot Files.",
+            "Generated ParamLab tester configs still set AllowLiveTrading=0.",
+        ],
+    }
+
+
 def main() -> int:
     args = parse_args()
     repo_root = Path(args.repo_root)
@@ -95,10 +271,24 @@ def main() -> int:
     login = str(args.login).strip()
     server = str(args.server).strip()
 
-    if not args.allow_sensitive_account_context:
-        raise SystemExit("Refusing to copy account context without --allow-sensitive-account-context")
     if not path_under(tester_root, repo_root / "runtime"):
         raise SystemExit(f"tester root must stay under repo runtime/: {tester_root}")
+    if args.preflight_only:
+        status = build_status(
+            mode="PREFLIGHT_ONLY_NO_SENSITIVE_COPY",
+            source_root=source_root,
+            tester_root=tester_root,
+            login=login,
+            server=server,
+            sensitive_copy_allowed=False,
+        )
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Preflight isolated tester account context: ready={status['ready']}")
+        print(f"Wrote {status_path}")
+        return 0 if status["ready"] else 2
+    if not args.allow_sensitive_account_context:
+        raise SystemExit("Refusing to copy account context without --allow-sensitive-account-context")
     if not (source_root / "terminal64.exe").exists():
         raise FileNotFoundError(f"source MT5 terminal missing: {source_root / 'terminal64.exe'}")
     if not (tester_root / "terminal64.exe").exists():
@@ -142,47 +332,21 @@ def main() -> int:
             ],
         })
 
-    account_trade_root = tester_root / "Bases" / server / "trades" / login
-    selected_symbols = tester_root / "Bases" / server / "symbols" / f"selected-{login}.dat"
-    ready = (
-        (tester_root / "Config" / "accounts.dat").exists()
-        and (tester_root / "Config" / "servers.dat").exists()
-        and (tester_root / "Bases" / server).exists()
-        and (account_trade_root.exists() or selected_symbols.exists())
+    status = build_status(
+        mode="LOCAL_ONLY_SYNC_TO_ISOLATED_TESTER",
+        source_root=source_root,
+        tester_root=tester_root,
+        login=login,
+        server=server,
+        copied_files=copied_files,
+        copied_trees=copied_trees,
+        sensitive_copy_allowed=True,
     )
-    status = {
-        "schemaVersion": 1,
-        "generatedAtIso": datetime.now(timezone.utc).isoformat(),
-        "mode": "LOCAL_ONLY_SYNC_TO_ISOLATED_TESTER",
-        "sourceRoot": str(source_root),
-        "testerRoot": str(tester_root),
-        "login": login,
-        "server": server,
-        "ready": ready,
-        "copiedFileCount": len(copied_files),
-        "copiedTreeCount": len(copied_trees),
-        "copiedFiles": [
-            {
-                "relativePath": item["relativePath"],
-                "bytes": item["bytes"],
-                "sha256Prefix": item["sha256Prefix"],
-            }
-            for item in copied_files
-        ],
-        "copiedTrees": copied_trees,
-        "hardGuards": [
-            "Local filesystem copy only; no network transfer.",
-            "Writes only under repo runtime/HFM_MT5_Tester_Isolated.",
-            "Does not launch terminal64.exe or Strategy Tester.",
-            "Does not mutate live HFM presets or live-pilot Files.",
-            "Generated ParamLab tester configs still set AllowLiveTrading=0.",
-        ],
-    }
     status_path.parent.mkdir(parents=True, exist_ok=True)
     status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Synced isolated tester account context: ready={ready}")
+    print(f"Synced isolated tester account context: ready={status['ready']}")
     print(f"Wrote {status_path}")
-    return 0 if ready else 2
+    return 0 if status["ready"] else 2
 
 
 if __name__ == "__main__":

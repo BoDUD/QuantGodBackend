@@ -8,14 +8,14 @@ from typing import Any, Dict, List
 try:
     from daily_autopilot_v2.orchestrator import read_latest_run
     from daily_autopilot_v2.report import build_daily_autopilot_v2
-    from autonomous_lifecycle.polymarket_shadow_lane import build_polymarket_shadow_lane
+    from autonomous_lifecycle.hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
     from usdjpy_evidence_os.io_utils import load_json, read_jsonl_tail, utc_now_iso, write_json
     from usdjpy_evidence_os.schema import SAFETY_BOUNDARY, gateway_ledger_path, gateway_queue_path
     from usdjpy_evidence_os.telegram_gateway import gateway_status
 except ModuleNotFoundError:  # pragma: no cover - package import path when run from tests
     from tools.daily_autopilot_v2.orchestrator import read_latest_run
     from tools.daily_autopilot_v2.report import build_daily_autopilot_v2
-    from tools.autonomous_lifecycle.polymarket_shadow_lane import build_polymarket_shadow_lane
+    from tools.autonomous_lifecycle.hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
     from tools.usdjpy_evidence_os.io_utils import load_json, read_jsonl_tail, utc_now_iso, write_json
     from tools.usdjpy_evidence_os.schema import SAFETY_BOUNDARY, gateway_ledger_path, gateway_queue_path
     from tools.usdjpy_evidence_os.telegram_gateway import gateway_status
@@ -111,8 +111,13 @@ def _latest_delivery(runtime_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _daily_autopilot_health(runtime_dir: Path, repo_root: Path) -> Dict[str, Any]:
-    report = build_daily_autopilot_v2(runtime_dir, repo_root=repo_root, write=False)
+def _daily_autopilot_health(runtime_dir: Path, repo_root: Path, hfm_crypto_runtime_dir: Path | None = None) -> Dict[str, Any]:
+    report = build_daily_autopilot_v2(
+        runtime_dir,
+        repo_root=repo_root,
+        write=False,
+        hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+    )
     latest_run = read_latest_run(runtime_dir)
     steps = latest_run.get("steps") if isinstance(latest_run.get("steps"), list) else []
     failed_steps = [
@@ -199,38 +204,28 @@ def _agent_loop_health(runtime_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _polymarket_health(runtime_dir: Path) -> Dict[str, Any]:
-    lane = build_polymarket_shadow_lane(runtime_dir, write=False)
+def _hfm_crypto_health(runtime_dir: Path, hfm_crypto_runtime_dir: Path | None = None) -> Dict[str, Any]:
+    effective_runtime_dir = hfm_crypto_runtime_dir or runtime_dir
+    lane = build_hfm_crypto_shadow_lane(effective_runtime_dir, write=False)
     summary = lane.get("summary") if isinstance(lane.get("summary"), dict) else {}
-    retune_plan_ready = bool(summary.get("retunePlanReady"))
-    todo_count = _as_int(summary.get("todoCount"), 0)
-    retune_red = _as_int(summary.get("retuneRed"), 0)
-    retune_yellow = _as_int(summary.get("retuneYellow"), 0)
-    agent_status = str(summary.get("retuneAgentStatus") or "").upper()
-    status = "PASS"
-    detail = "Polymarket 跟单复盘已由 Agent 自动处理，真钱仍隔离。"
-    if todo_count > 0 and not retune_plan_ready:
+    evidence_found = bool(summary.get("symbolEvidenceFound"))
+    status = "PASS" if evidence_found else "WARN"
+    detail = "HFM Crypto CFD 影子资料已就绪，执行权限仍关闭。"
+    if not evidence_found:
         status = "WARN"
-        detail = "Polymarket 仍有待自动重调的黄字事项，等待 Agent 生成 retune plan。"
-    elif retune_red > 0 or retune_yellow > 0:
-        status = "WARN"
-        detail = f"Polymarket 有 {retune_red} 个红项 / {retune_yellow} 个黄项，仅进入 shadow retune。"
-    elif agent_status and agent_status not in {"COMPLETE", "COMPLETED", "REVIEW_COMPLETE_NO_CODE_CHANGE"}:
-        status = "WARN"
-        detail = f"Polymarket Agent 状态：{agent_status}"
+        detail = "等待本机 HFM/MT5 Bases 里出现 BTC/ETH/SOL 等 crypto CFD history 或 tick 证据。"
     return {
         "status": status,
         "statusZh": _status_zh(status),
         "stage": lane.get("stage"),
         "stageZh": lane.get("stageZh"),
-        "retunePlanReady": retune_plan_ready,
-        "retuneAgentStatus": summary.get("retuneAgentStatus"),
-        "todoCount": todo_count,
-        "retuneRed": retune_red,
-        "retuneYellow": retune_yellow,
+        "symbolEvidenceFound": evidence_found,
+        "detectedSymbolCount": _as_int(summary.get("detectedSymbolCount"), 0),
+        "runtimeDir": str(effective_runtime_dir),
+        "mossProfileFound": bool(summary.get("mossProfileFound")),
         "detailZh": detail,
-        "walletIntegrationAllowed": False,
-        "polymarketRealMoneyAllowed": False,
+        "walletAuthorizationAllowed": False,
+        "hfmCryptoExecutionAllowed": False,
     }
 
 
@@ -287,12 +282,18 @@ def _telegram_health(runtime_dir: Path) -> Dict[str, Any]:
     }
 
 
-def build_agent_ops_health(runtime_dir: Path, repo_root: Path | None = None, write: bool = False) -> Dict[str, Any]:
+def build_agent_ops_health(
+    runtime_dir: Path,
+    repo_root: Path | None = None,
+    write: bool = False,
+    hfm_crypto_runtime_dir: Path | str | None = None,
+) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     repo_root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[1]
+    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
     agent_loop = _agent_loop_health(runtime_dir)
-    daily = _daily_autopilot_health(runtime_dir, repo_root)
-    polymarket = _polymarket_health(runtime_dir)
+    daily = _daily_autopilot_health(runtime_dir, repo_root, hfm_crypto_runtime)
+    hfm_crypto = _hfm_crypto_health(runtime_dir, hfm_crypto_runtime)
     telegram = _telegram_health(runtime_dir)
     system_checks = [
         _check("agentV25Loop", "Agent v2.5 后台循环", agent_loop["status"], agent_loop["detailZh"], agent_loop.get("lastHeartbeatAgeSeconds")),
@@ -301,11 +302,11 @@ def build_agent_ops_health(runtime_dir: Path, repo_root: Path | None = None, wri
     ]
     strategy_checks = [
         _check(
-            "polymarketRetune",
-            "Polymarket 跟单重调",
-            polymarket["status"],
-            polymarket["detailZh"],
-            polymarket.get("todoCount"),
+            "hfmCryptoShadow",
+            "HFM Crypto CFD 影子车道",
+            hfm_crypto["status"],
+            hfm_crypto["detailZh"],
+            hfm_crypto.get("detectedSymbolCount"),
             category="strategy",
         ),
     ]
@@ -320,6 +321,8 @@ def build_agent_ops_health(runtime_dir: Path, repo_root: Path | None = None, wri
         "schema": SCHEMA,
         "agentVersion": AGENT_VERSION,
         "generatedAtIso": utc_now_iso(),
+        "runtimeDir": str(runtime_dir),
+        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
         "overallStatus": system_status,
         "overallStatusZh": _status_zh(system_status),
         "systemStatus": system_status,
@@ -330,7 +333,7 @@ def build_agent_ops_health(runtime_dir: Path, repo_root: Path | None = None, wri
         "strategyOk": strategy_status != "BLOCKED",
         "agentV25Loop": agent_loop,
         "dailyAutopilot": daily,
-        "polymarketRetune": polymarket,
+        "hfmCryptoShadow": hfm_crypto,
         "telegramGateway": telegram,
         "systemChecks": system_checks,
         "strategyChecks": strategy_checks,

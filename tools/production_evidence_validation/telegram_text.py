@@ -34,6 +34,6 @@ def build_telegram_text(report: dict[str, Any]) -> str:
         "安全边界：",
         "- 本报告只做生产证据验证，不会下单、不会平仓、不会撤单。",
         "- 不会修改 MT5 live preset，不接收 Telegram 交易命令。",
-        "- Polymarket 仍然只做模拟和事件风险，不接真钱钱包。",
+        "- HFM Crypto CFD 仍然只做 shadow-only 资料同步，不触发 crypto 下单。",
     ])
     return "\n".join(lines)

@@ -43,10 +43,13 @@ from .schema import (
     SCHEMA_FACTORY_STATE,
     SCHEMA_GRAVEYARD,
     SCHEMA_LINEAGE_TREE,
+    SCHEMA_REFLECTION_REPORT,
     elite_archive_path,
     graveyard_path,
+    intent_plan_path,
     ledger_path,
     lineage_tree_path,
+    reflection_report_path,
     state_path,
 )
 
@@ -58,6 +61,7 @@ def build_factory_state(runtime_dir: Path, *, write: bool = True) -> Dict[str, A
     elite_archive = _elite_archive(runtime_dir, candidates)
     graveyard = _graveyard(candidates)
     lineage_tree = _lineage_tree(runtime_dir, candidates)
+    reflection_report = _reflection_report(status, candidates, elite_archive, graveyard)
     generated_at = utc_now_iso()
     factory_status = _factory_status(status, candidates)
     state: Dict[str, Any] = {
@@ -75,12 +79,16 @@ def build_factory_state(runtime_dir: Path, *, write: bool = True) -> Dict[str, A
         "lineageEdgeCount": lineage_tree["edgeCount"],
         "allowedPromotionStages": ALLOWED_PROMOTION_STAGES,
         "nextGeneration": _next_generation(status, elite_archive, graveyard),
+        "evolutionLockPolicy": _evolution_lock_policy(),
+        "reflectionReport": reflection_report,
         "archiveFiles": {
             "state": str(state_path(runtime_dir)),
             "eliteArchive": str(elite_archive_path(runtime_dir)),
             "graveyard": str(graveyard_path(runtime_dir)),
             "lineageTree": str(lineage_tree_path(runtime_dir)),
             "ledger": str(ledger_path(runtime_dir)),
+            "intentPlan": str(intent_plan_path(runtime_dir)),
+            "reflectionReport": str(reflection_report_path(runtime_dir)),
         },
         "eliteArchive": elite_archive,
         "graveyard": graveyard,
@@ -92,6 +100,7 @@ def build_factory_state(runtime_dir: Path, *, write: bool = True) -> Dict[str, A
         write_json(elite_archive_path(runtime_dir), elite_archive)
         write_json(graveyard_path(runtime_dir), graveyard)
         write_json(lineage_tree_path(runtime_dir), lineage_tree)
+        write_json(reflection_report_path(runtime_dir), reflection_report)
         append_ledger_row(
             ledger_path(runtime_dir),
             {
@@ -136,7 +145,29 @@ def read_factory_state(runtime_dir: Path) -> Dict[str, Any]:
             "status": "WAITING_GA_TRACE",
             "reasonZh": "先运行 Strategy JSON GA generation，再构建 GA Factory。",
         },
+        "evolutionLockPolicy": _evolution_lock_policy(),
+        "reflectionReport": _reflection_report({}, [], {"eliteCount": 0}, {"graveyardCount": 0}),
         "safety": dict(SAFETY),
+    }
+
+
+def _evolution_lock_policy() -> Dict[str, Any]:
+    return {
+        "schema": "quantgod.strategy_ga_factory.evolution_lock_policy.v1",
+        "personalityLocked": True,
+        "lockedFields": [
+            "symbol",
+            "strategyFamily",
+            "direction",
+            "lane",
+            "risk.stage",
+            "risk.maxLot",
+            "risk.opportunityLotMultiplier",
+        ],
+        "tacticalMutationBoundsPct": 30.0,
+        "riskKernelMutationAllowed": False,
+        "directLivePromotionAllowed": False,
+        "reasonZh": "GA Factory 归档和下一代生成必须保留策略性格；只允许战术参数小步变异。",
     }
 
 
@@ -207,6 +238,126 @@ def _lineage_tree(runtime_dir: Path, candidates: List[Dict[str, Any]]) -> Dict[s
         "reasonZh": _lineage_reason(visible_nodes, visible_edges),
         "safety": dict(SAFETY),
     }
+
+
+def _reflection_report(
+    status: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    elite_archive: Dict[str, Any],
+    graveyard: Dict[str, Any],
+) -> Dict[str, Any]:
+    elites = [row for row in candidates if str(row.get("status") or "") == "ELITE_SELECTED"]
+    rejected = [
+        row
+        for row in candidates
+        if str(row.get("status") or "") in {"REJECTED", "SAFETY_REJECTED"}
+        or bool(row.get("blockerCode"))
+    ]
+    generation = int(status.get("currentGeneration") or 0) if status else 0
+    segments = [
+        {
+            "segment": "overview",
+            "status": "READY" if candidates else "WAITING_GA_TRACE",
+            "summaryZh": _reflection_overview_summary(generation, candidates),
+            "evidence": {
+                "currentGeneration": generation,
+                "candidateCount": len(candidates),
+                "eliteCount": int(elite_archive.get("eliteCount") or 0),
+                "graveyardCount": int(graveyard.get("graveyardCount") or 0),
+            },
+            "allowedMutationScope": "observe_only",
+        },
+        {
+            "segment": "winners",
+            "status": "HAS_ELITES" if elites else "NO_ELITE_YET",
+            "summaryZh": _winner_summary(elites),
+            "evidence": {
+                "topCandidates": [_candidate_summary(row) for row in _top_by_fitness(elites, 5)],
+            },
+            "allowedMutationScope": "preserve_personality_and_tune_entry_exit_thresholds",
+        },
+        {
+            "segment": "losers",
+            "status": "HAS_BLOCKERS" if rejected else "NO_BLOCKERS_YET",
+            "summaryZh": _loser_summary(rejected),
+            "evidence": {
+                "topBlockers": [_candidate_summary(row) for row in rejected[:8]],
+            },
+            "allowedMutationScope": "avoid_repeated_blockers_without_changing_risk_kernel",
+        },
+        {
+            "segment": "next_generation",
+            "status": "READY" if candidates else "WAITING",
+            "summaryZh": _next_reflection_summary(elites, rejected, candidates),
+            "evidence": {
+                "tacticalMutationBoundsPct": 30.0,
+                "personalityLocked": True,
+                "riskKernelMutationAllowed": False,
+            },
+            "allowedMutationScope": "indicators_thresholds_exit_session_windows_only",
+        },
+    ]
+    return {
+        "ok": True,
+        "schema": SCHEMA_REFLECTION_REPORT,
+        "agentVersion": AGENT_VERSION,
+        "generatedAt": utc_now_iso(),
+        "segmentCount": len(segments),
+        "segments": segments,
+        "rulesZh": [
+            "先看整体候选分布，再看赢家和输家的细节。",
+            "赢家只提炼可复用战术，不改变方向和风险内核。",
+            "输家只记录 blocker 与失败类型，下一代避免重复踩坑。",
+            "每轮战术参数最多按 30% 边界微调。",
+        ],
+        "safety": dict(SAFETY),
+    }
+
+
+def _reflection_overview_summary(generation: int, candidates: List[Dict[str, Any]]) -> str:
+    if not candidates:
+        return "还没有 GA 候选轨迹，先跑一代 Strategy JSON GA，再进入分段复盘。"
+    return f"第 {generation} 代共归档 {len(candidates)} 个候选，先从整体分布判断下一代是否该扩大搜索或沿 elite 微调。"
+
+
+def _winner_summary(elites: List[Dict[str, Any]]) -> str:
+    if not elites:
+        return "本轮还没有 elite，下一代应扩大搜索范围，同时保留性格锁和风险边界。"
+    best = _top_by_fitness(elites, 1)[0]
+    return (
+        f"本轮 {len(elites)} 个 elite 值得复用；最佳候选 "
+        f"{best.get('strategyId') or best.get('seedId')} fitness={best.get('fitness')}，"
+        "只提炼入场确认、止盈止损和交易时段节奏。"
+    )
+
+
+def _loser_summary(rejected: List[Dict[str, Any]]) -> str:
+    if not rejected:
+        return "暂无硬阻断候选；下一代仍需监控回撤、陈旧行情和风控 blocker。"
+    blocker_counts: Dict[str, int] = {}
+    for row in rejected:
+        code = str(row.get("blockerCode") or row.get("status") or "UNKNOWN")
+        blocker_counts[code] = blocker_counts.get(code, 0) + 1
+    dominant = sorted(blocker_counts.items(), key=lambda item: (-item[1], item[0]))[0]
+    return f"{len(rejected)} 个候选失败或被阻断，最高频 blocker 是 {dominant[0]} ({dominant[1]} 次)，下一代避免重复。"
+
+
+def _next_reflection_summary(
+    elites: List[Dict[str, Any]],
+    rejected: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
+) -> str:
+    if not candidates:
+        return "等待候选数据后再生成下一代复盘建议。"
+    if elites:
+        return "下一代可以基于 elite 做 mutation/crossover，但只能在指标、阈值、出场、时段窗口内微调。"
+    if rejected:
+        return "下一代先扩大搜索并避开墓园 blocker，不能为了过拟合历史而放松风险内核。"
+    return "下一代继续补足候选样本，保持 personality lock 和 shadow-only 晋级路径。"
+
+
+def _top_by_fitness(rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    return sorted(rows, key=lambda row: _safe_float(row.get("fitness"), -9999.0), reverse=True)[:limit]
 
 
 def _candidate_summary(row: Dict[str, Any]) -> Dict[str, Any]:

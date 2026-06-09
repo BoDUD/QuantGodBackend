@@ -3,8 +3,8 @@
 
 This orchestrator turns Dashboard "today" items into file-based work:
 refresh evidence, maintain ParamLab queues, evaluate the tester guard, run
-tester-only tasks only when explicitly enabled and guarded, refresh Polymarket
-research, and write the DailyReview artifact. It never applies live promotion
+tester-only tasks only when explicitly enabled and guarded, refresh HFM Crypto
+CFD shadow evidence, and write the DailyReview artifact. It never applies live promotion
 or sends financial orders.
 """
 
@@ -20,6 +20,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from tools.hfm_crypto_cfd.runtime_scope import hfm_crypto_runtime_scope_meta, resolve_hfm_crypto_runtime_dir
+except ModuleNotFoundError:  # pragma: no cover
+    from hfm_crypto_cfd.runtime_scope import hfm_crypto_runtime_scope_meta, resolve_hfm_crypto_runtime_dir
+
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_AUTOPILOT_NAME = "QuantGod_DailyAutopilot.json"
@@ -31,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run QuantGod daily safe autopilot.")
     parser.add_argument("--repo-root", default=str(DEFAULT_REPO_ROOT))
     parser.add_argument("--runtime-dir", default=os.environ.get("QG_RUNTIME_DIR") or os.environ.get("QG_MT5_FILES_DIR") or "")
+    parser.add_argument("--hfm-crypto-runtime-dir", default=os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""))
     parser.add_argument("--dashboard-dir", default=os.environ.get("QG_DASHBOARD_FILES_DIR") or "")
     parser.add_argument("--tester-root", default=os.environ.get("QG_PARAMLAB_TESTER_ROOT") or os.environ.get("QG_MT5_TESTER_ROOT") or "")
     parser.add_argument("--hfm-root", default=os.environ.get("QG_PARAMLAB_HFM_ROOT") or "")
@@ -50,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         help="Maximum seconds allowed for each guarded daily tester child process.",
     )
     parser.add_argument("--allow-tester-run", action="store_true", default=os.environ.get("QG_DAILY_AUTOPILOT_ALLOW_TESTER_RUN", "0") == "1")
-    parser.add_argument("--skip-polymarket", action="store_true")
+    parser.add_argument("--skip-hfm-crypto", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--loop", action="store_true")
     return parser.parse_args()
@@ -210,6 +216,8 @@ def daily_tester_timeout_seconds(value: int) -> int:
 def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).expanduser().resolve()
     runtime_dir = resolve_runtime_dir(repo_root, args.runtime_dir)
+    hfm_crypto_runtime_dir = resolve_hfm_crypto_runtime_dir(runtime_dir, args.hfm_crypto_runtime_dir)
+    hfm_crypto_runtime_scope = hfm_crypto_runtime_scope_meta(runtime_dir, args.hfm_crypto_runtime_dir)
     dashboard_dir = resolve_dashboard_dir(repo_root, args.dashboard_dir)
     tester_root = Path(args.tester_root).expanduser() if args.tester_root else repo_root / "runtime/HFM_MT5_Tester_Isolated"
     hfm_root = resolve_hfm_root(repo_root, runtime_dir, args.hfm_root)
@@ -223,6 +231,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
     tester_timeout = daily_tester_timeout_seconds(args.tester_terminal_timeout_seconds)
     steps: list[dict[str, Any]] = []
     common = ["--runtime-dir", str(runtime_dir)]
+    hfm_crypto_common = ["--runtime-dir", str(hfm_crypto_runtime_dir)]
     repo_common = ["--repo-root", str(repo_root), "--runtime-dir", str(runtime_dir)]
 
     pipeline = [
@@ -241,20 +250,12 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
     for name, command in pipeline:
         steps.append(run_step(name, command, repo_root))
 
-    if not args.skip_polymarket:
-        mac_files = mac_mt5_files_dir()
-        polymarket_source = "mt5" if runtime_dir == mac_files else "local"
+    if not args.skip_hfm_crypto:
         steps.append(run_step(
-            "polymarket_readonly_cycle",
-            ["bash", "tools/run_mac_polymarket_readonly_cycle.sh"],
+            "hfm_crypto_shadow_scan",
+            tool(args.python_bin, "run_hfm_crypto_cfd.py", *hfm_crypto_common, "build", "--write"),
             repo_root,
             timeout=1200,
-            env_overrides={
-                "QG_RUNTIME_DIR": str(runtime_dir),
-                "QG_MT5_FILES_DIR": str(runtime_dir),
-                "QG_DASHBOARD_FILES_DIR": str(dashboard_dir),
-                "QG_MAC_RUNTIME_SOURCE": polymarket_source,
-            },
         ))
 
     if args.allow_tester_run:
@@ -344,6 +345,8 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
         "generatedAtIso": datetime.now(timezone.utc).isoformat(),
         "startedAtIso": started.isoformat(),
         "runtimeDir": str(runtime_dir),
+        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime_dir),
+        "hfmCryptoRuntimeScope": hfm_crypto_runtime_scope,
         "dashboardDir": str(dashboard_dir),
         "allowTesterRun": bool(args.allow_tester_run),
         "testerRunAttempted": run_attempted,

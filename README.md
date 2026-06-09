@@ -6,7 +6,7 @@ The current production direction is narrow by design:
 
 ```text
 Live lane: USDJPYc / RSI_Reversal / LONG / cent account
-Shadow lanes: MT5 multi-strategy simulation and Polymarket event research
+Shadow lanes: MT5 multi-strategy simulation and HFM Crypto CFD research
 Agent: autonomous daily todo, daily review, promotion, demotion, and rollback
 Safety: machine hard guards remain mandatory
 ```
@@ -38,7 +38,7 @@ QuantGod v2.5 is organized as three lanes:
 |---|---|---|---|
 | Live Lane | `USDJPYc / RSI_Reversal / LONG` | Cent-account micro live, limited live, autonomous rollback | USDJPY short, non-RSI live, non-USDJPY live |
 | MT5 Shadow Lane | USDJPY strategy pool | Multi-strategy shadow ranking, replay, tester-only validation | Steal the live route or mutate live preset directly |
-| Polymarket Shadow Lane | Prediction-market research | Shadow ledger and macro/event context | Real wallet, USDC orders, signing, redeeming |
+| HFM Crypto CFD Shadow Lane | HFM crypto symbols plus Moss backtest profile | Symbol evidence scan, Moss metric mapping, shadow-only follow research | MT5 crypto orders, wallet auth, live preset mutation |
 
 DeepSeek may explain evidence and produce Chinese summaries. It cannot approve live execution, override hard gates, raise lot limits, or cancel rollback.
 
@@ -157,7 +157,7 @@ The following boundaries are deliberate and should be treated as architectural c
 - Live lane is limited to `USDJPYc / RSI_Reversal / LONG`.
 - `QG_AUTO_MAX_LOT=2.0` is a ceiling, not a fixed position size.
 - MT5 Shadow strategies may rank, replay, and graduate through non-live stages, but cannot become live unless explicitly allowed by the Live Lane contract.
-- Polymarket remains shadow-only and event-context-only.
+- HFM Crypto CFD remains shadow-only until a separately reviewed execution lane exists.
 - Telegram is push-only; no Telegram command execution.
 - DeepSeek explains and summarizes; it does not approve execution.
 - Runtime stale, fastlane degraded, high-impact news windows, abnormal spread, daily loss, and loss streak gates cannot be bypassed by Agent or AI. Ordinary news is a soft risk modifier by default.

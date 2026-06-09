@@ -46,7 +46,10 @@ def cent_account_config() -> Dict[str, Any]:
         "testerOnlyMinSamples": max(_env_int("QG_CENT_TESTER_ONLY_MIN_SAMPLES", 20), 1),
         "maxConsecutiveLosses": max(_env_int("QG_CENT_MAX_CONSECUTIVE_LOSSES", 2), 1),
         "maxDailyLossR": abs(_env_float("QG_CENT_MAX_DAILY_LOSS_R", 1.0)),
-        "safetyNoteZh": "美分账户允许更快收集小仓真实样本，但不能绕过 runtime、快通道、新闻、点差、连续亏损和日亏损硬门禁。",
+        "safetyNoteZh": (
+            "美分账户允许更快收集小仓真实样本，但不能绕过 runtime、"
+            "快通道、新闻、点差、连续亏损和日亏损硬门禁。"
+        ),
     }
 
 

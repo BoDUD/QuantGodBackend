@@ -25,6 +25,24 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import mt5_readonly_bridge  # noqa: E402
 
+try:  # noqa: E402
+    from tools.hfm_crypto_cfd.schema import HFM_CRYPTO_USD_CANONICALS
+except Exception:  # pragma: no cover - support direct script execution from tools/
+    try:
+        from hfm_crypto_cfd.schema import HFM_CRYPTO_USD_CANONICALS
+    except Exception:  # pragma: no cover - keep this standalone when copied outside repo
+        HFM_CRYPTO_USD_CANONICALS = (
+            "BTCUSD",
+            "ETHUSD",
+            "LTCUSD",
+            "XRPUSD",
+            "BCHUSD",
+            "ADAUSD",
+            "DOTUSD",
+            "SOLUSD",
+            "DOGEUSD",
+        )
+
 
 SAFETY = {
     "readOnly": True,
@@ -103,6 +121,37 @@ STATIC_SYMBOLS: tuple[dict[str, Any], ...] = (
     {"name": "ETHUSD", "description": "Ethereum vs US Dollar CFD", "path": "Crypto CFD"},
     {"name": "LTCUSD", "description": "Litecoin vs US Dollar CFD", "path": "Crypto CFD"},
     {"name": "XRPUSD", "description": "Ripple vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "ADAUSD", "description": "Cardano vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "BNBUSD", "description": "BNB vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "BCHUSD", "description": "Bitcoin Cash vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "SOLUSD", "description": "Solana vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "DOTUSD", "description": "Polkadot vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "LINKUSD", "description": "Chainlink vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "AAVEUSD", "description": "Aave vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "AVAXUSD", "description": "Avalanche vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "TRXUSD", "description": "Tron vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "FETUSD", "description": "Fetch vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "ICPUSD", "description": "Internet Computer vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "XLMUSD", "description": "Stellar Lumens vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "NEARUSD", "description": "NEAR Protocol vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "UNIUSD", "description": "Uniswap vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "ALGOUSD", "description": "Algo vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "APTUSD", "description": "Aptos vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "ATOMUSD", "description": "Cosmos vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "CRVUSD", "description": "Curve vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "FILUSD", "description": "Filecoin vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "FLOWUSD", "description": "Flow vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "THETAUSD", "description": "Theta Network vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "HBARUSD", "description": "Hedera vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "XTZUSD", "description": "Tezos vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "DOGEUSD", "description": "Dogecoin vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "GALAUSD", "description": "Gala vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "GRTUSD", "description": "The Graph vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "ETCUSD", "description": "Ethereum Classic vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "IMXUSD", "description": "Immutable vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "IOTAUSD", "description": "IOTA vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "SANDUSD", "description": "The Sandbox vs US Dollar CFD", "path": "Crypto CFD"},
+    {"name": "SHIBUSD", "description": "Shiba Inu vs US Dollar CFD", "path": "Crypto CFD"},
 )
 
 CURRENCY_CODES = (
@@ -144,15 +193,7 @@ METAL_ALIASES = {
 }
 
 CRYPTO_PREFIXES = {
-    "BTCUSD",
-    "ETHUSD",
-    "LTCUSD",
-    "XRPUSD",
-    "BCHUSD",
-    "ADAUSD",
-    "DOTUSD",
-    "SOLUSD",
-    "DOGEUSD",
+    *HFM_CRYPTO_USD_CANONICALS,
 }
 
 INDEX_PREFIXES = (
@@ -238,6 +279,14 @@ def clean_text(value: Any) -> str:
 
 def compact_symbol(value: Any) -> str:
     return re.sub(r"[^A-Z0-9]", "", clean_text(value).upper())
+
+
+def first_value(row: dict[str, Any], keys: tuple[str, ...], default: Any = None) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return default
 
 
 def clamp_limit(value: Any, fallback: int = DEFAULT_LIMIT) -> int:
@@ -370,8 +419,8 @@ def infer_symbol_identity(row: dict[str, Any]) -> dict[str, Any]:
         if compact.startswith(prefix):
             return {
                 "canonicalSymbol": prefix,
-                "baseCurrency": prefix[:3],
-                "quoteCurrency": prefix[3:],
+                "baseCurrency": prefix[:-3],
+                "quoteCurrency": prefix[-3:],
                 "assetClass": "Crypto CFD",
                 "marketCategory": "crypto_cfd",
                 "brokerSuffix": suffix_from_prefix(broker_symbol, prefix),
@@ -440,6 +489,24 @@ def normalize_symbol_row(row: dict[str, Any]) -> dict[str, Any]:
     canonical = identity["canonicalSymbol"]
     market_type = market_type_from_category(identity["marketCategory"])
     lot_info = dict(LOT_SIZE_PROFILES.get(market_type) or LOT_SIZE_PROFILES["unknown"])
+    volume_min = first_value(row, ("volumeMin", "volume_min"), 0.0)
+    volume_max = first_value(row, ("volumeMax", "volume_max"), 0.0)
+    volume_step = first_value(row, ("volumeStep", "volume_step"), 0.0)
+    contract_size = first_value(
+        row,
+        ("contractSize", "tradeContractSize", "trade_contract_size"),
+        lot_info["standardLot"],
+    )
+    tick_size = first_value(
+        row,
+        ("tickSize", "tradeTickSize", "trade_tick_size", "point"),
+        0.0,
+    )
+    tick_value = first_value(
+        row,
+        ("tickValue", "tradeTickValue", "trade_tick_value"),
+        0.0,
+    )
     aliases = []
     for candidate in [canonical, broker_symbol, compact_symbol(broker_symbol)]:
         if candidate and candidate not in aliases:
@@ -461,14 +528,24 @@ def normalize_symbol_row(row: dict[str, Any]) -> dict[str, Any]:
         "point": row.get("point", 0.0),
         "spread": row.get("spread", 0),
         "tradeMode": row.get("tradeMode", row.get("trade_mode", 0)),
-        "volumeMin": row.get("volumeMin", row.get("volume_min", 0.0)),
-        "volumeMax": row.get("volumeMax", row.get("volume_max", 0.0)),
-        "volumeStep": row.get("volumeStep", row.get("volume_step", 0.0)),
+        "tradeCalcMode": first_value(row, ("tradeCalcMode", "trade_calc_mode", "calcMode"), 0),
+        "tradeContractSize": contract_size,
+        "tradeTickSize": tick_size,
+        "tradeTickValue": tick_value,
+        "volumeMin": volume_min,
+        "volumeMax": volume_max,
+        "volumeStep": volume_step,
         "lotSize": lot_info,
         "standardLot": lot_info["standardLot"],
-        "minLot": lot_info["minLot"],
-        "lotStep": lot_info["lotStep"],
-        "maxLot": lot_info["maxLot"],
+        "contractSize": contract_size,
+        "tickSize": tick_size,
+        "tickValue": tick_value,
+        "minLot": volume_min or lot_info["minLot"],
+        "lotStep": volume_step or lot_info["lotStep"],
+        "maxLot": volume_max or lot_info["maxLot"],
+        "swapLong": first_value(row, ("swapLong", "swap_long"), 0.0),
+        "swapShort": first_value(row, ("swapShort", "swap_short"), 0.0),
+        "marginInitial": first_value(row, ("marginInitial", "margin_initial"), 0.0),
         "contractUnit": lot_info["contractUnit"],
         "mappingReason": identity["mappingReason"],
         "confidence": identity["confidence"],

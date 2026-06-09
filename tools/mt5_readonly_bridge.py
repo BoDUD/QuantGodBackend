@@ -774,9 +774,16 @@ def get_symbols(mt5: Any, group: str = "*", query: str = "", limit: int = DEFAUL
                 "point": row.get("point", 0.0),
                 "spread": row.get("spread", 0),
                 "tradeMode": row.get("trade_mode", 0),
+                "tradeCalcMode": row.get("trade_calc_mode", 0),
+                "tradeContractSize": row.get("trade_contract_size", 0.0),
+                "tradeTickSize": row.get("trade_tick_size", row.get("point", 0.0)),
+                "tradeTickValue": row.get("trade_tick_value", 0.0),
                 "volumeMin": row.get("volume_min", 0.0),
                 "volumeMax": row.get("volume_max", 0.0),
                 "volumeStep": row.get("volume_step", 0.0),
+                "swapLong": row.get("swap_long", 0.0),
+                "swapShort": row.get("swap_short", 0.0),
+                "marginInitial": row.get("margin_initial", 0.0),
             }
         )
     returned = items[:limit] if limit else []

@@ -19,7 +19,7 @@ SCHEDULED_REPORT_TOPICS = (
     "DAILY_AUTOPILOT_V2_REPORT",
     "GA_EVOLUTION_REPORT",
     "USDJPY_AUTONOMOUS_AGENT_REPORT",
-    "POLYMARKET_RETUNE_REPORT",
+    "HFM_CRYPTO_SHADOW_REPORT",
 )
 
 
@@ -83,7 +83,7 @@ def collect_scheduled_events(
         _build_daily_autopilot_event,
         _build_ga_event,
         _build_autonomous_agent_event,
-        _build_polymarket_retune_event,
+        _build_hfm_crypto_event,
     ):
         try:
             event = builder(runtime_dir, repo_root, refresh)
@@ -109,7 +109,7 @@ def collect_scheduled_events(
             "collectedCount": len(collected),
             "collectedEvents": collected,
             "collectErrors": errors,
-            "reasonZh": "Telegram Gateway 已收集日报、GA、Agent 回滚/patch、Polymarket retune 报告；统一排队、去重、限频和投递。",
+            "reasonZh": "Telegram Gateway 已收集日报、GA、Agent 回滚/patch、HFM Crypto CFD 影子报告；统一排队、去重、限频和投递。",
         }
     )
     write_json(gateway_status_path(runtime_dir), status)
@@ -340,7 +340,8 @@ def _rate_limited_rows(ledger: List[Dict[str, Any]]) -> bool:
     sent = [
         row
         for row in ledger[-200:]
-        if (row.get("delivery") or {}).get("ok") and str(row.get("createdAt") or "").startswith(current_hour)
+        if (row.get("delivery") or {}).get("ok")
+        and str(row.get("createdAt") or "").startswith(current_hour)
     ]
     return len(sent) >= MAX_EVENTS_PER_RUN
 
@@ -350,45 +351,23 @@ def _next_eligible_send_at() -> str:
     return next_hour.isoformat().replace("+00:00", "Z")
 
 
-def polymarket_retune_to_chinese_text(plan: Dict[str, Any]) -> str:
-    counts = plan.get("recommendationCounts") if isinstance(plan.get("recommendationCounts"), dict) else {}
-    review = plan.get("copyTradingReview") if isinstance(plan.get("copyTradingReview"), dict) else {}
-    metrics = review.get("bestMetrics") if isinstance(review.get("bestMetrics"), dict) else {}
-    capital = review.get("capitalSimulation") if isinstance(review.get("capitalSimulation"), dict) else {}
-    next_actions = review.get("nextActions") if isinstance(review.get("nextActions"), list) else plan.get("nextActions")
-    if not isinstance(next_actions, list):
-        next_actions = []
+def hfm_crypto_to_chinese_text(payload: Dict[str, Any]) -> str:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    state = payload.get("hfmCryptoCfdState") if isinstance(payload.get("hfmCryptoCfdState"), dict) else {}
     lines = [
-        "【QuantGod Polymarket 跟单复盘】",
+        "【QuantGod HFM Crypto CFD 影子复盘】",
         "",
-        f"状态：{_fmt(review.get('operatorStatusLabel') or review.get('status') or plan.get('decision'))}",
-        f"Agent：{_fmt(review.get('agentRetuneStatus'))}",
-        f"红/黄/绿/灰：{_fmt(counts.get('red'), '0')} / {_fmt(counts.get('yellow'), '0')} / {_fmt(counts.get('green'), '0')} / {_fmt(counts.get('gray'), '0')}",
-        (
-            "最佳样本："
-            f"{_fmt(metrics.get('source'))}｜样本 {_fmt(metrics.get('closed'), '0')}｜"
-            f"PF {_fmt(metrics.get('profitFactor'), '0')}｜胜率 {_fmt(metrics.get('winRatePct'), '0')}%"
-        ),
-        (
-            "模拟账本："
-            f"现金折算 {_fmt(capital.get('cashScaledUSDC'), '$0')}｜"
-            f"账本净值 {_fmt(capital.get('ledgerNetUSDC'), '$0')}；不连接真实钱包。"
-        ),
+        f"状态：{_fmt(payload.get('stageZh') or payload.get('stage') or state.get('statusZh'))}",
+        f"Symbol 证据：{_fmt(summary.get('detectedSymbolCount'), '0')} / 目标 {_fmt(summary.get('targetSymbolCount'), '0')}",
+        f"Moss profile：{'已导入' if summary.get('mossProfileFound') else '未导入'}；ROI {_fmt(summary.get('mossRoiPct'))}% / Sharpe {_fmt(summary.get('mossSharpe'))}",
         "",
-        f"结论：{_fmt(review.get('summary') or plan.get('summary'))}",
+        f"结论：{_fmt(payload.get('reasonZh') or state.get('statusZh'))}",
         "下一步：",
+        "- 先补齐本机 HFM/MT5 crypto CFD history 或 tick 证据。",
+        "- 继续只读映射 Moss 回测指标，不触发 MT5 crypto 下单。",
+        "",
+        "安全边界：HFM Crypto CFD 当前只做 shadow-only 资料同步；不下单、不授权钱包、不改 live preset。",
     ]
-    if next_actions:
-        for item in next_actions[:5]:
-            lines.append(f"- {_fmt(item)}")
-    else:
-        lines.append("- 保持 shadow-only，等待下一轮 Agent retune。")
-    lines.extend(
-        [
-            "",
-            "安全边界：Polymarket 只做模拟账本和事件风险；不连接钱包、不签名、不下单、不撤单。",
-        ]
-    )
     return "\n".join(lines)
 
 
@@ -473,31 +452,38 @@ def _build_autonomous_agent_event(runtime_dir: Path, repo_root: Path, refresh: b
     )
 
 
-def _build_polymarket_retune_event(runtime_dir: Path, repo_root: Path, refresh: bool) -> Optional[Dict[str, Any]]:
-    del repo_root, refresh
-    plan_path = runtime_dir / "QuantGod_PolymarketRetunePlanner.json"
-    plan = _load_json(plan_path)
-    if not plan:
-        return None
-    text = polymarket_retune_to_chinese_text(plan)
-    review = plan.get("copyTradingReview") if isinstance(plan.get("copyTradingReview"), dict) else {}
-    counts = plan.get("recommendationCounts") if isinstance(plan.get("recommendationCounts"), dict) else {}
-    severity = "WARN" if int(counts.get("red") or 0) or int(counts.get("yellow") or 0) else "INFO"
+def _build_hfm_crypto_event(runtime_dir: Path, repo_root: Path, refresh: bool) -> Optional[Dict[str, Any]]:
+    del repo_root
+    from autonomous_lifecycle.hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
+    from hfm_crypto_cfd.runtime_scope import hfm_crypto_runtime_scope_meta, resolve_hfm_crypto_runtime_dir
+
+    hfm_crypto_runtime_dir = resolve_hfm_crypto_runtime_dir(
+        runtime_dir,
+        os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""),
+    )
+    payload = build_hfm_crypto_shadow_lane(hfm_crypto_runtime_dir, write=refresh)
+    payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope_meta(
+        runtime_dir,
+        os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""),
+    )
+    text = hfm_crypto_to_chinese_text(payload)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    severity = "INFO" if summary.get("symbolEvidenceFound") else "WARN"
     dedupe_key = "|".join(
         [
             _local_day(),
-            "POLYMARKET_RETUNE_REPORT",
-            str(review.get("agentRetuneStatus") or plan.get("decision") or "UNKNOWN"),
-            str(counts.get("red") or 0),
-            str(counts.get("yellow") or 0),
+            "HFM_CRYPTO_SHADOW_REPORT",
+            str(payload.get("stage") or "UNKNOWN"),
+            str(summary.get("detectedSymbolCount") or 0),
+            str(bool(summary.get("mossProfileFound"))),
         ]
     )
     return build_notification_event(
-        "polymarket_retune",
-        "POLYMARKET_RETUNE_REPORT",
+        "hfm_crypto_shadow",
+        "HFM_CRYPTO_SHADOW_REPORT",
         severity,
         text,
-        payload={"polymarketRetune": plan},
+        payload={"hfmCryptoShadow": payload},
         dedupe_key=dedupe_key,
     )
 
@@ -611,7 +597,8 @@ def _rate_limited(ledger: Path) -> bool:
     sent = [
         row
         for row in recent
-        if (row.get("delivery") or {}).get("ok") and str(row.get("createdAt") or "").startswith(current_hour)
+        if (row.get("delivery") or {}).get("ok")
+        and str(row.get("createdAt") or "").startswith(current_hour)
     ]
     return len(sent) >= MAX_EVENTS_PER_RUN
 

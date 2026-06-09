@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from .schema import assert_safe_payload, runtime_dir, safety_payload
+
+try:  # pragma: no cover - import fallback is for direct script contexts.
+    from tools.mt5_readonly_bridge import runtime_dir_candidates as mt5_runtime_dir_candidates
+except Exception:  # pragma: no cover
+    try:
+        from mt5_readonly_bridge import runtime_dir_candidates as mt5_runtime_dir_candidates
+    except Exception:
+        mt5_runtime_dir_candidates = None
 
 
 def utc_now() -> datetime:
@@ -48,6 +57,68 @@ def read_json(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
     return None
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "y", "on", "是"}
+
+
+def _repo_runtime_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "runtime"
+
+
+def _include_global_mt5_candidates(root: Path) -> bool:
+    if _truthy_env("QG_FASTLANE_INCLUDE_GLOBAL_MT5") or _truthy_env("QG_USDJPY_INCLUDE_GLOBAL_MT5"):
+        return True
+    try:
+        return root.resolve() == _repo_runtime_dir().resolve()
+    except Exception:
+        return False
+
+
+def _candidate_roots(root: Path) -> list[Path]:
+    candidates = [root]
+    if _include_global_mt5_candidates(root) and mt5_runtime_dir_candidates:
+        candidates.extend(mt5_runtime_dir_candidates())
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        try:
+            key = str(candidate.expanduser().resolve())
+        except Exception:
+            key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def _latest_json_file(candidates: list[Path], filename: str) -> tuple[dict[str, Any] | None, Path | None]:
+    found: list[tuple[float, Path, dict[str, Any]]] = []
+    for directory in candidates:
+        path = directory / filename
+        payload = read_json(path)
+        if not payload:
+            continue
+        try:
+            found.append((path.stat().st_mtime, path, payload))
+        except Exception:
+            continue
+    if not found:
+        return None, None
+    _, path, payload = sorted(found, key=lambda item: item[0], reverse=True)[0]
+    return payload, path
+
+
+def _payload_is_newer(candidate: dict[str, Any], current: dict[str, Any] | None) -> bool:
+    if not current:
+        return True
+    candidate_dt = parse_time(candidate.get("generatedAt") or candidate.get("timeIso") or candidate.get("timestamp"))
+    current_dt = parse_time(current.get("generatedAt") or current.get("timeIso") or current.get("timestamp"))
+    if candidate_dt and current_dt:
+        return candidate_dt >= current_dt
+    return bool(candidate_dt and not current_dt)
 
 
 def _file_mtime_iso(path: Path) -> str | None:
@@ -211,19 +282,41 @@ def _fallback_tick_rows(root: Path, dashboard: dict[str, Any] | None, symbol: st
     return rows
 
 
-def _rsi_indicator_payload(root: Path, dashboard: dict[str, Any] | None, symbol: str) -> dict[str, Any] | None:
-    standalone = read_json(root / "QuantGod_USDJPYRsiEntryDiagnostics.json")
+def _rsi_indicator_payload(
+    root: Path,
+    dashboard: dict[str, Any] | None,
+    symbol: str,
+    *,
+    dashboard_path: Path | None = None,
+    candidate_roots: list[Path] | None = None,
+) -> dict[str, Any] | None:
+    candidates = candidate_roots or [root]
+    standalone, standalone_path = _latest_json_file(candidates, "QuantGod_USDJPYRsiEntryDiagnostics.json")
     embedded = dashboard.get("usdJpyRsiEntryDiagnostics") if dashboard and isinstance(dashboard.get("usdJpyRsiEntryDiagnostics"), dict) else None
-    source = "QuantGod_USDJPYRsiEntryDiagnostics.json" if standalone else "QuantGod_Dashboard.json"
-    payload = standalone or embedded
+    embedded_path = dashboard_path or (root / "QuantGod_Dashboard.json")
+    payload = standalone
+    payload_path = standalone_path
+    if embedded:
+        standalone_mtime = 0.0
+        embedded_mtime = 0.0
+        try:
+            standalone_mtime = standalone_path.stat().st_mtime if standalone_path else 0.0
+        except Exception:
+            standalone_mtime = 0.0
+        try:
+            embedded_mtime = embedded_path.stat().st_mtime
+        except Exception:
+            embedded_mtime = 0.0
+        if not payload or embedded_mtime >= standalone_mtime:
+            payload = embedded
+            payload_path = embedded_path
     if not payload:
         return None
     source_symbol = payload.get("symbol") or _dashboard_symbol(dashboard) or symbol
     if source_symbol and not _symbol_matches(source_symbol, symbol):
         return None
-    generated_at = _file_mtime_iso(root / source)
-    if not generated_at and source == "QuantGod_Dashboard.json":
-        generated_at = _file_mtime_iso(root / "QuantGod_Dashboard.json")
+    source = payload_path.name if payload_path else "QuantGod_Dashboard.json"
+    generated_at = _file_mtime_iso(payload_path) if payload_path else None
     rsi = payload.get("rsi") if isinstance(payload.get("rsi"), dict) else {}
     guards = payload.get("guards") if isinstance(payload.get("guards"), dict) else {}
     indicator = {
@@ -241,6 +334,7 @@ def _rsi_indicator_payload(root: Path, dashboard: dict[str, Any] | None, symbol:
         "closeClosed1": rsi.get("closeClosed1"),
         "spreadPips": guards.get("spreadPips"),
         "source": source,
+        "sourcePath": str(payload_path) if payload_path else "",
         "fallbackSource": "rsi_entry_diagnostics",
         "dashboardFallback": True,
         "safety": safety_payload(),
@@ -290,10 +384,12 @@ def load_fastlane_evidence(path: str | Path = "runtime", symbols: list[str] | No
     root = runtime_dir(path)
     heartbeat = read_json(root / "QuantGod_RuntimeHeartbeat.json")
     allowed = {s.upper() for s in symbols or []}
-    dashboard = read_json(root / "QuantGod_Dashboard.json")
+    candidates = _candidate_roots(root)
+    dashboard, dashboard_path = _latest_json_file(candidates, "QuantGod_Dashboard.json")
+    dashboard_root = dashboard_path.parent if dashboard_path else root
     fallback_sources: set[str] = set()
     if not heartbeat:
-        heartbeat = _timer_heartbeat(root) or _dashboard_heartbeat(root, dashboard)
+        heartbeat = _timer_heartbeat(dashboard_root) or _dashboard_heartbeat(dashboard_root, dashboard)
         if heartbeat:
             fallback_sources.add(str(heartbeat.get("source") or heartbeat.get("fallbackSource") or "fallback_heartbeat"))
     ticks: dict[str, list[dict[str, Any]]] = {}
@@ -313,15 +409,20 @@ def load_fastlane_evidence(path: str | Path = "runtime", symbols: list[str] | No
                 indicators[sym] = payload
     for symbol in _requested_or_dashboard_symbols(symbols, dashboard):
         if symbol not in ticks:
-            rows = _fallback_tick_rows(root, dashboard, symbol)
+            rows = _fallback_tick_rows(dashboard_root, dashboard, symbol)
             if rows:
                 ticks[symbol] = rows
-                fallback_sources.add("QuantGod_Dashboard.json")
-        if symbol not in indicators:
-            indicator = _rsi_indicator_payload(root, dashboard, symbol)
-            if indicator:
-                indicators[symbol] = indicator
-                fallback_sources.add(str(indicator.get("source") or "rsi_entry_diagnostics"))
+                fallback_sources.add(str(dashboard_path.name if dashboard_path else "QuantGod_Dashboard.json"))
+        indicator = _rsi_indicator_payload(
+            root,
+            dashboard,
+            symbol,
+            dashboard_path=dashboard_path,
+            candidate_roots=candidates,
+        )
+        if indicator and _payload_is_newer(indicator, indicators.get(symbol)):
+            indicators[symbol] = indicator
+            fallback_sources.add(str(indicator.get("source") or "rsi_entry_diagnostics"))
     diagnostics = read_jsonl_tail(root / "QuantGod_RuntimeStrategyDiagnostics.jsonl", 120)
     trade_events = read_jsonl_tail(root / "QuantGod_RuntimeTradeEvents.jsonl", 120)
     return FastLaneEvidence(root, heartbeat, ticks, indicators, diagnostics, trade_events, sorted(fallback_sources))

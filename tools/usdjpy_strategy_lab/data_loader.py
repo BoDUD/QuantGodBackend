@@ -10,6 +10,14 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from .schema import DEFAULT_STRATEGIES, FOCUS_SYMBOL, is_focus_symbol, normalize_strategy_name, normalize_symbol
 
+try:
+    from tools.mt5_readonly_bridge import runtime_dir_candidates
+except Exception:  # pragma: no cover - direct script imports can run without package root.
+    try:
+        from mt5_readonly_bridge import runtime_dir_candidates  # type: ignore[no-redef]
+    except Exception:
+        runtime_dir_candidates = None  # type: ignore[assignment]
+
 
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
     try:
@@ -61,6 +69,33 @@ def _candidate_paths(runtime_dir: Path, *names: str) -> List[Path]:
     return paths
 
 
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _repo_runtime_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "runtime"
+
+
+def _include_global_mt5_candidates(runtime_dir: Path) -> bool:
+    if _truthy_env("QG_USDJPY_INCLUDE_GLOBAL_MT5"):
+        return True
+    try:
+        return runtime_dir.resolve() == _repo_runtime_dir().resolve()
+    except Exception:
+        return False
+
+
+def _global_mt5_paths(runtime_dir: Path, *names: str) -> List[Path]:
+    if not _include_global_mt5_candidates(runtime_dir) or runtime_dir_candidates is None:
+        return []
+    paths: List[Path] = []
+    for directory in runtime_dir_candidates():
+        for name in names:
+            paths.append(directory / name)
+    return paths
+
+
 def first_json(runtime_dir: Path, *names: str) -> Optional[Dict[str, Any]]:
     for path in _candidate_paths(runtime_dir, *names):
         payload = _read_json(path)
@@ -101,7 +136,7 @@ def _empty_fastlane_exporter(payload: Dict[str, Any], focus: Optional[Dict[str, 
         return False
     row = focus if isinstance(focus, dict) else {}
     tick_rows = to_float(row.get("tickRows"), 0.0)
-    return tick_rows <= 0 and row.get("tickAgeSeconds") in (None, "", "null") and row.get("indicatorAgeSeconds") in (None, "", "null")
+    return tick_rows <= 0 and row.get("tickAgeSeconds") in (None, "", "null")
 
 
 def _degraded_by_stale_fastlane_exporter(payload: Dict[str, Any], focus: Optional[Dict[str, Any]], quality: str) -> bool:
@@ -183,8 +218,18 @@ def focus_runtime_snapshot(runtime_dir: Path, symbol: str = FOCUS_SYMBOL) -> Opt
     for alias in aliases:
         names.append(f"QuantGod_MT5RuntimeSnapshot_{alias}.json")
     names.append("QuantGod_Dashboard.json")
-    payload = first_json(runtime_dir, *names)
-    if payload and ("symbol" not in payload or is_focus_symbol(payload.get("symbol") or symbol)):
+    candidates: List[Dict[str, Any]] = []
+    for path in [*_candidate_paths(runtime_dir, *names), *_global_mt5_paths(runtime_dir, *names)]:
+        payload = _read_json(path)
+        if not payload:
+            continue
+        source_symbol = payload.get("symbol") or payload.get("watchlist") or symbol
+        if "symbol" in payload and not is_focus_symbol(source_symbol):
+            continue
+        payload.setdefault("_filePath", str(path))
+        candidates.append(payload)
+    payload = min(candidates, key=lambda item: to_float(item.get("_fileAgeSeconds"), 999999.0)) if candidates else None
+    if payload and ("symbol" not in payload or is_focus_symbol(payload.get("symbol") or payload.get("watchlist") or symbol)):
         if "runtime" in payload and "watchlist" in payload:
             runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
             market = payload.get("market") if isinstance(payload.get("market"), dict) else {}

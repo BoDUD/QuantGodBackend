@@ -48,6 +48,27 @@ def cmd_once(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_safe_iteration_cycle(args: argparse.Namespace) -> int:
+    report = build_runner(args).run_safe_iteration_cycle(
+        refresh_before=not args.no_refresh_before,
+        refresh_after=not args.no_refresh_after,
+        max_actions=args.max_actions,
+        write=not args.no_write,
+    )
+    print_json(report)
+    return 0
+
+
+def cmd_safe_iteration_loop(args: argparse.Namespace) -> int:
+    report = build_runner(args).run_safe_iteration_loop(
+        cycles=args.cycles,
+        max_actions=args.max_actions,
+        write=not args.no_write,
+    )
+    print_json(report)
+    return 0
+
+
 def cmd_telegram_text(args: argparse.Namespace) -> int:
     runner = build_runner(args)
     report = runner.run_once(send=False, write=not args.no_write) if args.refresh else runner.build_status()
@@ -82,6 +103,17 @@ def build_parser() -> argparse.ArgumentParser:
     once.add_argument("--send", action="store_true")
     once.add_argument("--no-write", action="store_true")
     once.set_defaults(func=cmd_once)
+    cycle = sub.add_parser("safe-iteration-cycle")
+    cycle.add_argument("--max-actions", type=int, default=None)
+    cycle.add_argument("--no-refresh-before", action="store_true")
+    cycle.add_argument("--no-refresh-after", action="store_true")
+    cycle.add_argument("--no-write", action="store_true")
+    cycle.set_defaults(func=cmd_safe_iteration_cycle)
+    iteration_loop = sub.add_parser("safe-iteration-loop")
+    iteration_loop.add_argument("--cycles", type=int, default=2)
+    iteration_loop.add_argument("--max-actions", type=int, default=None)
+    iteration_loop.add_argument("--no-write", action="store_true")
+    iteration_loop.set_defaults(func=cmd_safe_iteration_loop)
     text = sub.add_parser("telegram-text")
     text.add_argument("--refresh", action="store_true")
     text.add_argument("--send", action="store_true")

@@ -13,6 +13,7 @@ METADATA_KEYS = {
     "parentSeedId",
     "parentSeedIds",
     "caseId",
+    "intentId",
     "mutationHint",
     "explorationMode",
     "explorationReasonZh",
@@ -23,6 +24,8 @@ METADATA_KEYS = {
     "createdAt",
     "generation",
     "generationId",
+    "personalityLock",
+    "personalityLockAudit",
 }
 
 

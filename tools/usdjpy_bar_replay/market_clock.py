@@ -81,6 +81,13 @@ def classify_gates(sample: Dict[str, Any]) -> Dict[str, Any]:
         "tacticalBlockers": sorted(set(tactical)),
         "hardGatePass": not hard,
         "tacticalGatePass": not tactical,
-        "newsRiskLevel": "HARD" if "HIGH_IMPACT_NEWS" in hard else ("SOFT" if "NEWS" in text or raw.get("newsAllowed") is False else "NONE"),
-        "note": "runtime、fastlane、spread、session、cooldown、startup、capacity 与高冲击新闻不会在 relaxed_entry_v1 中放宽；普通新闻只降仓/降级。",
+        "newsRiskLevel": (
+            "HARD"
+            if "HIGH_IMPACT_NEWS" in hard
+            else ("SOFT" if "NEWS" in text or raw.get("newsAllowed") is False else "NONE")
+        ),
+        "note": (
+            "runtime、fastlane、spread、session、cooldown、startup、capacity 与高冲击新闻"
+            "不会在 relaxed_entry_v1 中放宽；普通新闻只降仓/降级。"
+        ),
     }

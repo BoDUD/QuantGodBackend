@@ -27,7 +27,8 @@ test('autonomous agent keeps hard safety boundaries', () => {
   assert.match(schema, /"patchWritable": True/);
   assert.match(schema, /"liveMutationAllowed": False/);
   assert.match(schema, /"deepSeekCanApproveLive": False/);
-  assert.match(schema, /"polymarketRealMoneyAllowed": False/);
+  assert.match(schema, /"externalMarketRealMoneyAllowed": False/);
+  assert.match(schema, /"hfmCryptoExecutionAllowed": False/);
   assert.match(patch, /patchWritable/);
   assert.match(patch, /unattendedLiveExpansionAllowed/);
   assert.doesNotMatch(patch, /patchAllowed/);
@@ -85,6 +86,9 @@ test('strategy lab exposes walk-forward and autonomous endpoints only', () => {
     '/api/usdjpy-strategy-lab/autonomous-agent/lanes',
     'run_usdjpy_walk_forward.py',
     'run_usdjpy_autonomous_agent.py',
+    'resolveHfmCryptoRuntimeScope',
+    '--hfm-crypto-runtime-dir',
+    'HFM Live16 crypto CFD',
   ]) {
     assert.match(routes, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

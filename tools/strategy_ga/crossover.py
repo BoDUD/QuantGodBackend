@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict
 
+from .personality_lock import personality_lock_report
+
 
 def crossover_seed(left: Dict[str, Any], right: Dict[str, Any], seed_id: str, generation: int, offset: int) -> Dict[str, Any] | None:
     """Cross over only seeds from the same strategy family."""
@@ -22,5 +24,5 @@ def crossover_seed(left: Dict[str, Any], right: Dict[str, Any], seed_id: str, ge
     }
     seed.setdefault("risk", {})["stage"] = "SHADOW"
     seed["risk"]["maxLot"] = min(2.0, float(seed["risk"].get("maxLot", 2.0)))
+    seed["personalityLockAudit"] = personality_lock_report(left, seed)
     return seed
-

@@ -311,7 +311,13 @@ def _orchestration_summary(runtime_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _build_morning_plan(agent: Dict[str, Any], lifecycle: Dict[str, Any], news_gate: Dict[str, Any], spread_gate: Dict[str, Any], usd_deployment_gate: Dict[str, Any]) -> Dict[str, Any]:
+def _build_morning_plan(
+    agent: Dict[str, Any],
+    lifecycle: Dict[str, Any],
+    news_gate: Dict[str, Any],
+    spread_gate: Dict[str, Any],
+    usd_deployment_gate: Dict[str, Any],
+) -> Dict[str, Any]:
     cent = _safe_dict(lifecycle.get("centAccount") or agent.get("centAccount"))
     account_registry = _safe_dict(lifecycle.get("accountRegistry") or agent.get("accountRegistry"))
     lanes = _safe_dict(lifecycle.get("lanes") or agent.get("lanes"))
@@ -320,7 +326,7 @@ def _build_morning_plan(agent: Dict[str, Any], lifecycle: Dict[str, Any], news_g
     usd_deployment = _safe_dict(lanes.get("usdDeployment"))
     exposure_guard = _safe_dict(lanes.get("globalUsdJpyExposureGuard") or account_registry.get("globalExposureGuard"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    polymarket = _safe_dict(lanes.get("polymarketShadow"))
+    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     limits = _safe_dict(patch.get("limits"))
     stage = str(agent.get("executionStage") or agent.get("stage") or "SHADOW")
@@ -350,11 +356,11 @@ def _build_morning_plan(agent: Dict[str, Any], lifecycle: Dict[str, Any], news_g
             "summary": mt5_shadow.get("summary", {}),
             "topRoutes": _top_mt5_routes(mt5_shadow),
         },
-        "polymarketShadowLane": {
-            "stage": polymarket.get("stage", "SHADOW"),
-            "stageZh": polymarket.get("stageZh", "模拟观察"),
-            "summary": polymarket.get("summary", {}),
-            "reasonZh": polymarket.get("reasonZh", "继续模拟账本和事件风险，不触碰真实钱包。"),
+        "hfmCryptoShadowLane": {
+            "stage": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
+            "stageZh": hfm_crypto.get("stageZh", "等待 HFM crypto symbol 证据"),
+            "summary": hfm_crypto.get("summary", {}),
+            "reasonZh": hfm_crypto.get("reasonZh", "HFM Crypto CFD 只做影子研究，不触发 MT5 crypto 下单。"),
         },
         "newsGate": {
             "mode": news_gate.get("mode", "SOFT"),
@@ -370,7 +376,7 @@ def _build_morning_plan(agent: Dict[str, Any], lifecycle: Dict[str, Any], news_g
         "todayForbiddenZh": [
             "未过 autonomous governance 的实盘扩展",
             "非 USDJPY 实盘",
-            "Polymarket 钱包交易",
+            "HFM Crypto CFD 未经单独评审的真钱执行",
             "高冲击新闻窗口入场",
             "快通道或 runtime 陈旧时入场",
             "固定 2 手下单",
@@ -387,7 +393,7 @@ def _build_evening_review(agent: Dict[str, Any], lifecycle: Dict[str, Any], news
     usd_deployment = _safe_dict(lanes.get("usdDeployment"))
     exposure_guard = _safe_dict(lanes.get("globalUsdJpyExposureGuard"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    polymarket = _safe_dict(lanes.get("polymarketShadow"))
+    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     rollback = _safe_dict(patch.get("rollback"))
     blockers = [str(item) for item in _safe_list(rollback.get("hardBlockers"))]
@@ -419,10 +425,10 @@ def _build_evening_review(agent: Dict[str, Any], lifecycle: Dict[str, Any], news
             "routeCount": int(mt5_summary.get("routeCount", 0) or 0),
             "topRoutes": _top_mt5_routes(mt5_shadow),
         },
-        "polymarketShadowLane": {
-            "stage": polymarket.get("stage", "SHADOW"),
-            "stageZh": polymarket.get("stageZh", "模拟观察"),
-            "summary": polymarket.get("summary", {}),
+        "hfmCryptoShadowLane": {
+            "stage": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
+            "stageZh": hfm_crypto.get("stageZh", "等待 HFM crypto symbol 证据"),
+            "summary": hfm_crypto.get("summary", {}),
             "riskContextOnly": True,
         },
         "newsGateReview": {
@@ -476,7 +482,10 @@ def _ga_todo_items(ga: Dict[str, Any]) -> List[Dict[str, Any]]:
             "completedByAgent": ran,
             "autoAppliedByAgent": ran,
             "requiresAutonomousGovernance": True,
-            "summaryZh": "Elite 可无人审批进入 shadow/tester/paper-live-sim；只有 autonomous governance 全通过后才允许扩大受控 live scope。",
+            "summaryZh": (
+                "Elite 可无人审批进入 shadow/tester/paper-live-sim；"
+                "只有 autonomous governance 全通过后才允许扩大受控 live scope。"
+            ),
         },
     ]
 
@@ -486,7 +495,7 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
     cent_live = _safe_dict(lanes.get("centLive"))
     usd_deployment = _safe_dict(lanes.get("usdDeployment"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    polymarket = _safe_dict(lanes.get("polymarketShadow"))
+    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     rollback = _safe_dict(patch.get("rollback"))
     rollback_triggered = bool(_safe_list(rollback.get("hardBlockers")))
@@ -506,7 +515,10 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
             "promotionDecision": live_stage,
             "rollbackTriggered": rollback_triggered,
             "metrics": metrics,
-            "summaryZh": "Agent 已检查 USDJPY 美分账户学习车道；硬风控未通过则自动回滚，证据全通过时可无人审批扩大受控 cent live scope。",
+            "summaryZh": (
+                "Agent 已检查 USDJPY 美分账户学习车道；硬风控未通过则自动回滚，"
+                "证据全通过时可无人审批扩大受控 cent live scope。"
+            ),
         },
         {
             "id": "usd_deployment_lane_governance",
@@ -521,7 +533,11 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
             "promotionDecision": "USD_STRICT_STANDARD_ENTRY_DEPLOYMENT_GATE",
             "rollbackTriggered": False,
             "metrics": usd_deployment.get("promotionGate", {}),
-            "summaryZh": "美元账户可以实盘，但只做严格部署；OPPORTUNITY_ENTRY/SOFT_WIDE/新闻不确定时只 mirror，STANDARD_ENTRY 且美分验证达标后进入 USD_MICRO_LIVE。",
+            "summaryZh": (
+                "美元账户可以实盘，但只做严格部署；"
+                "OPPORTUNITY_ENTRY/SOFT_WIDE/新闻不确定时只 mirror，"
+                "STANDARD_ENTRY 且美分验证达标后进入 USD_MICRO_LIVE。"
+            ),
         },
         {
             "id": "mt5_shadow_lane_iteration",
@@ -534,20 +550,23 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
             "promotionDecision": "FAST_SHADOW_OR_TESTER_ONLY",
             "rollbackTriggered": False,
             "metrics": _safe_dict(mt5_shadow.get("summary")),
-            "summaryZh": "Agent 已复盘多策略 shadow 排名；强策略可进入 fast-shadow/tester-only，并在 replay/walk-forward/硬风控全通过后无人审批晋级。",
+            "summaryZh": (
+                "Agent 已复盘多策略 shadow 排名；强策略可进入 fast-shadow/tester-only，"
+                "并在 replay/walk-forward/硬风控全通过后无人审批晋级。"
+            ),
         },
         {
-            "id": "polymarket_shadow_lane_iteration",
-            "lane": "POLYMARKET_SHADOW",
-            "laneZh": "Polymarket 模拟车道",
+            "id": "hfm_crypto_shadow_lane_iteration",
+            "lane": "HFM_CRYPTO_CFD_SHADOW",
+            "laneZh": "HFM Crypto CFD 影子车道",
             "status": "COMPLETED_BY_AGENT",
             "completedByAgent": True,
             "autoAppliedByAgent": False,
             "requiresAutonomousGovernance": True,
-            "promotionDecision": polymarket.get("stage", "SHADOW"),
+            "promotionDecision": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
             "rollbackTriggered": False,
-            "metrics": _safe_dict(polymarket.get("summary")),
-            "summaryZh": "Agent 已复盘预测市场模拟账本；只做 shadow 和事件风险，不连接真钱钱包。",
+            "metrics": _safe_dict(hfm_crypto.get("summary")),
+            "summaryZh": "Agent 已复盘 HFM Crypto CFD 影子资料；只做 symbol/Moss 回测映射，不触发 crypto 下单。",
         },
     ] + _ga_todo_items(ga)
 
@@ -606,7 +625,7 @@ def _build_daily_review(
 ) -> Dict[str, Any]:
     lanes = _safe_dict(lifecycle.get("lanes") or agent.get("lanes"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    polymarket = _safe_dict(lanes.get("polymarketShadow"))
+    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     rollback = _safe_dict(patch.get("rollback"))
     rollback_triggered = bool(_safe_list(rollback.get("hardBlockers")))
@@ -636,10 +655,10 @@ def _build_daily_review(
             "summary": _safe_dict(mt5_shadow.get("summary")),
             "topRoutes": _top_mt5_routes(mt5_shadow),
         },
-        "polymarketShadowLane": {
-            "stage": polymarket.get("stage", "SHADOW"),
-            "stageZh": polymarket.get("stageZh", "模拟观察"),
-            "summary": _safe_dict(polymarket.get("summary")),
+        "hfmCryptoShadowLane": {
+            "stage": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
+            "stageZh": hfm_crypto.get("stageZh", "等待 HFM crypto symbol 证据"),
+            "summary": _safe_dict(hfm_crypto.get("summary")),
             "riskContextOnly": True,
         },
         "nextPhaseTodos": _next_phase_todos(),
@@ -657,7 +676,8 @@ def _build_daily_review(
         "executionConsistencyReview": consistency,
         "orchestrationRun": orchestration,
         "summaryZh": (
-            "每日复盘已由 Agent 自动完成：收集三车道样本、计算指标、更新升降级/回滚状态，"
+            "每日复盘已由 Agent 自动完成：收集 USDJPY、MT5 shadow 和 HFM Crypto CFD 影子样本，"
+            "计算指标、更新升降级/回滚状态，"
             "并记录 GA 是否使用生产级历史样本、parity 是否阻断晋级以及真实执行质量。"
         ),
     }
@@ -668,10 +688,17 @@ def build_daily_autopilot_v2(
     *,
     repo_root: Path | None = None,
     write: bool = False,
+    hfm_crypto_runtime_dir: Path | str | None = None,
 ) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
-    lifecycle = build_autonomous_lifecycle(runtime_dir, repo_root=repo_root, write=write)
-    agent = build_agent_state(runtime_dir, write=write)
+    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
+    lifecycle = build_autonomous_lifecycle(
+        runtime_dir,
+        repo_root=repo_root,
+        write=write,
+        hfm_crypto_runtime_dir=hfm_crypto_runtime,
+    )
+    agent = build_agent_state(runtime_dir, write=write, hfm_crypto_runtime_dir=hfm_crypto_runtime)
     generated_at = utc_now_iso()
     metrics = _runtime_metrics(runtime_dir, agent)
     news_gate = _news_gate_summary(runtime_dir)
@@ -689,6 +716,8 @@ def build_daily_autopilot_v2(
         "generatedAtIso": generated_at,
         "timestamp": generated_at,
         "symbol": FOCUS_SYMBOL,
+        "runtimeDir": str(runtime_dir),
+        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
         "titleZh": "USDJPY 美分/美元双账户自动日报",
         "sloganZh": "实盘要窄，模拟要宽，升降级要快，回滚要硬。",
         "morningPlan": _build_morning_plan(agent, lifecycle, news_gate, spread_gate, usd_deployment_gate),
@@ -731,7 +760,8 @@ def build_daily_autopilot_v2(
             "unattendedLiveExpansionAllowed": True,
             "liveScopeExpansionMode": "autonomous_governance_stage_gated",
             "livePresetMutationAllowed": False,
-            "polymarketRealMoneyAllowed": False,
+            "externalMarketRealMoneyAllowed": False,
+            "hfmCryptoExecutionAllowed": False,
             "telegramCommandExecutionAllowed": False,
             "deepSeekCanApproveLive": False,
         },

@@ -6,7 +6,7 @@
 
 - `backtests/`：后端回测摘要、候选结果和人工复核材料。
 - `param-lab/`：ParamLab 历史批次、报告回灌和恢复记录。
-- `polymarket/`：Polymarket 研究样本、历史 ledger、亏损复盘材料。
+- `hfm-crypto/`：HFM Crypto CFD shadow 研究样本、symbol 证据和 Moss 回测映射材料。
 
 ## Git 规则
 

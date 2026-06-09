@@ -47,7 +47,7 @@ test('AI provider router exposes required false safety flags', () => {
     'webhookReceiverAllowed',
     'emailDeliveryAllowed',
     'walletIntegrationAllowed',
-    'polymarketOrderAllowed',
+    'externalMarketOrderAllowed',
   ];
   for (const flag of requiredFalseFlags) {
     assert.match(code, new RegExp(`"${flag}"\\s*:\\s*False`), `${flag} must be false in provider safety payload`);

@@ -48,7 +48,7 @@ class USDJPYAutonomousAgentTests(unittest.TestCase):
             self.assertNotIn("patchAllowed", state)
             self.assertIn("lanes", state)
             self.assertIn("mt5Shadow", state["lanes"])
-            self.assertIn("polymarketShadow", state["lanes"])
+            self.assertIn("hfmCryptoShadow", state["lanes"])
             self.assertEqual(state["centAccount"]["accountMode"], "cent")
             self.assertTrue((runtime / "agent" / "QuantGod_AutonomousPromotionDecision.json").exists())
             self.assertTrue((runtime / "agent" / "QuantGod_AutonomousConfigPatch.json").exists())

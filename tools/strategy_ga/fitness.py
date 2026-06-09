@@ -42,8 +42,11 @@ def evidence_metrics(runtime_dir: Path, seed: Dict[str, Any] | None = None) -> D
     history_production_status = _load_json(runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json")
     backtest_required = seed is not None
     parity = _load_json(runtime_dir / "evidence_os" / "QuantGod_StrategyParityReport.json")
+    if not parity:
+        parity = _load_json(runtime_dir / "parity" / "QuantGod_StrategyParityReport.json")
     execution = _load_json(runtime_dir / "evidence_os" / "QuantGod_LiveExecutionQualityReport.json")
     cases = _load_json(runtime_dir / "evidence_os" / "QuantGod_CaseMemorySummary.json")
+    long_term_memory_feedback = _long_term_memory_feedback(runtime_dir, seed)
     strategy_contract_shadow = _strategy_contract_shadow_metrics(cases, seed)
     entry_relaxed = _variant_metrics(replay, "entryComparison", 1)
     exit_let_run = _variant_metrics(replay, "exitComparison", 1)
@@ -73,7 +76,8 @@ def evidence_metrics(runtime_dir: Path, seed: Dict[str, Any] | None = None) -> D
     backtest_penalty = min(1.0, _num(backtest_metrics.get("maxDrawdownR"), 0) * 0.2)
     promotion_gate = parity.get("promotionGate") if isinstance(parity.get("promotionGate"), dict) else {}
     parity_status = parity.get("status") or "MISSING"
-    parity_penalty = _parity_penalty(parity_status, promotion_gate)
+    parity_shadow_only_review = _parity_shadow_only_review(parity)
+    parity_penalty = _parity_penalty(parity_status, promotion_gate, shadow_only_review=parity_shadow_only_review)
     execution_penalty = _execution_penalty(execution_metrics)
     case_penalty = _case_penalty(cases)
     seed_wf_sample_count = int(_num(seed_wf_summary.get("sampleCount"), 0))
@@ -126,6 +130,9 @@ def evidence_metrics(runtime_dir: Path, seed: Dict[str, Any] | None = None) -> D
             "promotionAllowed": bool(promotion_gate.get("promotionAllowed")) if promotion_gate else False,
             "blockerCount": int(_num(promotion_gate.get("blockerCount"), 0)) if promotion_gate else 0,
             "penalty": parity_penalty,
+            "shadowOnlyReviewAllowed": parity_shadow_only_review,
+            "blocksStrategyRanking": _parity_blocks_strategy_ranking(parity_status, promotion_gate, parity_shadow_only_review),
+            "demotedOutOfScopeSignal": _parity_demoted_signal(parity),
         },
         "executionFeedback": {
             "present": bool(execution),
@@ -158,11 +165,13 @@ def evidence_metrics(runtime_dir: Path, seed: Dict[str, Any] | None = None) -> D
             "penalty": case_penalty,
             "strategyContractShadow": strategy_contract_shadow,
         },
+        "longTermMemoryFeedback": long_term_memory_feedback,
         "strategyContractShadow": strategy_contract_shadow,
         "evidencePenalty": parity_penalty
         + execution_penalty
         + account_execution_penalty
         + case_penalty
+        + _num(long_term_memory_feedback.get("penalty"), 0.0)
         + backtest_quality_penalty
         + history_production_penalty,
         "backtestQuality": {
@@ -270,7 +279,7 @@ def score_seed(seed: Dict[str, Any], runtime_dir: Path) -> Dict[str, Any]:
         blocker = walk_forward_summary.get("blockerCode") or "WALK_FORWARD_FAILED"
     elif _overfit_blocks_ranking(family, direction, sample_count, walk_forward_summary, overfit_penalty):
         blocker = "OVERFIT_RISK"
-    elif metrics.get("parity", {}).get("promotionGateStatus") in {"BLOCKED", "MISSING"}:
+    elif metrics.get("parity", {}).get("blocksStrategyRanking"):
         blocker = "PARITY_PROMOTION_GATE_BLOCKED"
     elif _execution_blocks_strategy_ranking(execution_feedback):
         blocker = "PARITY_OR_EXECUTION_EVIDENCE_FAILED"
@@ -310,10 +319,65 @@ def score_seed(seed: Dict[str, Any], runtime_dir: Path) -> Dict[str, Any]:
         "parity": metrics.get("parity", {}),
         "executionFeedback": metrics.get("executionFeedback", {}),
         "caseMemory": metrics.get("caseMemory", {}),
+        "longTermMemoryFeedback": metrics.get("longTermMemoryFeedback", {}),
         "strategyContractShadow": metrics.get("strategyContractShadow", {}),
         "backtestQuality": metrics.get("backtestQuality", {}),
         "historyProductionStatus": metrics.get("historyProductionStatus", {}),
         "walkForward": metrics.get("walkForward", {}),
+    }
+
+
+def _long_term_memory_feedback(runtime_dir: Path, seed: Dict[str, Any] | None) -> Dict[str, Any]:
+    report = _load_json(runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json")
+    memory = report.get("longTermTradeMemory") if isinstance(report.get("longTermTradeMemory"), dict) else {}
+    feedback = memory.get("entryFeedbackPolicy") if isinstance(memory.get("entryFeedbackPolicy"), dict) else {}
+    rolling = memory.get("rollingReview") if isinstance(memory.get("rollingReview"), dict) else {}
+    rules = feedback.get("candidatePenaltyRules") if isinstance(feedback.get("candidatePenaltyRules"), list) else []
+    applied: List[Dict[str, Any]] = []
+    direct_penalty = 0.0
+    global_penalty = 0.0
+    seed_symbol = str((seed or {}).get("symbol") or "").upper()
+    seed_direction = str((seed or {}).get("direction") or "").upper()
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        match = rule.get("match") if isinstance(rule.get("match"), dict) else {}
+        penalty = max(0.0, _num(rule.get("penalty"), 0.0))
+        if penalty <= 0:
+            continue
+        symbol = str(match.get("symbol") or "").upper()
+        side = str(match.get("side") or "").upper()
+        if symbol and symbol != seed_symbol:
+            continue
+        if side and side != seed_direction:
+            continue
+        if symbol or side:
+            direct_penalty += penalty
+            applied.append({"match": match, "penalty": round(penalty, 4), "scope": "DIRECT", "reasonZh": rule.get("reasonZh") or ""})
+            continue
+        if match.get("dataGap") or match.get("adverseFactor"):
+            scaled = penalty * 0.35
+            global_penalty += scaled
+            applied.append({"match": match, "penalty": round(scaled, 4), "scope": "GLOBAL_RESEARCH_CONTEXT", "reasonZh": rule.get("reasonZh") or ""})
+    defense = feedback.get("defenseMode") if isinstance(feedback.get("defenseMode"), dict) else {}
+    defense_penalty = 0.15 if defense.get("enabled") else 0.0
+    total = min(1.25, direct_penalty + global_penalty + defense_penalty)
+    return {
+        "schema": "quantgod.ga.long_term_memory_feedback.v1",
+        "present": bool(memory),
+        "status": feedback.get("status") or memory.get("status") or "MISSING",
+        "memoryGeneratedAt": memory.get("generatedAt"),
+        "rollingReviewStatus": rolling.get("status"),
+        "sampleCount": int(_num(feedback.get("sampleCount") or rolling.get("sampleCount"), 0)),
+        "winRate": rolling.get("winRate"),
+        "totalProfitR": rolling.get("totalProfitR"),
+        "appliedRuleCount": len(applied),
+        "appliedRules": applied[:12],
+        "directPenalty": round(direct_penalty, 4),
+        "globalContextPenalty": round(global_penalty, 4),
+        "defensePenalty": round(defense_penalty, 4),
+        "penalty": round(total, 4),
+        "reasonZh": memory.get("nextActionZh") or ("长期记忆已参与 GA fitness。" if memory else "等待长期记忆报告。"),
     }
 
 
@@ -563,7 +627,41 @@ def _account_execution_penalty(profile: Dict[str, Any]) -> float:
     return round(min(0.85, abs(min(0.0, net_r)) * 0.45 + loss_streak * 0.18), 4)
 
 
-def _parity_penalty(status: str, promotion_gate: Dict[str, Any]) -> float:
+def _parity_demoted_signal(parity: Dict[str, Any]) -> Dict[str, Any]:
+    deep = parity.get("deepParity") if isinstance(parity.get("deepParity"), dict) else {}
+    signal = deep.get("demotedOutOfScopeSignal") if isinstance(deep.get("demotedOutOfScopeSignal"), dict) else {}
+    if signal:
+        return signal
+    for row in parity.get("checks", []) if isinstance(parity.get("checks"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        actual = row.get("actual") if isinstance(row.get("actual"), dict) else {}
+        signal = actual.get("demotedOutOfScopeSignal") if isinstance(actual.get("demotedOutOfScopeSignal"), dict) else {}
+        if signal:
+            return signal
+    return {}
+
+
+def _parity_shadow_only_review(parity: Dict[str, Any]) -> bool:
+    if str(parity.get("status") or "").upper() != "PARITY_WARN":
+        return False
+    deep = parity.get("deepParity") if isinstance(parity.get("deepParity"), dict) else {}
+    hard_mismatches = deep.get("hardMismatches") if isinstance(deep.get("hardMismatches"), list) else []
+    demoted = _parity_demoted_signal(parity)
+    return bool(demoted.get("demoted")) and not hard_mismatches
+
+
+def _parity_blocks_strategy_ranking(status: str, promotion_gate: Dict[str, Any], shadow_only_review: bool) -> bool:
+    gate_status = str(promotion_gate.get("status") or "MISSING").upper() if promotion_gate else "MISSING"
+    status_text = str(status or "MISSING").upper()
+    if shadow_only_review:
+        return False
+    return gate_status in {"BLOCKED", "MISSING"} or status_text in {"PARITY_FAIL", "MISSING"}
+
+
+def _parity_penalty(status: str, promotion_gate: Dict[str, Any], *, shadow_only_review: bool = False) -> float:
+    if shadow_only_review:
+        return 0.2
     if status == "PARITY_FAIL":
         return 1.0
     if not promotion_gate or promotion_gate.get("status") == "MISSING":

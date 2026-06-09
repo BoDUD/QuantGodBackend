@@ -16,6 +16,7 @@ try:
         build_factory_state,
         read_factory_state,
     )
+    from tools.strategy_ga_factory.intent_builder import build_intent_plan, read_intent_plan
     from tools.strategy_ga_factory.telegram_text import ga_factory_to_chinese_text
 except ModuleNotFoundError:  # pragma: no cover
     from strategy_ga.generation_runner import run_generation
@@ -23,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover
         build_factory_state,
         read_factory_state,
     )
+    from strategy_ga_factory.intent_builder import build_intent_plan, read_intent_plan
     from strategy_ga_factory.telegram_text import ga_factory_to_chinese_text
 
 
@@ -41,6 +43,10 @@ def main(argv=None) -> int:
     build.add_argument("--write", action="store_true")
     sample = sub.add_parser("sample")
     sample.add_argument("--overwrite", action="store_true")
+    intent = sub.add_parser("intent-plan")
+    intent.add_argument("--prompt", default="")
+    intent.add_argument("--write", action="store_true")
+    sub.add_parser("intent-status")
     text = sub.add_parser("telegram-text")
     text.add_argument("--refresh", action="store_true")
     args = parser.parse_args(argv)
@@ -50,6 +56,10 @@ def main(argv=None) -> int:
         return emit(read_factory_state(runtime_dir))
     if args.command == "sample":
         return emit(write_sample_runtime(runtime_dir, overwrite=args.overwrite))
+    if args.command == "intent-plan":
+        return emit(build_intent_plan(runtime_dir, args.prompt, write=args.write))
+    if args.command == "intent-status":
+        return emit(read_intent_plan(runtime_dir))
     if args.command == "build":
         return emit(build_factory_state(runtime_dir, write=True))
     if args.command == "telegram-text":

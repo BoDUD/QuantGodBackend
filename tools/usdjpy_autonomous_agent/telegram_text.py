@@ -16,9 +16,9 @@ def autonomous_agent_to_chinese_text(payload: Dict[str, Any]) -> str:
     cent = payload.get("centAccount") if isinstance(payload.get("centAccount"), dict) else {}
     lanes = payload.get("lanes") if isinstance(payload.get("lanes"), dict) else {}
     mt5_shadow = lanes.get("mt5Shadow") if isinstance(lanes.get("mt5Shadow"), dict) else {}
-    poly_shadow = lanes.get("polymarketShadow") if isinstance(lanes.get("polymarketShadow"), dict) else {}
+    hfm_crypto_shadow = lanes.get("hfmCryptoShadow") if isinstance(lanes.get("hfmCryptoShadow"), dict) else {}
     mt5_summary = mt5_shadow.get("summary") if isinstance(mt5_shadow.get("summary"), dict) else {}
-    poly_summary = poly_shadow.get("summary") if isinstance(poly_shadow.get("summary"), dict) else {}
+    hfm_crypto_summary = hfm_crypto_shadow.get("summary") if isinstance(hfm_crypto_shadow.get("summary"), dict) else {}
     patch_writable = bool(payload.get("patchWritable"))
     lines = [
         "【QuantGod USDJPY 美分账户自主 Agent】",
@@ -30,7 +30,10 @@ def autonomous_agent_to_chinese_text(payload: Dict[str, Any]) -> str:
             f"{_fmt(cent.get('accountCurrencyUnit'), 'USC')}；"
             f"美分加速：{'开启' if cent.get('centAccountAcceleration') else '关闭'}。"
         ),
-        f"阶段仓位上限：{_fmt(limits.get('stageMaxLot'), '0')} / 系统上限 {_fmt(limits.get('maxLot'), '2.0')}；2.0 只是上限，不是固定仓位。",
+        (
+            f"阶段仓位上限：{_fmt(limits.get('stageMaxLot'), '0')} / "
+            f"系统上限 {_fmt(limits.get('maxLot'), '2.0')}；2.0 只是上限，不是固定仓位。"
+        ),
         "审批模式：无需人工审批；扩大实盘范围必须通过 shadow→replay→walk-forward→硬风控。",
         "",
         "三车道：",
@@ -41,9 +44,9 @@ def autonomous_agent_to_chinese_text(payload: Dict[str, Any]) -> str:
             f"测试器 {_fmt(mt5_summary.get('testerOnly'), '0')}。"
         ),
         (
-            f"- Polymarket：{_fmt(poly_shadow.get('stageZh') or poly_shadow.get('stage'), '模拟观察')}；"
-            f"模拟 PF {_fmt(poly_summary.get('shadowProfitFactor'), '0')}；"
-            "不连接真实钱包。"
+            f"- HFM Crypto CFD：{_fmt(hfm_crypto_shadow.get('stageZh') or hfm_crypto_shadow.get('stage'), '等待 symbol 证据')}；"
+            f"Moss ROI {_fmt(hfm_crypto_summary.get('mossRoiPct'), '—')}%；"
+            "只读影子研究，不触发 MT5 crypto 下单。"
         ),
         "",
         "候选参数：",
@@ -65,6 +68,9 @@ def autonomous_agent_to_chinese_text(payload: Dict[str, Any]) -> str:
         lines.append("- 当前未触发硬回滚。")
     lines.extend([
         "",
-        "底线：USDJPY-only；Polymarket 永远 shadow-only；DeepSeek 只解释；Telegram 不接交易命令；Agent 只写 EA 白名单运行时 patch。",
+        (
+            "底线：USDJPY-only；HFM Crypto CFD 仍是 shadow-only；DeepSeek 只解释；"
+            "Telegram 不接交易命令；Agent 只写 EA 白名单运行时 patch。"
+        ),
     ])
     return "\n".join(lines)

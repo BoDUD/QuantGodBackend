@@ -27,7 +27,7 @@ SAFETY: Dict[str, Any] = {
     "cancelAllowed": False,
     "livePresetMutationAllowed": False,
     "telegramCommandExecutionAllowed": False,
-    "polymarketRealMoneyAllowed": False,
+    "externalMarketRealMoneyAllowed": False,
     "shadowStrategyJsonCandidateOnly": True,
     "writesMt5OrderRequest": False,
     "writesMt5LivePreset": False,

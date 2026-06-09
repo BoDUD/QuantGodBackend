@@ -6,14 +6,15 @@ import unittest
 from pathlib import Path
 
 from tools.autonomous_lifecycle.cent_account_rules import cent_account_config
+from tools.autonomous_lifecycle.hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
 from tools.autonomous_lifecycle.lifecycle import build_autonomous_lifecycle
 from tools.autonomous_lifecycle.mt5_shadow_lane import build_mt5_shadow_lane
-from tools.autonomous_lifecycle.polymarket_shadow_lane import build_polymarket_shadow_lane
 from tools.daily_autopilot_v2.orchestrator import run_daily_autopilot_cycle
 from tools.daily_autopilot_v2.report import build_daily_autopilot_v2
 from tools.daily_autopilot_v2.telegram_text import daily_autopilot_v2_to_chinese_text
 from tools.usdjpy_strategy_lab.schema import DEFAULT_STRATEGIES
 from tools.usdjpy_walk_forward.selector import sample_walk_forward_runtime
+from tools.hfm_crypto_cfd.schema import filled_contract_spec_path
 
 
 class AutonomousLifecycleTests(unittest.TestCase):
@@ -37,12 +38,50 @@ class AutonomousLifecycleTests(unittest.TestCase):
             self.assertFalse(payload["safety"]["operatorApprovalRequired"])
             self.assertTrue(payload["safety"]["unattendedLiveExpansionAllowed"])
             self.assertFalse(payload["safety"]["liveMutationAllowed"])
-            self.assertFalse(payload["safety"]["polymarketRealMoneyAllowed"])
+            self.assertFalse(payload["safety"]["externalMarketRealMoneyAllowed"])
+            self.assertFalse(payload["safety"]["hfmCryptoExecutionAllowed"])
             self.assertIn("mt5Shadow", payload["lanes"])
-            self.assertIn("polymarketShadow", payload["lanes"])
+            self.assertIn("hfmCryptoShadow", payload["lanes"])
             self.assertTrue((runtime / "agent" / "QuantGod_AutonomousLifecycle.json").exists())
             self.assertTrue((runtime / "agent" / "QuantGod_MT5ShadowStrategyRanking.json").exists())
-            self.assertTrue((runtime / "agent" / "QuantGod_PolymarketShadowLane.json").exists())
+            self.assertTrue((runtime / "agent" / "QuantGod_HFMCryptoShadowLane.json").exists())
+
+    def test_lifecycle_can_read_hfm_crypto_from_separate_live16_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            primary = Path(temp) / "primary"
+            secondary = Path(temp) / "live16"
+            primary.mkdir()
+            filled_spec = filled_contract_spec_path(secondary)
+            filled_spec.parent.mkdir(parents=True)
+            filled_spec.write_text(
+                json.dumps(
+                    {
+                        "symbols": [
+                            {
+                                "brokerSymbol": "#BTCUSD",
+                                "canonicalSymbol": "BTCUSD",
+                                "contractSize": 1,
+                                "tickSize": 0.01,
+                                "tickValue": 0.01,
+                                "minLot": 0.01,
+                                "lotStep": 0.01,
+                                "maxLot": 3,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = build_autonomous_lifecycle(primary, hfm_crypto_runtime_dir=secondary, write=False)
+
+            hfm_lane = payload["lanes"]["hfmCryptoShadow"]
+            self.assertEqual(payload["runtimeDir"], str(primary))
+            self.assertEqual(payload["hfmCryptoRuntimeDir"], str(secondary))
+            self.assertTrue(hfm_lane["summary"]["symbolEvidenceFound"])
+            self.assertEqual(hfm_lane["hfmCryptoCfdState"]["targetSymbols"], ["BTCUSD"])
+            self.assertFalse(hfm_lane["safety"]["mt5OrderSendAllowed"])
 
     def test_mt5_shadow_lane_keeps_all_default_strategies_in_simulation_pool(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -86,16 +125,16 @@ class AutonomousLifecycleTests(unittest.TestCase):
             self.assertEqual(rsi_routes[0]["promotionStage"], "REJECTED")
             self.assertTrue(payload["parityGate"]["parityFailBlocksShadow"])
 
-    def test_polymarket_lane_is_never_real_money(self) -> None:
+    def test_hfm_crypto_lane_is_never_execution_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             runtime = Path(temp)
 
-            payload = build_polymarket_shadow_lane(runtime)
+            payload = build_hfm_crypto_shadow_lane(runtime)
 
-            self.assertEqual(payload["lane"], "POLYMARKET_SHADOW")
-            self.assertFalse(payload["safety"]["walletIntegrationAllowed"])
-            self.assertFalse(payload["safety"]["polymarketRealMoneyAllowed"])
-            self.assertFalse(payload["safety"]["polymarketOrderAllowed"])
+            self.assertEqual(payload["lane"], "HFM_CRYPTO_CFD_SHADOW")
+            self.assertFalse(payload["safety"]["walletAuthorizationAllowed"])
+            self.assertFalse(payload["safety"]["hfmCryptoExecutionAllowed"])
+            self.assertFalse(payload["safety"]["mt5OrderSendAllowed"])
 
     def test_cent_account_config_caps_max_lot_at_two(self) -> None:
         cfg = cent_account_config()
@@ -184,10 +223,11 @@ class AutonomousLifecycleTests(unittest.TestCase):
             self.assertIn("mt5Shadow", payload["lanes"])
             self.assertIn("centLive", payload["lanes"])
             self.assertIn("usdDeployment", payload["lanes"])
-            self.assertIn("polymarketShadow", payload["lanes"])
+            self.assertIn("hfmCryptoShadow", payload["lanes"])
             self.assertIn("accountRegistry", payload)
             self.assertFalse(payload["safety"]["orderSendAllowed"])
-            self.assertFalse(payload["safety"]["polymarketRealMoneyAllowed"])
+            self.assertFalse(payload["safety"]["externalMarketRealMoneyAllowed"])
+            self.assertFalse(payload["safety"]["hfmCryptoExecutionAllowed"])
             self.assertTrue((runtime / "agent" / "QuantGod_DailyAutopilotV2.json").exists())
 
     def test_daily_autopilot_v2_runs_agent_cycle_and_records_ledger(self) -> None:

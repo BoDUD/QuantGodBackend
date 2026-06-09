@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_ops_health import build_agent_ops_health
+from hfm_crypto_cfd.runtime_scope import hfm_crypto_runtime_scope_meta, resolve_hfm_crypto_runtime_dir
 from production_evidence_validation.burn_in import build_burn_in_report, load_latest_burn_in
 
 
@@ -77,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="QuantGod Agent v2.5 scheduled maintenance")
     parser.add_argument("--runtime-dir", default=os.environ.get("QG_RUNTIME_DIR", str(root / "runtime")))
+    parser.add_argument("--hfm-crypto-runtime-dir", default=os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""))
     parser.add_argument("--repo-root", default=str(root))
     parser.add_argument(
         "--burn-in-window-hours",
@@ -108,11 +110,18 @@ def main(argv: list[str] | None = None) -> int:
         _load_env_file(root / name)
     args = build_parser().parse_args(argv)
     runtime_dir = Path(args.runtime_dir)
+    hfm_crypto_runtime_dir = resolve_hfm_crypto_runtime_dir(runtime_dir, args.hfm_crypto_runtime_dir)
+    hfm_crypto_runtime_scope = hfm_crypto_runtime_scope_meta(runtime_dir, args.hfm_crypto_runtime_dir)
     repo_root = Path(args.repo_root)
 
     agent_health: dict[str, Any] | None = None
     if _truthy(os.environ.get("QG_AGENT_OPS_HEALTH_ENABLED"), default=True):
-        agent_health = build_agent_ops_health(runtime_dir, repo_root=repo_root, write=True)
+        agent_health = build_agent_ops_health(
+            runtime_dir,
+            repo_root=repo_root,
+            write=True,
+            hfm_crypto_runtime_dir=hfm_crypto_runtime_dir,
+        )
 
     burn_in_report: dict[str, Any] | None = None
     burn_in_skipped_reason = ""
@@ -139,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "ok": True,
         "runtimeDir": str(runtime_dir),
+        "hfmCryptoRuntimeScope": hfm_crypto_runtime_scope,
         "repoRoot": str(repo_root),
         "agentOpsHealth": {
             "written": agent_health is not None,

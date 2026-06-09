@@ -52,7 +52,7 @@ test('Strategy JSON validator rejects code, secrets, and direct execution permis
   }
   assert.match(schema, /orderSendAllowed["']?\s*:\s*False/);
   assert.match(schema, /livePresetMutationAllowed["']?\s*:\s*False/);
-  assert.match(schema, /polymarketRealMoneyAllowed["']?\s*:\s*False/);
+  assert.match(schema, /externalMarketRealMoneyAllowed["']?\s*:\s*False/);
 });
 
 test('GA trace records process details rather than final result only', () => {
@@ -181,7 +181,7 @@ test('GA modules do not introduce live execution, wallets, or Telegram commands'
   const source = files.map(read).join('\n');
 
   assert.doesNotMatch(source, /TRADE_ACTION_DEAL|PositionClose|OrderSendAsync|CTrade/);
-  assert.doesNotMatch(source, /privateKeyAllowed\s*["']?\s*:\s*true|polymarketRealMoneyAllowed\s*["']?\s*:\s*true/i);
+  assert.doesNotMatch(source, /privateKeyAllowed\s*["']?\s*:\s*true|externalMarketRealMoneyAllowed\s*["']?\s*:\s*true/i);
   assert.match(source, /QG_TELEGRAM_COMMANDS_ALLOWED/);
   assert.match(source, /gaDirectLiveAllowed/);
 });

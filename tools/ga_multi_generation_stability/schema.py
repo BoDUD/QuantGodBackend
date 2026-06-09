@@ -30,7 +30,7 @@ SAFETY: dict[str, Any] = {
     "livePresetMutationAllowed": False,
     "writesMt5OrderRequest": False,
     "telegramCommandExecutionAllowed": False,
-    "polymarketRealMoneyAllowed": False,
+    "externalMarketRealMoneyAllowed": False,
     "gaDirectLiveAllowed": False,
 }
 

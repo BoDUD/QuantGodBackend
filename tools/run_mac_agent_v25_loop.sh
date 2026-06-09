@@ -70,6 +70,10 @@ default_mt5_files_dir() {
   printf '%s\n' "$HOME/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5/MQL5/Files"
 }
 
+default_hfm_crypto_mt5_files_dir() {
+  printf '%s\n' "$HOME/Library/Application Support/net.metaquotes.wine.metatrader5-live16/drive_c/Program Files/MetaTrader 5/MQL5/Files"
+}
+
 resolve_runtime_dir() {
   local mt5_files
   mt5_files="$(default_mt5_files_dir)"
@@ -84,9 +88,30 @@ resolve_runtime_dir() {
   fi
 }
 
+resolve_hfm_crypto_runtime_dir() {
+  local live16_files
+  live16_files="$(default_hfm_crypto_mt5_files_dir)"
+  if [[ -n "${QG_HFM_CRYPTO_RUNTIME_DIR:-}" ]]; then
+    printf '%s\n' "$QG_HFM_CRYPTO_RUNTIME_DIR"
+  elif [[ -n "${QG_MT5_SECONDARY_FILES_DIR:-}" ]]; then
+    printf '%s\n' "$QG_MT5_SECONDARY_FILES_DIR"
+  elif [[ -n "${QG_MT5_SECONDARY_ROOT:-}" ]]; then
+    printf '%s\n' "$QG_MT5_SECONDARY_ROOT/MQL5/Files"
+  elif [[ -n "${QG_MT5_SECONDARY_WINE_PREFIX:-}" ]]; then
+    printf '%s\n' "$QG_MT5_SECONDARY_WINE_PREFIX/drive_c/Program Files/MetaTrader 5/MQL5/Files"
+  elif [[ -d "$live16_files" ]]; then
+    printf '%s\n' "$live16_files"
+  else
+    printf '%s\n' "$RUNTIME_DIR"
+  fi
+}
+
 RUNTIME_DIR="$(resolve_runtime_dir)"
+HFM_CRYPTO_RUNTIME_DIR="$(resolve_hfm_crypto_runtime_dir)"
 export QG_RUNTIME_DIR="${QG_RUNTIME_DIR:-$RUNTIME_DIR}"
 export QG_MT5_FILES_DIR="${QG_MT5_FILES_DIR:-$RUNTIME_DIR}"
+export QG_HFM_CRYPTO_SCOPE="${QG_HFM_CRYPTO_SCOPE:-secondary}"
+export QG_HFM_CRYPTO_RUNTIME_DIR="${QG_HFM_CRYPTO_RUNTIME_DIR:-$HFM_CRYPTO_RUNTIME_DIR}"
 HEAVY_LOCK_DIR="${QG_AGENT_V25_HEAVY_LOCK_DIR:-$RUNTIME_DIR/agent/QuantGod_AgentV25HeavyTasks.lock}"
 HEAVY_STAMP_FILE="${QG_AGENT_V25_HEAVY_STAMP_FILE:-$RUNTIME_DIR/agent/QuantGod_AgentV25HeavyTasksLastRun.txt}"
 HEAVY_STATUS_FILE="${QG_AGENT_V25_HEAVY_STATUS_FILE:-$RUNTIME_DIR/agent/QuantGod_AgentV25HeavyTasksStatus.json}"
@@ -225,6 +250,7 @@ PY
 run_maintenance() {
   "$PYTHON_BIN" tools/run_mac_agent_v25_maintenance.py \
     --runtime-dir "$RUNTIME_DIR" \
+    --hfm-crypto-runtime-dir "$HFM_CRYPTO_RUNTIME_DIR" \
     --repo-root "$REPO_ROOT" \
     --burn-in-window-hours "$QG_PRODUCTION_BURN_IN_WINDOW_HOURS" \
     --burn-in-sample-interval-minutes "$QG_PRODUCTION_BURN_IN_SAMPLE_INTERVAL_MINUTES" \
@@ -361,7 +387,7 @@ run_heavy_tasks() {
   acquire_heavy_lock || return 0
   mkdir -p "$(dirname "$HEAVY_STAMP_FILE")"
   date -u '+%Y-%m-%dT%H:%M:%SZ' > "$HEAVY_STAMP_FILE"
-  write_heavy_status "RUNNING" "Strategy Lab/Spread gate audit/Polymarket readonly cycle/Daily Autopilot/GA/evidence_os 重任务独立后台运行；快控制环不会等待它完成。"
+  write_heavy_status "RUNNING" "Strategy Lab/Spread gate audit/HFM Crypto shadow scan/Daily Autopilot/GA/evidence_os 重任务独立后台运行；快控制环不会等待它完成。"
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] QuantGod Agent v2.5 heavy tasks start"
 
   "$PYTHON_BIN" tools/run_usdjpy_strategy_lab.py \
@@ -397,11 +423,14 @@ run_heavy_tasks() {
     audit \
     --write || echo "USDJPY spread gate impact audit failed"
 
-  QG_DASHBOARD_FILES_DIR="${QG_POLYMARKET_HEAVY_DASHBOARD_DIR:-$REPO_ROOT/Dashboard}" \
-    bash tools/run_mac_polymarket_readonly_cycle.sh || echo "Polymarket readonly cycle failed"
+  "$PYTHON_BIN" tools/run_hfm_crypto_cfd.py \
+    --runtime-dir "$HFM_CRYPTO_RUNTIME_DIR" \
+    build \
+    --write || echo "HFM Crypto CFD shadow scan failed"
 
   "$PYTHON_BIN" tools/run_daily_autopilot_v2.py \
     --runtime-dir "$RUNTIME_DIR" \
+    --hfm-crypto-runtime-dir "$HFM_CRYPTO_RUNTIME_DIR" \
     --repo-root "$REPO_ROOT" \
     "$AUTOPILOT_COMMAND" \
     --write || echo "Daily Autopilot v2.5 $AUTOPILOT_COMMAND failed"
@@ -426,7 +455,7 @@ run_heavy_tasks() {
 
   run_maintenance
   date -u '+%Y-%m-%dT%H:%M:%SZ' > "$HEAVY_STAMP_FILE"
-  write_heavy_status "COMPLETED" "Strategy Lab/Spread gate audit/Polymarket readonly cycle/Daily Autopilot/GA/evidence_os 重任务已完成或记录为可重试；快控制环继续独立刷新。"
+  write_heavy_status "COMPLETED" "Strategy Lab/Spread gate audit/HFM Crypto shadow scan/Daily Autopilot/GA/evidence_os 重任务已完成或记录为可重试；快控制环继续独立刷新。"
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] QuantGod Agent v2.5 heavy tasks complete"
   release_heavy_lock
 }
@@ -434,7 +463,7 @@ run_heavy_tasks() {
 maybe_start_heavy_tasks() {
   local age
   if heavy_task_running; then
-    write_heavy_status "RUNNING" "Strategy Lab/Polymarket readonly cycle/Daily Autopilot/GA/evidence_os 重任务仍在后台运行；本轮快控制环跳过等待。"
+    write_heavy_status "RUNNING" "Strategy Lab/HFM Crypto shadow scan/Daily Autopilot/GA/evidence_os 重任务仍在后台运行；本轮快控制环跳过等待。"
     return 0
   fi
   age="$(heavy_task_age_seconds)"
@@ -442,7 +471,7 @@ maybe_start_heavy_tasks() {
     age=999999
   fi
   if [[ "$age" -lt "$HEAVY_INTERVAL_SECONDS" ]]; then
-    write_heavy_status "WAITING" "距离上次 Strategy Lab/Spread gate audit/Polymarket readonly cycle/Daily Autopilot/GA/evidence_os 重任务 ${age}s，未达到 ${HEAVY_INTERVAL_SECONDS}s；本轮只跑快控制环。"
+    write_heavy_status "WAITING" "距离上次 Strategy Lab/Spread gate audit/HFM Crypto shadow scan/Daily Autopilot/GA/evidence_os 重任务 ${age}s，未达到 ${HEAVY_INTERVAL_SECONDS}s；本轮只跑快控制环。"
     return 0
   fi
   mkdir -p "$(dirname "$HEAVY_LOG_FILE")"
@@ -494,7 +523,7 @@ run_once() {
   fi
 
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] QuantGod Agent v2.5 fast cycle complete"
-  write_loop_status "COMPLETED" "Agent v2.5 快控制环已完成；Strategy Lab/Spread gate audit/Polymarket readonly cycle/Daily Autopilot/GA/evidence_os 重任务低频独立调度。"
+  write_loop_status "COMPLETED" "Agent v2.5 快控制环已完成；Strategy Lab/Spread gate audit/HFM Crypto shadow scan/Daily Autopilot/GA/evidence_os 重任务低频独立调度。"
   maybe_start_heavy_tasks
 }
 

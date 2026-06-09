@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -76,6 +78,76 @@ class Mt5FastLaneTests(unittest.TestCase):
             self.assertEqual(report["symbols"][0]["quality"], "EA_DASHBOARD_OK")
             self.assertTrue(report["symbols"][0]["dashboardFallback"])
             self.assertEqual(report["symbols"][0]["tickRows"], 3)
+
+    def test_global_dashboard_embedded_rsi_replaces_stale_standalone(self) -> None:
+        old_env = {
+            "QG_FASTLANE_INCLUDE_GLOBAL_MT5": os.environ.get("QG_FASTLANE_INCLUDE_GLOBAL_MT5"),
+            "QG_MT5_FILES_DIR": os.environ.get("QG_MT5_FILES_DIR"),
+            "QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY": os.environ.get("QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY"),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                runtime = root / "runtime"
+                mt5_files = root / "mt5_files"
+                runtime.mkdir()
+                mt5_files.mkdir()
+                stale_diag = runtime / "QuantGod_USDJPYRsiEntryDiagnostics.json"
+                stale_diag.write_text(
+                    json.dumps(
+                        {
+                            "schema": "quantgod.mt5.usdjpy_rsi_entry_diagnostics.v1",
+                            "symbol": "USDJPYc",
+                            "state": "SPREAD_BLOCK",
+                            "guards": {"spreadPips": 6.5, "spreadAllowed": False},
+                            "rsi": {"rsiClosed1": 20.0},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                dashboard = mt5_files / "QuantGod_Dashboard.json"
+                dashboard.write_text(
+                    json.dumps(
+                        {
+                            "timestamp": "2026.06.05 12:00:00",
+                            "watchlist": "USDJPYc",
+                            "runtime": {
+                                "tradeStatus": "READY",
+                                "connected": True,
+                                "terminalConnected": True,
+                                "tickAgeSeconds": 1,
+                            },
+                            "market": {"symbol": "USDJPYc", "bid": 159.1, "ask": 159.102, "spread": 0.2},
+                            "usdJpyRsiEntryDiagnostics": {
+                                "schema": "quantgod.mt5.usdjpy_rsi_entry_diagnostics.v1",
+                                "symbol": "USDJPYc",
+                                "state": "WAITING_RSI_SIGNAL",
+                                "guards": {"spreadPips": 0.2, "spreadAllowed": True},
+                                "rsi": {"rsiClosed1": 45.0, "rsiClosed2": 42.0},
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                now = time.time()
+                os.utime(stale_diag, (now - 3600, now - 3600))
+                os.utime(dashboard, (now, now))
+                os.environ["QG_FASTLANE_INCLUDE_GLOBAL_MT5"] = "1"
+                os.environ["QG_MT5_FILES_DIR"] = str(mt5_files)
+                os.environ["QG_MT5_EA_SNAPSHOT_EXPLICIT_ONLY"] = "1"
+
+                report = build_quality_report(runtime, symbols=["USDJPYc"], write=False)
+
+                self.assertTrue(report["heartbeatFound"])
+                self.assertEqual(report["symbols"][0]["quality"], "EA_DASHBOARD_OK")
+                self.assertLessEqual(report["symbols"][0]["indicatorAgeSeconds"], 2)
+                self.assertIn("QuantGod_Dashboard.json", report["fallbackSources"])
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_global_symbols_option_survives_subcommand_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

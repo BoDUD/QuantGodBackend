@@ -24,13 +24,22 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from auto_tester_window_guard import (
-    LOCK_NAME,
-    evaluate_execution_gate,
-    read_json as read_guard_json,
-    validate_materialized_task,
-    validate_tester_profile_matches,
-)
+try:
+    from tools.auto_tester_window_guard import (
+        LOCK_NAME,
+        evaluate_execution_gate,
+        read_json as read_guard_json,
+        validate_materialized_task,
+        validate_tester_profile_matches,
+    )
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    from auto_tester_window_guard import (
+        LOCK_NAME,
+        evaluate_execution_gate,
+        read_json as read_guard_json,
+        validate_materialized_task,
+        validate_tester_profile_matches,
+    )
 
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +108,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=30,
         help="Maximum age for QuantGod_Dashboard.json before --run-terminal is blocked.",
+    )
+    parser.add_argument(
+        "--wineprefix",
+        default="",
+        help="Optional Wine prefix for Strategy Tester launch. On macOS, defaults to QG_PARAMLAB_WINEPREFIX, then QG_WINEPREFIX, then the standard MT5 prefix.",
     )
     return parser.parse_args()
 
@@ -201,7 +215,12 @@ def wine_windows_path(path: Path) -> str:
     return "Z:" + str(resolved).replace("/", "\\")
 
 
-def mt5_terminal_command(terminal: Path, config_path: Path, login: str) -> tuple[list[str], Path | None, dict[str, str] | None]:
+def mt5_terminal_command(
+    terminal: Path,
+    config_path: Path,
+    login: str,
+    wineprefix_override: str = "",
+) -> tuple[list[str], Path | None, dict[str, str] | None]:
     login_arg = f"/login:{login}" if str(login or "").strip() else ""
     if sys.platform != "darwin":
         command = [str(terminal)]
@@ -210,7 +229,12 @@ def mt5_terminal_command(terminal: Path, config_path: Path, login: str) -> tuple
         command.append(f"/config:{config_path}")
         return command, None, None
     wine64 = Path(os.environ.get("QG_WINE64") or (Path.home() / "Applications/MetaTrader 5.app/Contents/SharedSupport/wine/bin/wine64"))
-    wineprefix = Path(os.environ.get("QG_WINEPREFIX") or (Path.home() / "Library/Application Support/net.metaquotes.wine.metatrader5"))
+    wineprefix = Path(
+        wineprefix_override
+        or os.environ.get("QG_PARAMLAB_WINEPREFIX")
+        or os.environ.get("QG_WINEPREFIX")
+        or (Path.home() / "Library/Application Support/net.metaquotes.wine.metatrader5")
+    )
     command = [str(wine64), "terminal64.exe", "/portable"]
     if login_arg:
         command.append(login_arg)
@@ -219,19 +243,35 @@ def mt5_terminal_command(terminal: Path, config_path: Path, login: str) -> tuple
     return command, terminal.parent, env
 
 
+def _tail_text(value: str, max_chars: int = 4000) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[-max_chars:]
+
+
 def run_terminal_process(
     command: list[str],
     cwd: Path | None,
     env: dict[str, str] | None,
     timeout_seconds: int,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, dict[str, str]]:
     timeout = int(timeout_seconds or 0)
-    popen_kwargs: dict[str, Any] = {"cwd": str(cwd) if cwd else None, "env": env}
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(cwd) if cwd else None,
+        "env": env,
+        "text": True,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+    }
     if sys.platform != "win32":
         popen_kwargs["start_new_session"] = True
     process = subprocess.Popen(command, **popen_kwargs)
     try:
-        return process.wait(timeout=timeout if timeout > 0 else None), False
+        stdout, stderr = process.communicate(timeout=timeout if timeout > 0 else None)
+        return process.returncode, False, {
+            "stdoutTail": _tail_text(stdout or ""),
+            "stderrTail": _tail_text(stderr or ""),
+        }
     except subprocess.TimeoutExpired:
         if sys.platform != "win32":
             try:
@@ -251,7 +291,50 @@ def run_terminal_process(
             else:
                 process.kill()
             process.wait(timeout=10)
-        return -9, True
+        stdout = ""
+        stderr = ""
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+        except Exception:
+            pass
+        return -9, True, {
+            "stdoutTail": _tail_text(stdout or ""),
+            "stderrTail": _tail_text(stderr or ""),
+        }
+
+
+def classify_terminal_blockers(
+    terminal_process: dict[str, str],
+    *,
+    terminal_exit_code: int | None = None,
+    html_report_exists: bool = False,
+) -> list[dict[str, str]]:
+    stdout = str(terminal_process.get("stdoutTail") or "")
+    stderr = str(terminal_process.get("stderrTail") or "")
+    combined = f"{stdout}\n{stderr}".lower()
+    blockers: list[dict[str, str]] = []
+    if "can't check in server_mach_port" in combined or "wine server failed to run" in combined:
+        blockers.append({
+            "code": "WINE_SERVER_MACH_PORT_UNAVAILABLE",
+            "severity": "terminal_environment",
+            "reasonZh": "Wine server Mach port 无法接入，隔离 MT5 Strategy Tester 没有真正启动。",
+            "nextActionZh": "需要在可用的 macOS 用户图形会话/Wine 会话中重试 tester，或先重启 Wine/MT5 tester 环境。",
+        })
+    if "wineserver: bind: operation not permitted" in combined:
+        blockers.append({
+            "code": "WINE_SERVER_BIND_BLOCKED_BY_SANDBOX",
+            "severity": "terminal_environment",
+            "reasonZh": "Wine server bind 被当前沙盒/权限环境拦截，隔离 MT5 Strategy Tester 没有真正启动。",
+            "nextActionZh": "需要在已授权的非沙盒 Wine/MT5 tester 环境中重试。",
+        })
+    if terminal_exit_code == 191 and not html_report_exists:
+        blockers.append({
+            "code": "MT5_TERMINAL_EXIT_191_REPORT_MISSING",
+            "severity": "strategy_tester_runtime",
+            "reasonZh": "MT5 terminal 返回 191 且没有生成 HTML tester 报告，Strategy Tester 未完成可验证回测。",
+            "nextActionZh": "检查隔离 tester 配置、报告路径、历史数据与 MT5 tester profile；修复后在同一 tester-only lock/window 中重试。",
+        })
+    return blockers
 
 
 def tester_config_text(
@@ -664,9 +747,12 @@ def build_runner_status(args: argparse.Namespace) -> dict[str, Any]:
         profile_synced = False
         terminal_exit_code: int | None = None
         terminal_timed_out = False
+        terminal_process: dict[str, str] = {}
+        terminal_blockers: list[dict[str, str]] = []
         agent_files_copied = False
         artifact_dir = agent_artifact_root / candidate_id
         runner_status = "CONFIG_READY"
+        env: dict[str, str] | None = None
         if args.run_terminal:
             if not terminal.exists():
                 raise FileNotFoundError(f"HFM terminal not found: {terminal}")
@@ -678,19 +764,33 @@ def build_runner_status(args: argparse.Namespace) -> dict[str, Any]:
                 raise RuntimeError(f"Tester profile failed AUTO_TESTER_WINDOW guard for {candidate_id}: {blockers}")
             if profile_synced:
                 shutil.copy2(tester_profile, hfm_tester_profiles / preset_name)
-            command, cwd, env = mt5_terminal_command(terminal, config_path, args.login)
-            terminal_exit_code, terminal_timed_out = run_terminal_process(command, cwd, env, args.terminal_timeout_seconds)
+            command, cwd, env = mt5_terminal_command(terminal, config_path, args.login, args.wineprefix)
+            terminal_exit_code, terminal_timed_out, terminal_process = run_terminal_process(
+                command,
+                cwd,
+                env,
+                args.terminal_timeout_seconds,
+            )
             agent_files_copied = copy_agent_artifacts(hfm_root, artifact_dir)
             runner_status = "RUN_ATTEMPTED"
 
         metrics = parse_report(report_path)
         if agent_files_copied:
             metrics = parse_agent_artifacts(artifact_dir, metrics)
-        if metrics["reportExists"] and metrics["parseStatus"].startswith("PARSED"):
+        html_report_exists = bool(metrics.get("htmlReportExists", metrics.get("reportExists")))
+        if args.run_terminal:
+            terminal_blockers = classify_terminal_blockers(
+                terminal_process,
+                terminal_exit_code=terminal_exit_code,
+                html_report_exists=html_report_exists,
+            )
+        if html_report_exists and metrics["parseStatus"].startswith("PARSED"):
             runner_status = metrics["parseStatus"]
+        elif args.run_terminal and terminal_exit_code not in (None, 0) and not html_report_exists:
+            runner_status = "TERMINAL_EXIT_NONZERO_REPORT_MISSING"
         elif terminal_timed_out:
             runner_status = "TERMINAL_TIMEOUT"
-        elif args.run_terminal and not metrics["reportExists"]:
+        elif args.run_terminal and not html_report_exists:
             runner_status = "REPORT_MISSING_AFTER_RUN"
 
         result = {
@@ -712,6 +812,9 @@ def build_runner_status(args: argparse.Namespace) -> dict[str, Any]:
             "terminalExitCode": terminal_exit_code,
             "terminalTimedOut": terminal_timed_out,
             "terminalTimeoutSeconds": int(args.terminal_timeout_seconds or 0),
+            "winePrefix": str((env or {}).get("WINEPREFIX", "")),
+            "terminalProcess": terminal_process,
+            "terminalBlockers": terminal_blockers,
             "metrics": metrics,
             "materializedGuard": materialized_guard,
             "livePresetMutation": False,
@@ -748,8 +851,16 @@ def build_runner_status(args: argparse.Namespace) -> dict[str, Any]:
         "configReadyCount": sum(1 for item in task_results if item["status"] == "CONFIG_READY"),
         "runAttemptedCount": sum(1 for item in task_results if item["terminalExitCode"] is not None),
         "terminalTimeoutCount": sum(1 for item in task_results if item.get("terminalTimedOut")),
-        "reportParsedCount": sum(1 for item in task_results if item["metrics"].get("reportExists")),
+        "htmlReportParsedCount": sum(1 for item in task_results if item["metrics"].get("htmlReportExists")),
+        "reportParsedCount": sum(1 for item in task_results if item["metrics"].get("htmlReportExists")),
         "agentEvidenceParsedCount": sum(1 for item in task_results if item["metrics"].get("testerEvidenceExists")),
+        "terminalNonzeroCount": sum(1 for item in task_results if item.get("terminalExitCode") not in (None, 0)),
+        "terminalBlockerCodes": sorted({
+            str(blocker.get("code"))
+            for item in task_results
+            for blocker in item.get("terminalBlockers", [])
+            if blocker.get("code")
+        }),
         "selectedTaskCount": len(task_results),
         "sourceSynced": source_synced,
         "binarySynced": binary_synced,

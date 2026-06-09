@@ -110,6 +110,9 @@ class Mt5UsdJpyRsiEntryDiagnosticsTest(unittest.TestCase):
             "crossbackThreshold",
             "crossbackRule",
             "PilotRsiCrossbackThreshold",
+            "PilotStartupEntryGuardMode",
+            "startupGuardMode",
+            "PilotStartupEntryFastWarmupM1Bars",
         ]:
             self.assertIn(token, body)
 

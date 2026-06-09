@@ -19,8 +19,11 @@ input int    ClosedTradeLimit    = 50;
 input int    HistoryLookbackDays = 30;
 input bool   EnablePilotAutoTrading   = false;
 input bool   EnablePilotStartupEntryGuard = true;
+input string PilotStartupEntryGuardMode = "H1_STRICT";
 input int    PilotStartupEntryMinWaitMinutes = 15;
 input bool   PilotStartupEntryWaitNextH1Bar = true;
+input int    PilotStartupEntryFastWarmupMinutes = 5;
+input int    PilotStartupEntryFastWarmupM1Bars = 2;
 input bool   EnablePilotMA            = true;
 input bool   EnablePilotRsiH1Candidate = true;
 input bool   EnablePilotRsiH1Live      = false;
@@ -152,6 +155,26 @@ input bool   EnableUsdJpyKlineExporter  = true;
 input int    UsdJpyKlineExportIntervalMinutes = 60;
 input int    UsdJpyKlineExportMonths    = 12;
 input int    UsdJpyKlineExportMaxBarsPerTimeframe = 700000;
+input bool   EnableHfmCryptoSpecExporter = true;
+input string HfmCryptoSpecExportSymbols = "#BTCUSD,#ETHUSD,#SOLUSD,#XRPUSD,#DOGEUSD,#LTCUSD,#BTCUSDx,#ETHUSDx,#SOLUSDx,#XRPUSDx,#DOGEUSDx,BTCUSD,ETHUSD,SOLUSD,XRPUSD,DOGEUSD,LTCUSD";
+input int    HfmCryptoSpecExportMaxSymbols = 80;
+input bool   EnableEARequestReaderReviewHarness = false;
+input string EARequestReaderReviewMode = "DISABLED_REVIEW_ONLY";
+input bool   EnableEARequestReaderExecutionPath = false;
+input string EARequestReaderExecutionMode = "DISABLED_UNTIL_SEPARATE_REVIEW";
+input string EARequestReaderExecutionReleaseToken = "";
+input string EARequestReaderRequestDirectory = "runtime\\agent\\mt5_order_requests";
+input string EARequestReaderReceiptDirectory = "runtime\\agent\\mt5_order_receipts";
+input int    EARequestReaderPollSeconds = 15;
+input bool   EnableBrokerOrderSendReviewWrapper = false;
+input string BrokerOrderSendReviewMode = "DISABLED_UNTIL_SEPARATE_REVIEW";
+input string BrokerOrderSendReleaseToken = "";
+input bool   EnableReceiptWriterReconciliationPath = false;
+input string ReceiptWriterReconciliationMode = "DISABLED_UNTIL_SEPARATE_REVIEW";
+input string ReceiptWriterReleaseToken = "";
+input bool   EnableRollbackAutoDisablePath = false;
+input string RollbackAutoDisableMode = "DISABLED_UNTIL_SEPARATE_REVIEW";
+input string RollbackAutoDisableReleaseToken = "";
 input bool   EnableStrategyJsonEAContractAdapter = true;
 input string StrategyJsonEAContractFile = "QuantGod_StrategyJsonEAContract_EA.txt";
 input int    StrategyJsonEAContractShadowEvalEverySeconds = 60;
@@ -390,6 +413,8 @@ struct ShadowCandidateLedgerRecord
    double   score;
    string   regime;
    double   referencePrice;
+   double   spreadPips;
+   string   newsStatus;
    string   trigger;
    string   reason;
 };
@@ -441,6 +466,7 @@ TradeRetryState g_tradeRetryState;
 datetime g_pilotStartupTime = 0;
 datetime g_pilotStartupLocalTime = 0;
 datetime g_pilotStartupH1BarTime = 0;
+datetime g_pilotStartupM1BarTime = 0;
 
 enum ENUM_USD_NEWS_KIND
 {
@@ -504,6 +530,16 @@ void PushString(string &values[], string value)
    int size = ArraySize(values);
    ArrayResize(values, size + 1);
    values[size] = value;
+}
+
+bool StringArrayContains(string &values[], string value)
+{
+   for(int i = 0; i < ArraySize(values); i++)
+   {
+      if(values[i] == value)
+         return true;
+   }
+   return false;
 }
 
 void PushULong(ulong &values[], ulong value)
@@ -782,23 +818,50 @@ void ArmPilotStartupEntryGuard()
    g_pilotStartupTime = CurrentServerTime();
    g_pilotStartupLocalTime = TimeLocal();
    g_pilotStartupH1BarTime = 0;
+   g_pilotStartupM1BarTime = 0;
    string symbol = g_focusSymbol;
    if(StringLen(symbol) <= 0 && ArraySize(g_symbols) > 0)
       symbol = g_symbols[0];
    if(StringLen(symbol) > 0)
+   {
       g_pilotStartupH1BarTime = iTime(symbol, PERIOD_H1, 0);
+      g_pilotStartupM1BarTime = iTime(symbol, PERIOD_M1, 0);
+   }
    if(g_pilotStartupH1BarTime <= 0)
       g_pilotStartupH1BarTime = CurrentHourStart(g_pilotStartupTime);
+   if(g_pilotStartupM1BarTime <= 0)
+      g_pilotStartupM1BarTime = g_pilotStartupTime;
+}
+
+string PilotStartupEntryGuardModeValue()
+{
+   string mode = ToUpperString(PilotStartupEntryGuardMode);
+   if(mode == "FAST_WARMUP")
+      return "FAST_WARMUP";
+   if(mode == "BACKTEST_OFF")
+      return "BACKTEST_OFF";
+   return "H1_STRICT";
+}
+
+int PilotStartupEntryGuardRequiredMinutes()
+{
+   string mode = PilotStartupEntryGuardModeValue();
+   if(mode == "FAST_WARMUP")
+      return MathMax(0, PilotStartupEntryFastWarmupMinutes);
+   if(mode == "BACKTEST_OFF")
+      return 0;
+   return MathMax(0, PilotStartupEntryMinWaitMinutes);
 }
 
 int PilotStartupEntryGuardRemainingMinutes()
 {
-   if(!EnablePilotStartupEntryGuard || PilotStartupEntryMinWaitMinutes <= 0 || g_pilotStartupTime <= 0)
+   int requiredMinutes = PilotStartupEntryGuardRequiredMinutes();
+   if(!EnablePilotStartupEntryGuard || requiredMinutes <= 0 || g_pilotStartupTime <= 0)
       return 0;
    datetime now = TimeLocal();
    datetime start = g_pilotStartupLocalTime > 0 ? g_pilotStartupLocalTime : g_pilotStartupTime;
    int elapsedSeconds = (int)MathMax(0, (long)(now - start));
-   int requiredSeconds = MathMax(0, PilotStartupEntryMinWaitMinutes) * 60;
+   int requiredSeconds = requiredMinutes * 60;
    if(elapsedSeconds >= requiredSeconds)
       return 0;
    return (int)MathCeil((double)(requiredSeconds - elapsedSeconds) / 60.0);
@@ -806,7 +869,7 @@ int PilotStartupEntryGuardRemainingMinutes()
 
 bool PilotStartupEntryGuardWaitingForNextH1(string symbol)
 {
-   if(!EnablePilotStartupEntryGuard || !PilotStartupEntryWaitNextH1Bar)
+   if(!EnablePilotStartupEntryGuard || PilotStartupEntryGuardModeValue() != "H1_STRICT" || !PilotStartupEntryWaitNextH1Bar)
       return false;
    if(g_pilotStartupH1BarTime <= 0)
       return true;
@@ -818,23 +881,53 @@ bool PilotStartupEntryGuardWaitingForNextH1(string symbol)
    return (currentH1 <= g_pilotStartupH1BarTime);
 }
 
+bool PilotStartupEntryGuardWaitingForFastM1(string symbol)
+{
+   if(!EnablePilotStartupEntryGuard || PilotStartupEntryGuardModeValue() != "FAST_WARMUP")
+      return false;
+   int requiredBars = MathMax(0, PilotStartupEntryFastWarmupM1Bars);
+   if(requiredBars <= 0)
+      return false;
+   if(g_pilotStartupM1BarTime <= 0)
+      return true;
+   if(StringLen(symbol) <= 0)
+      return true;
+   datetime currentM1 = iTime(symbol, PERIOD_M1, 0);
+   if(currentM1 <= 0 || currentM1 <= g_pilotStartupM1BarTime)
+      return true;
+   int shiftedBars = iBarShift(symbol, PERIOD_M1, g_pilotStartupM1BarTime, false);
+   if(shiftedBars < 0)
+      return true;
+   return (shiftedBars < requiredBars);
+}
+
 bool PilotStartupEntryGuardBlocks(string symbol, string &reason)
 {
    reason = "";
-   if(!EnablePilotStartupEntryGuard || !IsPilotLiveMode())
+   string mode = PilotStartupEntryGuardModeValue();
+   if(!EnablePilotStartupEntryGuard || mode == "BACKTEST_OFF" || !IsPilotLiveMode())
       return false;
 
    int waitMinutes = PilotStartupEntryGuardRemainingMinutes();
    bool waitH1 = PilotStartupEntryGuardWaitingForNextH1(symbol);
-   if(waitMinutes <= 0 && !waitH1)
+   bool waitFastM1 = PilotStartupEntryGuardWaitingForFastM1(symbol);
+   if(waitMinutes <= 0 && !waitH1 && !waitFastM1)
       return false;
 
-   reason = "Pilot startup entry guard active";
+   reason = "Pilot startup entry guard active mode=" + mode;
    if(waitH1)
       reason += ": waiting for next H1 bar after EA reload";
-   if(waitMinutes > 0)
+   if(waitFastM1)
    {
       if(waitH1)
+         reason += "; ";
+      else
+         reason += ": ";
+      reason += "waiting for " + IntegerToString(MathMax(0, PilotStartupEntryFastWarmupM1Bars)) + " fresh M1 bars";
+   }
+   if(waitMinutes > 0)
+   {
+      if(waitH1 || waitFastM1)
          reason += "; ";
       else
          reason += ": ";
@@ -2450,6 +2543,111 @@ string ShadowCandidateLedgerHeader()
    return "EventId,LabelTimeLocal,LabelTimeServer,EventBarTime,Symbol,CandidateRoute,Timeframe,CandidateDirection,CandidateScore,Regime,ReferencePrice,SpreadPips,NewsStatus,Trigger,Reason\r\n";
 }
 
+double ClampUnit(double value)
+{
+   return MathMax(0.0, MathMin(1.0, value));
+}
+
+double ShadowCandidateScoreUnit(double score)
+{
+   if(score > 1.0)
+      return ClampUnit(score / 100.0);
+   return ClampUnit(score);
+}
+
+double ShadowCandidateMarketQualityScore(double spreadPips, string newsStatus)
+{
+   double maxSpread = MathMax(1.0, EffectiveShadowResearchMaxSpreadPips());
+   double spreadQuality = ClampUnit(1.0 - (spreadPips / maxSpread));
+   string normalizedNews = ToUpperString(newsStatus);
+   double newsQuality = (StringFind(normalizedNews, "BLOCK") >= 0 || StringFind(normalizedNews, "HIGH") >= 0) ? 0.35 : 1.0;
+   return ClampUnit((spreadQuality * 0.70) + (newsQuality * 0.30));
+}
+
+double ShadowCandidateProfessionalScore(double score, double marketQuality)
+{
+   return ClampUnit((ShadowCandidateScoreUnit(score) * 0.70) + (marketQuality * 0.30));
+}
+
+double ShadowCandidateExecutionRiskScore(double marketQuality)
+{
+   return ClampUnit(1.0 - marketQuality);
+}
+
+int ShadowCandidateResonanceCount(double score, string route, string trigger)
+{
+   int count = 1;
+   if(score >= 60.0)
+      count++;
+   if(score >= 70.0)
+      count++;
+   string routeUpper = ToUpperString(route);
+   string triggerUpper = ToUpperString(trigger);
+   if(StringFind(routeUpper, "TREND") >= 0 ||
+      StringFind(routeUpper, "BREAKOUT") >= 0 ||
+      StringFind(triggerUpper, "CONFIRM") >= 0)
+      count++;
+   return MathMin(count, 4);
+}
+
+double ShadowCandidateAtrPips(string symbol, string timeframeLabel)
+{
+   ENUM_TIMEFRAMES timeframe = PilotSignalTimeframe;
+   if(timeframeLabel == "M15")
+      timeframe = PERIOD_M15;
+   else if(timeframeLabel == "H1")
+      timeframe = PERIOD_H1;
+   else if(timeframeLabel == "H4")
+      timeframe = PERIOD_H4;
+   double atr = ATRValue(symbol, timeframe, PilotATRPeriod, 1);
+   double pip = PipSize(symbol);
+   if(atr <= 0.0 || pip <= 0.0)
+      return 0.0;
+   return atr / pip;
+}
+
+double ShadowCandidateTrendScore(string regime, string route)
+{
+   string regimeUpper = ToUpperString(regime);
+   string routeUpper = ToUpperString(route);
+   if(StringFind(routeUpper, "TREND") >= 0 || StringFind(routeUpper, "BREAKOUT") >= 0)
+      return 0.85;
+   if(StringFind(regimeUpper, "TREND") >= 0)
+      return 0.70;
+   if(StringFind(regimeUpper, "RANGE") >= 0)
+      return 0.35;
+   return 0.50;
+}
+
+double ShadowCandidateNewsScore(string newsStatus)
+{
+   string normalized = ToUpperString(newsStatus);
+   if(StringFind(normalized, "BLOCK") >= 0 || StringFind(normalized, "HIGH") >= 0)
+      return 0.20;
+   if(StringFind(normalized, "BIAS") >= 0)
+      return 0.65;
+   return 1.0;
+}
+
+double ShadowCandidateRiskReward(string route, double score)
+{
+   string routeUpper = ToUpperString(route);
+   if(StringFind(routeUpper, "TREND") >= 0 || StringFind(routeUpper, "BREAKOUT") >= 0)
+      return 1.80;
+   if(score >= 70.0)
+      return 1.65;
+   if(StringFind(routeUpper, "REVERSAL") >= 0 || StringFind(routeUpper, "RANGE") >= 0)
+      return 1.30;
+   return 1.50;
+}
+
+double ShadowCandidateStopLossPips(double atrPips, string route)
+{
+   string routeUpper = ToUpperString(route);
+   double multiplier = (StringFind(routeUpper, "TREND") >= 0 || StringFind(routeUpper, "BREAKOUT") >= 0) ? 1.30 : 1.00;
+   return MathMax(6.0, atrPips * multiplier);
+}
+
 void AppendShadowCandidateLedgerRowForTimeframe(string symbol, ENUM_TIMEFRAMES routeTimeframe, datetime eventBarTime, string route, int direction, double score, string trigger, string reason)
 {
    if(!EnableShadowCandidateRouter || eventBarTime <= 0 || direction == 0)
@@ -3214,8 +3412,8 @@ bool LoadShadowCandidateLedgerRecords(ShadowCandidateLedgerRecord &records[])
       record.score = StringToDouble(CsvCellValue(FileReadString(handle)));
       record.regime = CsvCellValue(FileReadString(handle));
       record.referencePrice = StringToDouble(CsvCellValue(FileReadString(handle)));
-      FileReadString(handle); // SpreadPips
-      FileReadString(handle); // NewsStatus
+      record.spreadPips = StringToDouble(CsvCellValue(FileReadString(handle)));
+      record.newsStatus = CsvCellValue(FileReadString(handle));
       record.trigger = CsvCellValue(FileReadString(handle));
       record.reason = CsvCellValue(FileReadString(handle));
 
@@ -3232,7 +3430,7 @@ bool LoadShadowCandidateLedgerRecords(ShadowCandidateLedgerRecord &records[])
 
 string BuildShadowCandidateOutcomeLedgerCsv()
 {
-   string csv = "EventId,OutcomeLabelTimeLocal,OutcomeLabelTimeServer,EventBarTime,Symbol,CandidateRoute,Timeframe,CandidateDirection,CandidateScore,Regime,ReferencePrice,HorizonBars,HorizonMinutes,FutureClose,LongClosePips,ShortClosePips,LongMFEPips,LongMAEPips,ShortMFEPips,ShortMAEPips,DirectionalOutcome,BestOpportunity,OutcomeReason\r\n";
+   string csv = "EventId,OutcomeLabelTimeLocal,OutcomeLabelTimeServer,EventBarTime,Symbol,CandidateRoute,Timeframe,CandidateDirection,CandidateScore,Regime,ReferencePrice,SpreadPips,NewsStatus,Trigger,totalScore,dataCoverageScore,professionalScore,marketQualityScore,entryTimingScore,fundFlowScore,executionRiskScore,resonanceCount,atrPips,trendScore,sentimentScore,openInterestChange,newsScore,smartMoneyScore,predictionMarketScore,kronosScore,estimatedEV,estimatedWinProbability,estimatedRiskReward,positionScaling,stopLossR,takeProfitR,tp1R,tp2R,trailingStartR,mfeGivebackPct,maxHoldMinutes,stopLossPips,takeProfitPips,entryReasons,factorAttributionSummary,HorizonBars,HorizonMinutes,FutureClose,LongClosePips,ShortClosePips,LongMFEPips,LongMAEPips,ShortMFEPips,ShortMAEPips,DirectionalOutcome,BestOpportunity,OutcomeReason\r\n";
    ShadowCandidateLedgerRecord records[];
    if(!EnableShadowCandidateRouter || !LoadShadowCandidateLedgerRecords(records))
       return csv;
@@ -3275,6 +3473,23 @@ string BuildShadowCandidateOutcomeLedgerCsv()
          string directionalOutcome = ShadowDirectionalOutcome(records[i].direction, longClosePips, shortClosePips);
          string bestOpportunity = ShadowBestOpportunity(longClosePips, shortClosePips);
          string reason = "Shadow candidate post outcome label; does not alter live order gating";
+         double totalScore = ShadowCandidateScoreUnit(records[i].score);
+         double marketQuality = ShadowCandidateMarketQualityScore(records[i].spreadPips, records[i].newsStatus);
+         double professionalScore = ShadowCandidateProfessionalScore(records[i].score, marketQuality);
+         double executionRisk = ShadowCandidateExecutionRiskScore(marketQuality);
+         int resonanceCount = ShadowCandidateResonanceCount(records[i].score, records[i].candidateRoute, records[i].trigger);
+         double atrPips = ShadowCandidateAtrPips(records[i].symbol, records[i].timeframe);
+         double trendScore = ShadowCandidateTrendScore(records[i].regime, records[i].candidateRoute);
+         double newsScore = ShadowCandidateNewsScore(records[i].newsStatus);
+         double riskReward = ShadowCandidateRiskReward(records[i].candidateRoute, records[i].score);
+         double stopLossPips = ShadowCandidateStopLossPips(atrPips, records[i].candidateRoute);
+         double takeProfitPips = stopLossPips * riskReward;
+         double estimatedWinProbability = ClampUnit((totalScore * 0.55) + (marketQuality * 0.25) + (trendScore * 0.20));
+         double estimatedEV = (estimatedWinProbability * riskReward) - (1.0 - estimatedWinProbability);
+         double positionScaling = ClampUnit((professionalScore * 0.70) + (marketQuality * 0.30));
+         string attribution = records[i].candidateRoute + " score=" + FormatNumber(records[i].score, 1) +
+                              " marketQuality=" + FormatNumber(marketQuality, 2) +
+                              " news=" + records[i].newsStatus;
 
          csv += CsvEscape(records[i].eventId) + ",";
          csv += CsvEscape(FormatDateTime(TimeLocal(), true)) + ",";
@@ -3287,6 +3502,40 @@ string BuildShadowCandidateOutcomeLedgerCsv()
          csv += FormatNumber(records[i].score, 1) + ",";
          csv += CsvEscape(records[i].regime) + ",";
          csv += FormatNumber(records[i].referencePrice, digits) + ",";
+         csv += FormatNumber(records[i].spreadPips, 1) + ",";
+         csv += CsvEscape(records[i].newsStatus) + ",";
+         csv += CsvEscape(records[i].trigger) + ",";
+         csv += FormatNumber(totalScore, 2) + ",";
+         csv += "1.00,";
+         csv += FormatNumber(professionalScore, 2) + ",";
+         csv += FormatNumber(marketQuality, 2) + ",";
+         csv += FormatNumber(totalScore, 2) + ",";
+         csv += "0.00,";
+         csv += FormatNumber(executionRisk, 2) + ",";
+         csv += IntegerToString(resonanceCount) + ",";
+         csv += FormatNumber(atrPips, 1) + ",";
+         csv += FormatNumber(trendScore, 2) + ",";
+         csv += "0.00,";
+         csv += "0.00,";
+         csv += FormatNumber(newsScore, 2) + ",";
+         csv += "0.00,";
+         csv += "0.00,";
+         csv += "0.00,";
+         csv += FormatNumber(estimatedEV, 2) + ",";
+         csv += FormatNumber(estimatedWinProbability, 2) + ",";
+         csv += FormatNumber(riskReward, 2) + ",";
+         csv += FormatNumber(positionScaling, 2) + ",";
+         csv += "1.00,";
+         csv += FormatNumber(riskReward, 2) + ",";
+         csv += "0.70,";
+         csv += FormatNumber(riskReward, 2) + ",";
+         csv += "0.80,";
+         csv += "0.35,";
+         csv += IntegerToString((int)MathMax(15, ((periodSeconds * horizonBars) / 60))) + ",";
+         csv += FormatNumber(stopLossPips, 1) + ",";
+         csv += FormatNumber(takeProfitPips, 1) + ",";
+         csv += CsvEscape(records[i].trigger) + ",";
+         csv += CsvEscape(attribution) + ",";
          csv += IntegerToString(horizonBars) + ",";
          csv += IntegerToString((periodSeconds * horizonBars) / 60) + ",";
          csv += FormatNumber(futureClose, digits) + ",";
@@ -8934,6 +9183,562 @@ string BuildSymbolsJson(SymbolSnapshot &snapshots[])
    return json;
 }
 
+// HFM Crypto Symbol Spec Export BEGIN
+string HfmCryptoCanonicalFromSymbol(string symbol)
+{
+   string upper = ToUpperString(symbol);
+   if(StringFind(upper, "BTCUSD") >= 0)
+      return "BTCUSD";
+   if(StringFind(upper, "ETHUSD") >= 0)
+      return "ETHUSD";
+   if(StringFind(upper, "SOLUSD") >= 0)
+      return "SOLUSD";
+   if(StringFind(upper, "XRPUSD") >= 0)
+      return "XRPUSD";
+   if(StringFind(upper, "DOGEUSD") >= 0)
+      return "DOGEUSD";
+   if(StringFind(upper, "LTCUSD") >= 0)
+      return "LTCUSD";
+   if(StringFind(upper, "BCHUSD") >= 0)
+      return "BCHUSD";
+   if(StringFind(upper, "ADAUSD") >= 0)
+      return "ADAUSD";
+   if(StringFind(upper, "DOTUSD") >= 0)
+      return "DOTUSD";
+   return "";
+}
+
+string ResolveHfmCryptoSpecSymbol(string token)
+{
+   string requested = TrimString(token);
+   if(StringLen(requested) == 0)
+      return "";
+   if(SymbolExistsInTerminal(requested))
+      return requested;
+
+   string canonical = HfmCryptoCanonicalFromSymbol(requested);
+   if(StringLen(canonical) == 0)
+      return "";
+
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+   {
+      string symbolName = SymbolName(i, false);
+      if(HfmCryptoCanonicalFromSymbol(symbolName) == canonical)
+         return symbolName;
+   }
+   return "";
+}
+
+bool AppendHfmCryptoSpecSymbol(string &symbols[], string symbol)
+{
+   if(ArraySize(symbols) >= HfmCryptoSpecExportMaxSymbols)
+      return false;
+   string cleanSymbol = TrimString(symbol);
+   if(StringLen(cleanSymbol) == 0)
+      return false;
+   if(StringLen(HfmCryptoCanonicalFromSymbol(cleanSymbol)) == 0)
+      return false;
+   if(!SymbolExistsInTerminal(cleanSymbol))
+      return false;
+   if(StringArrayContains(symbols, cleanSymbol))
+      return false;
+   PushString(symbols, cleanSymbol);
+   return true;
+}
+
+void CollectHfmCryptoSpecSymbols(string &symbols[])
+{
+   ArrayResize(symbols, 0);
+   string remaining = HfmCryptoSpecExportSymbols;
+   while(StringLen(remaining) > 0)
+   {
+      int commaPos = StringFind(remaining, ",");
+      string token = (commaPos >= 0) ? StringSubstr(remaining, 0, commaPos) : remaining;
+      string resolved = ResolveHfmCryptoSpecSymbol(token);
+      AppendHfmCryptoSpecSymbol(symbols, resolved);
+      if(commaPos < 0)
+         break;
+      remaining = StringSubstr(remaining, commaPos + 1);
+   }
+
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total && ArraySize(symbols) < HfmCryptoSpecExportMaxSymbols; i++)
+   {
+      string symbolName = SymbolName(i, false);
+      if(StringLen(HfmCryptoCanonicalFromSymbol(symbolName)) > 0)
+         AppendHfmCryptoSpecSymbol(symbols, symbolName);
+   }
+}
+
+string BuildHfmCryptoSpecRowJson(string symbol)
+{
+   MqlTick tick;
+   ZeroMemory(tick);
+   bool tickOk = SymbolInfoTick(symbol, tick);
+   double bid = tickOk ? tick.bid : 0.0;
+   double ask = tickOk ? tick.ask : 0.0;
+
+   string json = "{";
+   json += "\"name\":\"" + JsonEscape(symbol) + "\",";
+   json += "\"brokerSymbol\":\"" + JsonEscape(symbol) + "\",";
+   json += "\"canonicalSymbol\":\"" + JsonEscape(HfmCryptoCanonicalFromSymbol(symbol)) + "\",";
+   json += "\"description\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_DESCRIPTION)) + "\",";
+   json += "\"path\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_PATH)) + "\",";
+   json += "\"currency_base\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_BASE)) + "\",";
+   json += "\"currency_profit\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_PROFIT)) + "\",";
+   json += "\"currencyBase\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_BASE)) + "\",";
+   json += "\"currencyProfit\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_PROFIT)) + "\",";
+   json += "\"visible\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_VISIBLE)) + ",";
+   json += "\"selected\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_SELECT)) + ",";
+   json += "\"digits\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + ",";
+   json += "\"point\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_POINT), 8) + ",";
+   json += "\"spread\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_SPREAD)) + ",";
+   json += "\"spreadPips\":" + FormatNumber(tickOk ? CalcSpreadPips(symbol, bid, ask) : 0.0, 2) + ",";
+   json += "\"tradeMode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE)) + ",";
+   json += "\"tradeCalcMode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE)) + ",";
+   json += "\"calcMode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE)) + ",";
+   json += "\"tradeContractSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE), 8) + ",";
+   json += "\"tradeTickSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE), 8) + ",";
+   json += "\"tradeTickValue\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE), 8) + ",";
+   json += "\"volumeMin\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN), 8) + ",";
+   json += "\"volumeMax\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX), 8) + ",";
+   json += "\"volumeStep\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP), 8) + ",";
+   json += "\"contractSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE), 8) + ",";
+   json += "\"tickSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE), 8) + ",";
+   json += "\"tickValue\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE), 8) + ",";
+   json += "\"minLot\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN), 8) + ",";
+   json += "\"maxLot\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX), 8) + ",";
+   json += "\"lotStep\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP), 8) + ",";
+   json += "\"swapLong\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_SWAP_LONG), 8) + ",";
+   json += "\"swapShort\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_SWAP_SHORT), 8) + ",";
+   json += "\"marginInitial\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_MARGIN_INITIAL), 8) + ",";
+   json += "\"tradeEnabled\":" + JsonBool(SymbolEntryTradeAllowed(symbol));
+   json += "}";
+   return json;
+}
+
+string BuildHfmCryptoSymbolSpecsJson()
+{
+   string symbols[];
+   if(EnableHfmCryptoSpecExporter)
+      CollectHfmCryptoSpecSymbols(symbols);
+
+   string json = "{\r\n";
+   json += "  \"schema\":\"quantgod.mql5.hfm_crypto_symbol_specs.v1\",\r\n";
+   json += "  \"source\":\"MQL5_SYMBOLINFO_READONLY\",\r\n";
+   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(CurrentServerTime(), true)) + "\",\r\n";
+   json += "  \"enabled\":" + JsonBool(EnableHfmCryptoSpecExporter) + ",\r\n";
+   json += "  \"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\",\r\n";
+   json += "  \"account\":" + IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN)) + ",\r\n";
+   json += "  \"symbolCount\":" + IntegerToString(ArraySize(symbols)) + ",\r\n";
+   json += "  \"summary\":{\"candidateCount\":" + IntegerToString(ArraySize(symbols)) + ",\"symbolCount\":" + IntegerToString(ArraySize(symbols)) + "},\r\n";
+   json += "  \"symbols\":[";
+   for(int i = 0; i < ArraySize(symbols); i++)
+   {
+      if(i > 0)
+         json += ",";
+      json += "\r\n    " + BuildHfmCryptoSpecRowJson(symbols[i]);
+   }
+   if(ArraySize(symbols) > 0)
+      json += "\r\n  ";
+   json += "],\r\n";
+   json += "  \"safety\":{\"readOnly\":true,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"writesMt5OrderRequest\":false,\"symbolSelectAllowed\":false,\"livePresetMutationAllowed\":false}\r\n";
+   json += "}\r\n";
+   return json;
+}
+
+string BuildHfmCryptoRuntimeProbeRowJson(string symbol)
+{
+   MqlTick tick;
+   ZeroMemory(tick);
+   bool tickOk = SymbolInfoTick(symbol, tick);
+   long digits = SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   int digitsInt = (digits > 0) ? (int)digits : 5;
+   long spread = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
+   long spreadFloat = SymbolInfoInteger(symbol, SYMBOL_SPREAD_FLOAT);
+   long tradeMode = SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double liveSpread = (tickOk && tick.ask > tick.bid) ? (tick.ask - tick.bid) : 0.0;
+   double spreadPoints = (point > 0.0 && liveSpread > 0.0) ? (liveSpread / point) : (double)spread;
+
+   string json = "{";
+   json += "\"brokerSymbol\":\"" + JsonEscape(symbol) + "\",";
+   json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
+   json += "\"canonicalSymbol\":\"" + JsonEscape(HfmCryptoCanonicalFromSymbol(symbol)) + "\",";
+   json += "\"source\":\"MQL5_SYMBOLINFO_READONLY_MULTISTRATEGY_RUNTIME_PROBE\",";
+   json += "\"description\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_DESCRIPTION)) + "\",";
+   json += "\"path\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_PATH)) + "\",";
+   json += "\"visible\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_VISIBLE)) + ",";
+   json += "\"selected\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_SELECT)) + ",";
+   json += "\"digits\":" + IntegerToString((int)digits) + ",";
+   json += "\"point\":" + FormatNumber(point, 8) + ",";
+   json += "\"spread\":" + IntegerToString((int)spread) + ",";
+   json += "\"spreadFloat\":" + JsonBool(spreadFloat != 0) + ",";
+   json += "\"spreadPoints\":" + FormatNumber(spreadPoints, 2) + ",";
+   json += "\"tradeMode\":" + IntegerToString((int)tradeMode) + ",";
+   json += "\"tradeEnabled\":" + JsonBool(SymbolEntryTradeAllowed(symbol)) + ",";
+   json += "\"tickOk\":" + JsonBool(tickOk && tick.ask > tick.bid) + ",";
+   json += "\"bid\":" + FormatNumber(tickOk ? tick.bid : 0.0, digitsInt) + ",";
+   json += "\"ask\":" + FormatNumber(tickOk ? tick.ask : 0.0, digitsInt) + ",";
+   json += "\"time\":" + IntegerToString((long)(tickOk ? tick.time : 0));
+   json += "}";
+   return json;
+}
+
+string BuildHfmCryptoRuntimeProbeJson()
+{
+   string symbols[];
+   if(EnableHfmCryptoSpecExporter)
+      CollectHfmCryptoSpecSymbols(symbols);
+
+   datetime serverClock = CurrentServerTime();
+   string json = "{\r\n";
+   json += "  \"schema\":\"quantgod.mql5.hfm_crypto_runtime_probe.v1\",\r\n";
+   json += "  \"source\":\"MQL5_SYMBOLINFO_READONLY_MULTISTRATEGY_RUNTIME_PROBE\",\r\n";
+   json += "  \"expert\":\"QuantGod_MultiStrategy.mq5\",\r\n";
+   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(serverClock, true)) + "\",\r\n";
+   json += "  \"chartSymbol\":\"" + JsonEscape(_Symbol) + "\",\r\n";
+   json += "  \"focusSymbol\":\"" + JsonEscape(g_focusSymbol) + "\",\r\n";
+   json += "  \"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\",\r\n";
+   json += "  \"account\":" + IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN)) + ",\r\n";
+   json += "  \"candidateSymbolsScanned\":" + IntegerToString(ArraySize(symbols)) + ",\r\n";
+   json += "  \"symbolCount\":" + IntegerToString(ArraySize(symbols)) + ",\r\n";
+   json += "  \"symbols\":[";
+   for(int i = 0; i < ArraySize(symbols); i++)
+   {
+      if(i > 0)
+         json += ",";
+      json += "\r\n    " + BuildHfmCryptoRuntimeProbeRowJson(symbols[i]);
+   }
+   if(ArraySize(symbols) > 0)
+      json += "\r\n  ";
+   json += "],\r\n";
+   json += "  \"runtime\":{\"readOnlyMode\":" + JsonBool(ReadOnlyMode) + ",\"executionEnabled\":" + JsonBool(!ReadOnlyMode) + ",\"livePilotMode\":" + JsonBool(IsPilotLiveMode()) + ",\"tradeAllowed\":false,\"tradeStatus\":\"HFM_CRYPTO_RUNTIME_PROBE_ONLY\"},\r\n";
+   json += "  \"safety\":{\"readOnly\":true,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"writesMt5OrderRequest\":false,\"symbolSelectAllowed\":false,\"livePresetMutationAllowed\":false}\r\n";
+   json += "}\r\n";
+   return json;
+}
+
+void WriteHfmCryptoReadOnlyEvidenceFiles(string hfmCryptoSymbolSpecsJson, string hfmCryptoRuntimeProbeJson)
+{
+   WriteTextFile("QuantGod_HFMCryptoSymbolSpecs.json", hfmCryptoSymbolSpecsJson);
+   FolderCreate("hfm_crypto");
+   WriteTextFile("hfm_crypto\\QuantGod_HFMCryptoSymbolSpecs.json", hfmCryptoSymbolSpecsJson);
+   WriteTextFile("hfm_crypto\\QuantGod_HFMCryptoRuntimeProbe.json", hfmCryptoRuntimeProbeJson);
+   WriteTextFile("QuantGod_HFMCryptoRuntimeProbe.json", hfmCryptoRuntimeProbeJson);
+}
+
+void ExportHfmCryptoReadOnlyEvidenceFiles()
+{
+   if(!EnableHfmCryptoSpecExporter)
+      return;
+   string hfmCryptoSymbolSpecsJson = BuildHfmCryptoSymbolSpecsJson();
+   string hfmCryptoRuntimeProbeJson = BuildHfmCryptoRuntimeProbeJson();
+   WriteHfmCryptoReadOnlyEvidenceFiles(hfmCryptoSymbolSpecsJson, hfmCryptoRuntimeProbeJson);
+}
+// HFM Crypto Symbol Spec Export END
+
+// EA Request Reader Review Harness BEGIN
+// QG_EA_REQUEST_READER_DISABLED_BY_DEFAULT
+// QG_EA_REQUEST_SCHEMA_VALIDATION_REQUIRED
+// QG_EA_IDEMPOTENCY_REQUEST_ID_REQUIRED
+// QG_EA_KILL_SWITCH_REQUIRED
+// QG_EA_RECEIPT_WRITER_REQUIRED
+// QG_EA_ORDER_SEND_REQUIRES_SEPARATE_REVIEW
+string BuildEARequestReaderReviewStatusJson()
+{
+   bool operatorRequested = EnableEARequestReaderReviewHarness;
+   bool effectiveEnabled = false;
+   string status = operatorRequested ? "BLOCKED_REQUIRES_SEPARATE_REVIEW" : "DISABLED_BY_DEFAULT";
+   string reason = operatorRequested
+                   ? "EA request reader harness is present for code review only; separate implementation review is required before reading request files."
+                   : "EA request reader is disabled by default and performs no file reads, receipt writes, or broker calls.";
+
+   string json = "{\r\n";
+   json += "  \"schema\":\"quantgod.mql5.ea_request_reader_review_status.v1\",\r\n";
+   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(CurrentServerTime(), true)) + "\",\r\n";
+   json += "  \"status\":\"" + JsonEscape(status) + "\",\r\n";
+   json += "  \"reason\":\"" + JsonEscape(reason) + "\",\r\n";
+   json += "  \"operatorRequested\":" + JsonBool(operatorRequested) + ",\r\n";
+   json += "  \"effectiveEnabled\":" + JsonBool(effectiveEnabled) + ",\r\n";
+   json += "  \"configuredMode\":\"" + JsonEscape(EARequestReaderReviewMode) + "\",\r\n";
+   json += "  \"requestDirectory\":\"" + JsonEscape(EARequestReaderRequestDirectory) + "\",\r\n";
+   json += "  \"receiptDirectory\":\"" + JsonEscape(EARequestReaderReceiptDirectory) + "\",\r\n";
+   json += "  \"pollSeconds\":" + IntegerToString(MathMax(1, EARequestReaderPollSeconds)) + ",\r\n";
+   json += "  \"contract\":{\"requestSchema\":\"quantgod.mt5_reviewed_order_request.v1\",\"receiptSchema\":\"quantgod.mt5_execution_receipt.v1\",\"idempotencyKey\":\"requestId\",\"oneRequestPerIntentId\":true,\"atomicReceiptWriteRequired\":true},\r\n";
+   json += "  \"markerChecks\":{\"disabledByDefault\":true,\"schemaValidationRequired\":true,\"idempotencyRequestIdRequired\":true,\"killSwitchRequired\":true,\"receiptWriterRequired\":true,\"orderSendRequiresSeparateReview\":true},\r\n";
+   json += "  \"requiredRuntimeFuses\":[\"request_reader_disabled_by_default\",\"schema_validation_before_any_side_effect\",\"request_id_idempotency\",\"kill_switch_inactive\",\"runtime_fresh\",\"spread_probe_ok\",\"symbol_mapping_ok\",\"receipt_written_for_every_request\",\"separate_order_send_code_review\"],\r\n";
+   json += "  \"safety\":{\"reviewOnly\":true,\"requestFilesRead\":false,\"requestFilesConsumed\":false,\"receiptFilesWritten\":false,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"brokerCallsMade\":false,\"livePresetMutationAllowed\":false,\"credentialStorageAllowed\":false}\r\n";
+   json += "}\r\n";
+   return json;
+}
+// EA Request Reader Review Harness END
+
+// EA Request Reader Execution Skeleton BEGIN
+// QG_EA_REQUEST_READER_EXECUTION_DISABLED_BY_DEFAULT
+// QG_EA_REQUEST_READER_EXECUTION_SEPARATE_FROM_REVIEW_HARNESS
+// QG_EA_REQUEST_READER_EXECUTION_REQUIRES_PYTHON_WRITER
+// QG_EA_REQUEST_READER_EXECUTION_REQUIRES_RECEIPT_RECONCILIATION
+// QG_EA_REQUEST_READER_EXECUTION_REQUIRES_BROKER_SEND_REVIEW
+// QG_EA_REQUEST_READER_EXECUTION_VALIDATION_MATRIX
+// QG_EA_REQUEST_READER_EXECUTION_REJECTION_RECEIPT_PLAN
+// QG_EA_REQUEST_READER_EXECUTION_RELEASE_TOKEN_REQUIRED
+string BuildEARequestReaderExecutionRequiredFieldsJson()
+{
+   return "[\"requestId\",\"schema\",\"createdAtIso\",\"reviewPacketHash\",\"runtimePreflightHash\",\"operatorApprovalId\",\"lane\",\"brokerSymbol\",\"canonicalSymbol\",\"side\",\"orderType\",\"volumeLots\",\"killSwitchOk\",\"runtimeFresh\",\"spreadProbeOk\",\"symbolMappingOk\",\"dryRunReplayPassed\"]";
+}
+
+string BuildEARequestReaderExecutionRequiredTrueFusesJson()
+{
+   return "[\"killSwitchOk\",\"runtimeFresh\",\"spreadProbeOk\",\"symbolMappingOk\",\"dryRunReplayPassed\"]";
+}
+
+string BuildEARequestReaderExecutionAllowedValuesJson()
+{
+   string json = "{";
+   json += "\"schema\":\"quantgod.mt5_reviewed_order_request.v1\",";
+   json += "\"side\":[\"BUY\",\"SELL\"],";
+   json += "\"orderType\":[\"MARKET\",\"LIMIT\",\"STOP\"],";
+   json += "\"requestIdPattern\":\"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$\",";
+   json += "\"volumeLotsMin\":0.0";
+   json += "}";
+   return json;
+}
+
+string BuildEARequestReaderExecutionRejectionMatrixJson()
+{
+   string json = "[";
+   json += "{\"code\":\"REQUEST_SCHEMA_MISMATCH\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_REQUIRED_FIELDS_MISSING\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_ID_INVALID\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_SIDE_INVALID\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_ORDER_TYPE_INVALID\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_VOLUME_INVALID\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_VOLUME_NEGATIVE\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_FUSE_NOT_TRUE\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_DUPLICATE_REQUEST_ID\",\"receiptStatus\":\"duplicate\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"REQUEST_EXPIRED_OR_STALE_RUNTIME\",\"receiptStatus\":\"expired\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"KILL_SWITCH_ACTIVE\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false},";
+   json += "{\"code\":\"SPREAD_OR_SYMBOL_MAPPING_BLOCKED\",\"receiptStatus\":\"rejected\",\"brokerSendAllowed\":false}";
+   json += "]";
+   return json;
+}
+
+string BuildEARequestReaderExecutionStatusJson()
+{
+   bool operatorRequested = EnableEARequestReaderExecutionPath;
+   bool releaseTokenProvided = (EARequestReaderExecutionReleaseToken == "QG_REVIEWED_EA_REQUEST_READER_RELEASE_V1");
+   bool effectiveEnabled = false;
+   string status = operatorRequested ? "BLOCKED_REQUIRES_SEPARATE_EXECUTION_REVIEW" : "EXECUTION_READER_DISABLED_BY_DEFAULT";
+   string reason = operatorRequested
+                   ? "EA request reader execution path remains blocked until writer, reader, receipt, broker-send and rollback reviews are all deployed."
+                   : "EA request reader execution path is present only as a disabled skeleton and performs no file reads, receipt writes, or broker calls.";
+
+   string json = "{\r\n";
+   json += "  \"schema\":\"quantgod.mql5.ea_request_reader_execution_status.v1\",\r\n";
+   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(CurrentServerTime(), true)) + "\",\r\n";
+   json += "  \"status\":\"" + JsonEscape(status) + "\",\r\n";
+   json += "  \"reason\":\"" + JsonEscape(reason) + "\",\r\n";
+   json += "  \"operatorRequested\":" + JsonBool(operatorRequested) + ",\r\n";
+   json += "  \"effectiveEnabled\":" + JsonBool(effectiveEnabled) + ",\r\n";
+   json += "  \"configuredMode\":\"" + JsonEscape(EARequestReaderExecutionMode) + "\",\r\n";
+   json += "  \"releaseGate\":{\"tokenRequired\":true,\"tokenProvided\":" + JsonBool(releaseTokenProvided) + ",\"tokenName\":\"QG_REVIEWED_EA_REQUEST_READER_RELEASE_V1\",\"blockerCode\":\"REQUEST_READER_RELEASE_TOKEN_MISSING\",\"reason\":\"EA request reader cannot read or consume request files without a separately reviewed release token.\"},\r\n";
+   json += "  \"separateFromReviewHarness\":true,\r\n";
+   json += "  \"requestDirectory\":\"" + JsonEscape(EARequestReaderRequestDirectory) + "\",\r\n";
+   json += "  \"receiptDirectory\":\"" + JsonEscape(EARequestReaderReceiptDirectory) + "\",\r\n";
+   json += "  \"pollSeconds\":" + IntegerToString(MathMax(1, EARequestReaderPollSeconds)) + ",\r\n";
+   json += "  \"contract\":{\"requestSchema\":\"quantgod.mt5_reviewed_order_request.v1\",\"receiptSchema\":\"quantgod.mt5_execution_receipt.v1\",\"idempotencyKey\":\"requestId\",\"atomicReceiptWriteRequired\":true,\"brokerSendRequiresSeparateReview\":true},\r\n";
+   json += "  \"validation\":{\"requiredFields\":" + BuildEARequestReaderExecutionRequiredFieldsJson() + ",\"requiredTrueFuses\":" + BuildEARequestReaderExecutionRequiredTrueFusesJson() + ",\"allowedValues\":" + BuildEARequestReaderExecutionAllowedValuesJson() + "},\r\n";
+   json += "  \"rejectionMatrix\":" + BuildEARequestReaderExecutionRejectionMatrixJson() + ",\r\n";
+   json += "  \"requiredPackages\":[\"python_request_writer\",\"mql5_request_reader\",\"mql5_broker_order_send_wrapper\",\"receipt_writer_and_reconciliation\",\"rollback_auto_disable\"],\r\n";
+   json += "  \"implementedNow\":[\"disabled_status_export\",\"directory_contract_export\",\"package_dependency_export\",\"request_contract_validation_matrix\",\"rejection_receipt_plan\"],\r\n";
+   json += "  \"notImplementedYet\":[\"request_file_polling\",\"request_file_parse\",\"receipt_file_write\",\"broker_order_send\",\"auto_disable_mutation\"],\r\n";
+   json += "  \"safety\":{\"reviewOnly\":true,\"requestFilesRead\":false,\"requestFilesConsumed\":false,\"receiptFilesWritten\":false,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"brokerCallsMade\":false,\"livePresetMutationAllowed\":false,\"credentialStorageAllowed\":false}\r\n";
+   json += "}\r\n";
+   return json;
+}
+// EA Request Reader Execution Skeleton END
+
+// Broker Order Send Review Wrapper BEGIN
+// QG_BROKER_ORDER_SEND_WRAPPER_DISABLED_BY_DEFAULT
+// QG_BROKER_ORDER_SEND_WRAPPER_REQUIRES_VALIDATED_REQUEST
+// QG_BROKER_ORDER_SEND_WRAPPER_REQUIRES_ACCOUNT_SERVER_BINDING
+// QG_BROKER_ORDER_SEND_WRAPPER_REQUIRES_RISK_FUSES
+// QG_BROKER_ORDER_SEND_WRAPPER_REQUIRES_RECEIPT_OUTPUT
+// QG_BROKER_ORDER_SEND_WRAPPER_RELEASE_TOKEN_REQUIRED
+string BuildBrokerOrderSendWrapperRequiredFusesJson()
+{
+   return "[\"validatedRequestReader\",\"accountServerMatched\",\"symbolMappingOk\",\"volumeStepOk\",\"maxLotOk\",\"spreadProbeOk\",\"killSwitchOk\",\"dailyLossOk\",\"positionCapOk\",\"runtimeFresh\",\"receiptPlanReady\"]";
+}
+
+string BuildBrokerOrderSendWrapperRetcodePlanJson()
+{
+   string json = "[";
+   json += "{\"stage\":\"pre_broker_validation\",\"receiptStatus\":\"rejected\",\"ticketAllowed\":false},";
+   json += "{\"stage\":\"broker_call_not_released\",\"receiptStatus\":\"rejected\",\"ticketAllowed\":false},";
+   json += "{\"stage\":\"future_broker_retcode_rejected\",\"receiptStatus\":\"rejected\",\"ticketAllowed\":false},";
+   json += "{\"stage\":\"future_broker_retcode_accepted\",\"receiptStatus\":\"accepted\",\"ticketAllowed\":\"only_after_separate_review\"}";
+   json += "]";
+   return json;
+}
+
+string BuildBrokerOrderSendWrapperStatusJson()
+{
+   bool operatorRequested = EnableBrokerOrderSendReviewWrapper;
+   bool effectiveEnabled = false;
+   bool releaseTokenProvided = (BrokerOrderSendReleaseToken == "QG_REVIEWED_BROKER_ORDER_SEND_RELEASE_V1");
+   string status = operatorRequested ? "BLOCKED_REQUIRES_SEPARATE_BROKER_SEND_REVIEW" : "BROKER_SEND_WRAPPER_DISABLED_BY_DEFAULT";
+   string reason = operatorRequested
+                   ? "Broker order send wrapper remains blocked until EA request consumption, receipt writing, risk fuses, rollback and final broker-send review are all deployed."
+                   : "Broker order send wrapper is a disabled contract skeleton only and performs no broker calls.";
+
+   string json = "{\r\n";
+   json += "  \"schema\":\"quantgod.mql5.broker_order_send_wrapper_status.v1\",\r\n";
+   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(CurrentServerTime(), true)) + "\",\r\n";
+   json += "  \"status\":\"" + JsonEscape(status) + "\",\r\n";
+   json += "  \"reason\":\"" + JsonEscape(reason) + "\",\r\n";
+   json += "  \"operatorRequested\":" + JsonBool(operatorRequested) + ",\r\n";
+   json += "  \"effectiveEnabled\":" + JsonBool(effectiveEnabled) + ",\r\n";
+   json += "  \"configuredMode\":\"" + JsonEscape(BrokerOrderSendReviewMode) + "\",\r\n";
+   json += "  \"entryPoint\":\"validated_ea_request_reader_only\",\r\n";
+   json += "  \"releaseGate\":{\"tokenRequired\":true,\"tokenProvided\":" + JsonBool(releaseTokenProvided) + ",\"tokenName\":\"QG_REVIEWED_BROKER_ORDER_SEND_RELEASE_V1\",\"blockerCode\":\"BROKER_ORDER_SEND_RELEASE_TOKEN_MISSING\",\"reason\":\"Broker OrderSend wrapper cannot call OrderSend without a separately reviewed release token.\"},\r\n";
+   json += "  \"requiredFuses\":" + BuildBrokerOrderSendWrapperRequiredFusesJson() + ",\r\n";
+   json += "  \"retcodeReceiptPlan\":" + BuildBrokerOrderSendWrapperRetcodePlanJson() + ",\r\n";
+   json += "  \"implementedNow\":[\"disabled_status_export\",\"fuse_contract_export\",\"retcode_receipt_plan\"],\r\n";
+   json += "  \"notImplementedYet\":[\"broker_order_send_call\",\"ticket_receipt_write\",\"slippage_reconciliation\",\"auto_disable_mutation\"],\r\n";
+   json += "  \"safety\":{\"reviewOnly\":true,\"validatedRequestRequired\":true,\"brokerCallsMade\":false,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"ticketReceiptWritten\":false,\"livePresetMutationAllowed\":false,\"credentialStorageAllowed\":false}\r\n";
+   json += "}\r\n";
+   return json;
+}
+// Broker Order Send Review Wrapper END
+
+// Receipt Writer Reconciliation Skeleton BEGIN
+// QG_RECEIPT_WRITER_RECONCILIATION_DISABLED_BY_DEFAULT
+// QG_RECEIPT_WRITER_RECONCILIATION_REQUIRES_REQUEST_ID
+// QG_RECEIPT_WRITER_RECONCILIATION_REQUIRES_ATOMIC_WRITE
+// QG_RECEIPT_WRITER_RECONCILIATION_REQUIRES_ONE_RECEIPT_PER_REQUEST
+// QG_RECEIPT_WRITER_RECONCILIATION_BLOCKS_ORPHAN_TICKET
+// QG_RECEIPT_WRITER_RECONCILIATION_RELEASE_TOKEN_REQUIRED
+string BuildReceiptWriterStatusEnumJson()
+{
+   return "[\"accepted\",\"rejected\",\"duplicate\",\"expired\"]";
+}
+
+string BuildReceiptWriterRequiredFieldsJson()
+{
+   return "[\"schema\",\"requestId\",\"receiptId\",\"generatedAtServer\",\"status\",\"reasonCode\",\"reviewPacketHash\",\"runtimePreflightHash\",\"brokerSymbol\",\"canonicalSymbol\",\"side\",\"orderType\",\"volumeLots\",\"brokerCallsMade\",\"orderSendAllowed\",\"mt5OrderSendAllowed\",\"safetySnapshotHash\"]";
+}
+
+string BuildReceiptReconciliationBlockMatrixJson()
+{
+   string json = "[";
+   json += "{\"code\":\"MISSING_RECEIPT_FOR_REQUEST\",\"blocksCutover\":true,\"autoDisableRequired\":true},";
+   json += "{\"code\":\"ORPHAN_RECEIPT_WITHOUT_REQUEST\",\"blocksCutover\":true,\"autoDisableRequired\":true},";
+   json += "{\"code\":\"REVIEW_ONLY_RECEIPT_HAS_TICKET\",\"blocksCutover\":true,\"autoDisableRequired\":true},";
+   json += "{\"code\":\"RECEIPT_HASH_MISMATCH\",\"blocksCutover\":true,\"autoDisableRequired\":true},";
+   json += "{\"code\":\"DUPLICATE_REQUEST_WITH_ACCEPTED_RECEIPT\",\"blocksCutover\":true,\"autoDisableRequired\":true},";
+   json += "{\"code\":\"FAILED_BROKER_RETCODE_WITHOUT_REJECTION_REASON\",\"blocksCutover\":true,\"autoDisableRequired\":true}";
+   json += "]";
+   return json;
+}
+
+string BuildReceiptWriterReconciliationStatusJson()
+{
+   bool operatorRequested = EnableReceiptWriterReconciliationPath;
+   bool effectiveEnabled = false;
+   bool releaseTokenProvided = (ReceiptWriterReleaseToken == "QG_REVIEWED_RECEIPT_WRITER_RELEASE_V1");
+   string status = operatorRequested ? "BLOCKED_REQUIRES_SEPARATE_RECEIPT_REVIEW" : "RECEIPT_WRITER_RECONCILIATION_DISABLED_BY_DEFAULT";
+   string reason = operatorRequested
+                   ? "Receipt writer and reconciliation path remains blocked until request consumption, broker wrapper, atomic writes and rollback review are all deployed."
+                   : "Receipt writer and reconciliation path is a disabled contract skeleton only and writes no receipt files.";
+
+   string json = "{\r\n";
+   json += "  \"schema\":\"quantgod.mql5.receipt_writer_reconciliation_status.v1\",\r\n";
+   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(CurrentServerTime(), true)) + "\",\r\n";
+   json += "  \"status\":\"" + JsonEscape(status) + "\",\r\n";
+   json += "  \"reason\":\"" + JsonEscape(reason) + "\",\r\n";
+   json += "  \"operatorRequested\":" + JsonBool(operatorRequested) + ",\r\n";
+   json += "  \"effectiveEnabled\":" + JsonBool(effectiveEnabled) + ",\r\n";
+   json += "  \"configuredMode\":\"" + JsonEscape(ReceiptWriterReconciliationMode) + "\",\r\n";
+   json += "  \"receiptDirectory\":\"" + JsonEscape(EARequestReaderReceiptDirectory) + "\",\r\n";
+   json += "  \"releaseGate\":{\"tokenRequired\":true,\"tokenProvided\":" + JsonBool(releaseTokenProvided) + ",\"tokenName\":\"QG_REVIEWED_RECEIPT_WRITER_RELEASE_V1\",\"blockerCode\":\"RECEIPT_WRITER_RELEASE_TOKEN_MISSING\",\"reason\":\"Receipt writer cannot write or reconcile live receipts without a separately reviewed release token.\"},\r\n";
+   json += "  \"contract\":{\"receiptSchema\":\"quantgod.mt5_execution_receipt.v1\",\"idempotencyKey\":\"requestId\",\"atomicWriteRequired\":true,\"oneReceiptPerRequest\":true,\"reviewOnlyTicketForbidden\":true},\r\n";
+   json += "  \"requiredFields\":" + BuildReceiptWriterRequiredFieldsJson() + ",\r\n";
+   json += "  \"statusEnum\":" + BuildReceiptWriterStatusEnumJson() + ",\r\n";
+   json += "  \"reconciliationBlockMatrix\":" + BuildReceiptReconciliationBlockMatrixJson() + ",\r\n";
+   json += "  \"implementedNow\":[\"disabled_status_export\",\"receipt_contract_export\",\"reconciliation_block_matrix\"],\r\n";
+   json += "  \"notImplementedYet\":[\"receipt_file_atomic_write\",\"receipt_directory_scan\",\"ticket_reconciliation\",\"auto_disable_mutation\"],\r\n";
+   json += "  \"safety\":{\"reviewOnly\":true,\"receiptFilesWritten\":false,\"receiptDirectoryScanned\":false,\"ticketReceiptWritten\":false,\"brokerCallsMade\":false,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"autoDisableMutationAllowed\":false,\"livePresetMutationAllowed\":false}\r\n";
+   json += "}\r\n";
+   return json;
+}
+// Receipt Writer Reconciliation Skeleton END
+
+// Rollback Auto Disable Skeleton BEGIN
+// QG_ROLLBACK_AUTO_DISABLE_DISABLED_BY_DEFAULT
+// QG_ROLLBACK_AUTO_DISABLE_REQUIRES_RECEIPT_RECONCILIATION
+// QG_ROLLBACK_AUTO_DISABLE_REQUIRES_RUNTIME_STALE_CHECK
+// QG_ROLLBACK_AUTO_DISABLE_REQUIRES_MANUAL_REARM_REVIEW
+// QG_ROLLBACK_AUTO_DISABLE_FORBIDS_LIVE_PRESET_MUTATION
+// QG_ROLLBACK_AUTO_DISABLE_RELEASE_TOKEN_REQUIRED
+string BuildRollbackAutoDisableTriggerMatrixJson()
+{
+   string json = "[";
+   json += "{\"code\":\"MISSING_RECEIPT_FOR_REQUEST\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"FAILED_OR_REJECTED_RECEIPT\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"BROKER_RETCODE_ERROR\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"SLIPPAGE_EXCEEDS_LIMIT\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"SYMBOL_MISMATCH\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"DAILY_LOSS_LIMIT\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"EA_STATUS_STALE\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"REQUEST_REPLAY_OR_DUPLICATE_ACCEPTED\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false},";
+   json += "{\"code\":\"UNEXPECTED_READER_ENABLED_BEFORE_REVIEW\",\"autoDisableRequired\":true,\"livePresetMutationAllowed\":false}";
+   json += "]";
+   return json;
+}
+
+string BuildRollbackManualRearmRequirementsJson()
+{
+   return "[\"fresh_operator_approval\",\"fresh_runtime_preflight_hash\",\"receipt_reconciliation_passed\",\"broker_send_review_passed\",\"dashboard_runtime_fresh\",\"live_preset_diff_reviewed\"]";
+}
+
+string BuildRollbackAutoDisableStatusJson()
+{
+   bool operatorRequested = EnableRollbackAutoDisablePath;
+   bool effectiveEnabled = false;
+   bool releaseTokenProvided = (RollbackAutoDisableReleaseToken == "QG_REVIEWED_ROLLBACK_AUTO_DISABLE_RELEASE_V1");
+   string status = operatorRequested ? "BLOCKED_REQUIRES_SEPARATE_ROLLBACK_REVIEW" : "ROLLBACK_AUTO_DISABLE_DISABLED_BY_DEFAULT";
+   string reason = operatorRequested
+                   ? "Rollback and auto-disable path remains blocked until receipt reconciliation, runtime stale checks, manual re-arm review and preset mutation review are all deployed."
+                   : "Rollback and auto-disable path is a disabled contract skeleton only and mutates no live preset or startup config.";
+
+   string json = "{\r\n";
+   json += "  \"schema\":\"quantgod.mql5.rollback_auto_disable_status.v1\",\r\n";
+   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(CurrentServerTime(), true)) + "\",\r\n";
+   json += "  \"status\":\"" + JsonEscape(status) + "\",\r\n";
+   json += "  \"reason\":\"" + JsonEscape(reason) + "\",\r\n";
+   json += "  \"operatorRequested\":" + JsonBool(operatorRequested) + ",\r\n";
+   json += "  \"effectiveEnabled\":" + JsonBool(effectiveEnabled) + ",\r\n";
+   json += "  \"configuredMode\":\"" + JsonEscape(RollbackAutoDisableMode) + "\",\r\n";
+   json += "  \"releaseGate\":{\"tokenRequired\":true,\"tokenProvided\":" + JsonBool(releaseTokenProvided) + ",\"tokenName\":\"QG_REVIEWED_ROLLBACK_AUTO_DISABLE_RELEASE_V1\",\"blockerCode\":\"ROLLBACK_AUTO_DISABLE_RELEASE_TOKEN_MISSING\",\"reason\":\"Rollback auto-disable cannot mutate live state without a separately reviewed release token.\"},\r\n";
+   json += "  \"triggerMatrix\":" + BuildRollbackAutoDisableTriggerMatrixJson() + ",\r\n";
+   json += "  \"manualRearmRequirements\":" + BuildRollbackManualRearmRequirementsJson() + ",\r\n";
+   json += "  \"implementedNow\":[\"disabled_status_export\",\"trigger_matrix_export\",\"manual_rearm_requirements_export\"],\r\n";
+   json += "  \"notImplementedYet\":[\"auto_disable_state_write\",\"live_preset_mutation\",\"runtime_rearm\",\"receipt_directory_scan\"],\r\n";
+   json += "  \"safety\":{\"reviewOnly\":true,\"autoDisableMutationAllowed\":false,\"livePresetMutationAllowed\":false,\"writesMt5Preset\":false,\"writesStartupConfig\":false,\"brokerCallsMade\":false,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false}\r\n";
+   json += "}\r\n";
+   return json;
+}
+// Rollback Auto Disable Skeleton END
+
 string BuildRootStrategiesJson()
 {
    string json = "{";
@@ -9139,7 +9944,7 @@ string BuildUsdJpyRsiEntryDiagnosticsJson()
    else if(startupGuardActive)
    {
       state = "STARTUP_GUARD";
-      summary = "启动保护正在等待最小时间或下一根 H1 K 线。";
+      summary = "启动保护正在等待当前模式要求的最小时间或新 K 线。";
       AppendEntryDiagnosticReason(whyItems, "STARTUP_GUARD", "启动保护中", startupReason);
    }
    else if(!sessionOpen)
@@ -9199,6 +10004,10 @@ string BuildUsdJpyRsiEntryDiagnosticsJson()
    json += "\"PilotRsiOverbought\": " + FormatNumber(PilotRsiOverbought, 2) + ", ";
    json += "\"PilotRsiCrossbackThreshold\": " + FormatNumber(crossbackThreshold, 2) + ", ";
    json += "\"PilotRsiBandTolerancePct\": " + FormatNumber(PilotRsiBandTolerancePct, 4) + ", ";
+   json += "\"PilotStartupEntryGuardMode\": \"" + JsonEscape(PilotStartupEntryGuardModeValue()) + "\", ";
+   json += "\"PilotStartupEntryMinWaitMinutes\": " + IntegerToString(PilotStartupEntryMinWaitMinutes) + ", ";
+   json += "\"PilotStartupEntryFastWarmupMinutes\": " + IntegerToString(PilotStartupEntryFastWarmupMinutes) + ", ";
+   json += "\"PilotStartupEntryFastWarmupM1Bars\": " + IntegerToString(PilotStartupEntryFastWarmupM1Bars) + ", ";
    json += "\"PilotMaxSpreadPips\": " + FormatNumber(PilotMaxSpreadPips, 1) + ", ";
    json += "\"PilotSoftMaxSpreadPips\": " + FormatNumber(PilotSoftMaxSpreadPips, 1) + ", ";
    json += "\"PilotHardMaxSpreadPips\": " + FormatNumber(PilotHardMaxSpreadPips, 1) + ", ";
@@ -9248,6 +10057,9 @@ string BuildUsdJpyRsiEntryDiagnosticsJson()
    json += "\"cooldownReason\": \"" + JsonEscape(cooldownReason) + "\", ";
    json += "\"startupGuardActive\": " + JsonBool(startupGuardActive) + ", ";
    json += "\"startupGuardReason\": \"" + JsonEscape(startupReason) + "\", ";
+   json += "\"startupGuardMode\": \"" + JsonEscape(PilotStartupEntryGuardModeValue()) + "\", ";
+   json += "\"startupFastWarmupMinutes\": " + IntegerToString(PilotStartupEntryFastWarmupMinutes) + ", ";
+   json += "\"startupFastWarmupM1Bars\": " + IntegerToString(PilotStartupEntryFastWarmupM1Bars) + ", ";
    json += "\"manualPositionBlock\": " + JsonBool(manualBlock) + ", ";
    json += "\"portfolioPositions\": " + IntegerToString(portfolioPositions) + ", ";
    json += "\"maxTotalPositions\": " + IntegerToString(PilotMaxTotalPositions) + ", ";
@@ -9371,6 +10183,13 @@ void ExportDashboard(bool runExecutionLoop)
    string usdJpyRsiEntryDiagnosticsJson = BuildUsdJpyRsiEntryDiagnosticsJson();
    string strategyJsonEAContractStatusJson = BuildStrategyJsonEAContractStatusJson();
    string strategyJsonEAShadowEvaluationJson = BuildStrategyJsonEAShadowEvaluationJson();
+   string hfmCryptoSymbolSpecsJson = BuildHfmCryptoSymbolSpecsJson();
+   string hfmCryptoRuntimeProbeJson = BuildHfmCryptoRuntimeProbeJson();
+   string eaRequestReaderReviewStatusJson = BuildEARequestReaderReviewStatusJson();
+   string eaRequestReaderExecutionStatusJson = BuildEARequestReaderExecutionStatusJson();
+   string brokerOrderSendWrapperStatusJson = BuildBrokerOrderSendWrapperStatusJson();
+   string receiptWriterReconciliationStatusJson = BuildReceiptWriterReconciliationStatusJson();
+   string rollbackAutoDisableStatusJson = BuildRollbackAutoDisableStatusJson();
    string autonomousConfigPatchStatusJson = RefreshAutonomousConfigPatchRuntimeAdapter();
 
    string json = "{\r\n";
@@ -9384,13 +10203,17 @@ void ExportDashboard(bool runExecutionLoop)
    json += "    \"executionEnabled\": " + JsonBool(!ReadOnlyMode) + ",\r\n";
    json += "    \"livePilotMode\": " + JsonBool(IsPilotLiveMode()) + ",\r\n";
    json += "    \"pilotStartupEntryGuard\": " + JsonBool(EnablePilotStartupEntryGuard) + ",\r\n";
+   json += "    \"pilotStartupEntryGuardMode\": \"" + JsonEscape(PilotStartupEntryGuardModeValue()) + "\",\r\n";
    json += "    \"pilotStartupEntryGuardActive\": " + JsonBool(startupGuardActive) + ",\r\n";
    json += "    \"pilotStartupEntryGuardReason\": \"" + JsonEscape(startupGuardReason) + "\",\r\n";
    json += "    \"pilotStartupEntryMinWaitMinutes\": " + IntegerToString(PilotStartupEntryMinWaitMinutes) + ",\r\n";
    json += "    \"pilotStartupEntryWaitNextH1Bar\": " + JsonBool(PilotStartupEntryWaitNextH1Bar) + ",\r\n";
+   json += "    \"pilotStartupEntryFastWarmupMinutes\": " + IntegerToString(PilotStartupEntryFastWarmupMinutes) + ",\r\n";
+   json += "    \"pilotStartupEntryFastWarmupM1Bars\": " + IntegerToString(PilotStartupEntryFastWarmupM1Bars) + ",\r\n";
    json += "    \"pilotStartupTime\": \"" + JsonEscape(g_pilotStartupTime > 0 ? FormatDateTime(g_pilotStartupTime, true) : "") + "\",\r\n";
    json += "    \"pilotStartupLocalTime\": \"" + JsonEscape(g_pilotStartupLocalTime > 0 ? FormatDateTime(g_pilotStartupLocalTime, true) : "") + "\",\r\n";
    json += "    \"pilotStartupH1BarTime\": \"" + JsonEscape(g_pilotStartupH1BarTime > 0 ? FormatDateTime(g_pilotStartupH1BarTime, true) : "") + "\",\r\n";
+   json += "    \"pilotStartupM1BarTime\": \"" + JsonEscape(g_pilotStartupM1BarTime > 0 ? FormatDateTime(g_pilotStartupM1BarTime, true) : "") + "\",\r\n";
    json += "    \"nonRsiLegacyLiveAuthorization\": " + JsonBool(NonRsiLegacyLiveAuthorizationActive()) + ",\r\n";
    json += "    \"nonRsiLegacyLiveAuthorizationState\": \"" + JsonEscape(NonRsiLegacyLiveAuthorizationState()) + "\",\r\n";
    json += "    \"pilotKillSwitch\": " + JsonBool(g_pilotKillSwitch) + ",\r\n";
@@ -9480,6 +10303,13 @@ void ExportDashboard(bool runExecutionLoop)
    json += "  \"strategyJsonEaContract\": " + strategyJsonEAContractStatusJson + ",\r\n";
    json += "  \"strategyJsonEaShadowEvaluation\": " + strategyJsonEAShadowEvaluationJson + ",\r\n";
    json += "  \"autonomousConfigPatchEaStatus\": " + autonomousConfigPatchStatusJson + ",\r\n";
+   json += "  \"hfmCryptoSymbolSpecs\": " + hfmCryptoSymbolSpecsJson + ",\r\n";
+   json += "  \"hfmCryptoRuntimeProbe\": " + hfmCryptoRuntimeProbeJson + ",\r\n";
+   json += "  \"eaRequestReaderReview\": " + eaRequestReaderReviewStatusJson + ",\r\n";
+   json += "  \"eaRequestReaderExecution\": " + eaRequestReaderExecutionStatusJson + ",\r\n";
+   json += "  \"brokerOrderSendWrapper\": " + brokerOrderSendWrapperStatusJson + ",\r\n";
+   json += "  \"receiptWriterReconciliation\": " + receiptWriterReconciliationStatusJson + ",\r\n";
+   json += "  \"rollbackAutoDisable\": " + rollbackAutoDisableStatusJson + ",\r\n";
    json += "  \"market\": {\r\n";
    json += "    \"symbol\": \"" + JsonEscape(g_focusSymbol) + "\",\r\n";
    json += "    \"bid\": " + FormatNumber(focusBid, (int)SymbolInfoInteger(g_focusSymbol, SYMBOL_DIGITS)) + ",\r\n";
@@ -9492,13 +10322,17 @@ void ExportDashboard(bool runExecutionLoop)
    statusFile += "tradeStatus=" + tradeStatus + "\r\n";
    statusFile += "livePilotMode=" + (IsPilotLiveMode() ? "true" : "false") + "\r\n";
    statusFile += "pilotStartupEntryGuard=" + (EnablePilotStartupEntryGuard ? "true" : "false") + "\r\n";
+   statusFile += "pilotStartupEntryGuardMode=" + PilotStartupEntryGuardModeValue() + "\r\n";
    statusFile += "pilotStartupEntryGuardActive=" + (startupGuardActive ? "true" : "false") + "\r\n";
    statusFile += "pilotStartupEntryGuardReason=" + startupGuardReason + "\r\n";
    statusFile += "pilotStartupEntryMinWaitMinutes=" + IntegerToString(PilotStartupEntryMinWaitMinutes) + "\r\n";
    statusFile += "pilotStartupEntryWaitNextH1Bar=" + (PilotStartupEntryWaitNextH1Bar ? "true" : "false") + "\r\n";
+   statusFile += "pilotStartupEntryFastWarmupMinutes=" + IntegerToString(PilotStartupEntryFastWarmupMinutes) + "\r\n";
+   statusFile += "pilotStartupEntryFastWarmupM1Bars=" + IntegerToString(PilotStartupEntryFastWarmupM1Bars) + "\r\n";
    statusFile += "pilotStartupTime=" + (g_pilotStartupTime > 0 ? FormatDateTime(g_pilotStartupTime, true) : "") + "\r\n";
    statusFile += "pilotStartupLocalTime=" + (g_pilotStartupLocalTime > 0 ? FormatDateTime(g_pilotStartupLocalTime, true) : "") + "\r\n";
    statusFile += "pilotStartupH1BarTime=" + (g_pilotStartupH1BarTime > 0 ? FormatDateTime(g_pilotStartupH1BarTime, true) : "") + "\r\n";
+   statusFile += "pilotStartupM1BarTime=" + (g_pilotStartupM1BarTime > 0 ? FormatDateTime(g_pilotStartupM1BarTime, true) : "") + "\r\n";
    statusFile += "nonRsiLegacyLiveAuthorization=" + (NonRsiLegacyLiveAuthorizationActive() ? "true" : "false") + "\r\n";
    statusFile += "nonRsiLegacyLiveAuthorizationState=" + NonRsiLegacyLiveAuthorizationState() + "\r\n";
    statusFile += "pilotKillSwitch=" + (g_pilotKillSwitch ? "true" : "false") + "\r\n";
@@ -9550,6 +10384,12 @@ void ExportDashboard(bool runExecutionLoop)
    WriteTextFile(StrategyJsonEAContractStatusFileName(), strategyJsonEAContractStatusJson);
    WriteStrategyJsonEAShadowEvaluationFiles(strategyJsonEAShadowEvaluationJson);
    WriteTextFile("QuantGod_AutonomousConfigPatchEAStatus.json", autonomousConfigPatchStatusJson);
+   WriteHfmCryptoReadOnlyEvidenceFiles(hfmCryptoSymbolSpecsJson, hfmCryptoRuntimeProbeJson);
+   WriteTextFile("QuantGod_EARequestReaderReviewStatus.json", eaRequestReaderReviewStatusJson);
+   WriteTextFile("QuantGod_EARequestReaderExecutionStatus.json", eaRequestReaderExecutionStatusJson);
+   WriteTextFile("QuantGod_BrokerOrderSendWrapperStatus.json", brokerOrderSendWrapperStatusJson);
+   WriteTextFile("QuantGod_ReceiptWriterReconciliationStatus.json", receiptWriterReconciliationStatusJson);
+   WriteTextFile("QuantGod_RollbackAutoDisableStatus.json", rollbackAutoDisableStatusJson);
    WriteTextFile("QuantGod_Dashboard.json", json);
    ExportShadowCsvs(snapshots, journal, closedTrades);
    UpdateShadowChartComment(tradeStatus, connected, accountLogin);
@@ -9713,6 +10553,7 @@ int OnInit()
       Print("QuantGod timer setup failed. seconds=", timerSeconds, " err=", GetLastError());
    g_startupWarmupUntil = TimeLocal() + MathMax(60, MathMax(1, RefreshIntervalSec) * 36);
    WriteStartupWarmupHeartbeat("OnInit", "defer heavy export until market data warmup window ends");
+   ExportHfmCryptoReadOnlyEvidenceFiles();
    Print("QuantGod MT5 runtime warmup armed. Focus symbol=", g_focusSymbol,
          " warmupUntil=", FormatDateTime(g_startupWarmupUntil, true));
    return(INIT_SUCCEEDED);

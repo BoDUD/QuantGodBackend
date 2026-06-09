@@ -18,6 +18,7 @@ EVIDENCE_FILES = (
     "evidence_os/QuantGod_StrategyParityReport.json",
     "evidence_os/QuantGod_LiveExecutionQualityReport.json",
     "evidence_os/QuantGod_CaseMemorySummary.json",
+    "case_memory/QuantGod_CaseMemoryStrategyCandidates.json",
 )
 
 

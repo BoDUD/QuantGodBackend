@@ -10,6 +10,22 @@ def build_telegram_text(report: dict[str, Any]) -> str:
     lines.append(f"样本数：{report.get('sampleCount', 0)}")
     lines.append(f"完整样本：{report.get('completeSampleCount', 0)}")
     lines.append(f"本轮新增：{report.get('generatedCount', 0)}")
+    coverage = report.get("entryContextCoverage") if isinstance(report.get("entryContextCoverage"), dict) else {}
+    source_audit = report.get("entryContextSourceAudit") if isinstance(report.get("entryContextSourceAudit"), dict) else {}
+    if coverage:
+        lines.append(
+            "entryContext："
+            f"nested={coverage.get('overallNestedCoverageRatio', 0)} "
+            f"proxy={coverage.get('proxyContextRatio', 0)} "
+            f"status={coverage.get('status', 'UNKNOWN')}"
+        )
+    if source_audit:
+        lines.append(
+            "raw审计："
+            f"raw={source_audit.get('rawContextRatio', 0)} "
+            f"limited={source_audit.get('contextLimitedRatio', 0)} "
+            f"status={source_audit.get('status', 'UNKNOWN')}"
+        )
     source_counts = report.get("sourceCounts") or {}
     if source_counts:
         lines.append("来源：")

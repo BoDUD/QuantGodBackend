@@ -33,6 +33,47 @@ function isCaseMemoryPath(requestUrl) {
   return pathname === '/api/case-memory' || pathname.startsWith('/api/case-memory/');
 }
 
+function caseMemoryArtifactPath(runtimeDir) {
+  return runtimeDir ? path.join(runtimeDir, 'case_memory', 'QuantGod_CaseMemoryStrategyCandidates.json') : '';
+}
+
+function uniqueRuntimeDirs(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
+function resolveCaseMemoryRuntimeScope(ctx = {}) {
+  const repoRuntimeDir = ctx.repoRoot ? path.join(ctx.repoRoot, 'runtime') : '';
+  const candidates = uniqueRuntimeDirs([
+    ctx.defaultRuntimeDir,
+    ctx.runtimeDir,
+    process.env.QG_RUNTIME_DIR,
+    repoRuntimeDir,
+  ]);
+  const primaryRuntimeDir = candidates[0] || repoRuntimeDir;
+  const artifactRuntimeDir = candidates.find((runtimeDir) => fs.existsSync(caseMemoryArtifactPath(runtimeDir)));
+  const runtimeDir = artifactRuntimeDir || primaryRuntimeDir;
+  const usingFallback = Boolean(artifactRuntimeDir && artifactRuntimeDir !== primaryRuntimeDir);
+  return {
+    scope: usingFallback ? 'research-fallback' : 'primary',
+    runtimeDir,
+    accountRuntimeDir: usingFallback ? primaryRuntimeDir : '',
+    artifactPath: caseMemoryArtifactPath(runtimeDir),
+    fallbackReason: usingFallback ? 'CASE_MEMORY_ARTIFACTS_MISSING_IN_ACCOUNT_RUNTIME' : '',
+    readOnlyDataPlane: true,
+    orderSendAllowed: false,
+    livePresetMutationAllowed: false,
+    writesMt5OrderRequest: false,
+  };
+}
+
 function runPythonJson(repoRoot, args, timeoutMs = 120000) {
   return new Promise((resolve) => {
     const pythonBin = process.env.QG_PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
@@ -82,26 +123,34 @@ function statusCodeFor(payload) {
   return 200;
 }
 
+function withRuntimeScope(payload, runtimeScope) {
+  return {
+    ...payload,
+    runtimeScope,
+  };
+}
+
 async function handle(req, res, ctx) {
   const requestUrl = req.url || '';
   const url = new URL(requestUrl, 'http://127.0.0.1');
   const pathname = url.pathname;
-  const runtimeDir = ctx.defaultRuntimeDir;
+  const runtimeScope = resolveCaseMemoryRuntimeScope(ctx);
+  const runtimeDir = runtimeScope.runtimeDir;
   if (req.method === 'GET' && (pathname === '/api/case-memory' || pathname === '/api/case-memory/status')) {
     const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'status']);
-    sendJson(res, statusCodeFor(payload), payload);
+    sendJson(res, statusCodeFor(payload), withRuntimeScope(payload, runtimeScope));
     return;
   }
   if (req.method === 'POST' && pathname === '/api/case-memory/build') {
     const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'build', '--write']);
-    sendJson(res, statusCodeFor(payload), payload);
+    sendJson(res, statusCodeFor(payload), withRuntimeScope(payload, runtimeScope));
     return;
   }
   if (req.method === 'GET' && pathname === '/api/case-memory/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
     const payload = await runPythonJson(ctx.repoRoot, args);
-    sendJson(res, statusCodeFor(payload), payload);
+    sendJson(res, statusCodeFor(payload), withRuntimeScope(payload, runtimeScope));
     return;
   }
   sendJson(res, 404, { ok: false, error: 'CASE_MEMORY_NOT_FOUND', endpoint: pathname });
@@ -110,5 +159,6 @@ async function handle(req, res, ctx) {
 module.exports = {
   handle,
   isCaseMemoryPath,
+  resolveCaseMemoryRuntimeScope,
   sendError,
 };

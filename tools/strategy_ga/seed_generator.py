@@ -41,6 +41,15 @@ P4_10D_RSI_FOCUS_BLOCKERS = {
     "WALK_FORWARD_INSUFFICIENT",
     "INSUFFICIENT_SAMPLES",
 }
+NON_RSI_REPAIR_FAMILY_PRIORITY = [
+    "BB_Triple",
+    "MACD_Divergence",
+    "USDJPY_H4_TREND_PULLBACK",
+    "USDJPY_TOKYO_RANGE_BREAKOUT",
+    "USDJPY_NIGHT_REVERSION_SAFE",
+    "MA_Cross",
+    "SR_Breakout",
+]
 DANGEROUS_REPAIR_BLOCKERS = {
     "SAFETY_REJECTED",
     "DUPLICATE_STRATEGY",
@@ -309,24 +318,26 @@ def _quality_repair_candidate_rows(runtime_dir: Path) -> List[Dict[str, Any]]:
 def _balanced_quality_repair_rows(rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
     selected: List[Dict[str, Any]] = []
     seen: set[str] = set()
-    rsi_focus_limit = max(1, min(3, limit // 2))
+    rsi_overcrowded = _rsi_repair_regime_overcrowded(rows)
+    diversify_non_rsi = rsi_overcrowded or _non_rsi_repair_family_count(rows) >= 4
+    rsi_focus_limit = 1 if diversify_non_rsi else max(1, min(3, limit // 2))
     for row in sorted((row for row in rows if _is_p4_10d_rsi_focus_row(row)), key=_rsi_focus_sort_key, reverse=True):
         if _selected_family_count(selected, "RSI_Reversal") >= rsi_focus_limit:
             break
         _append_balanced_row(selected, seen, row, limit)
-    family_priority = [
-        "RSI_Reversal",
-        "MACD_Divergence",
-        "USDJPY_H4_TREND_PULLBACK",
-    ]
+
+    if diversify_non_rsi:
+        for family in NON_RSI_REPAIR_FAMILY_PRIORITY:
+            _append_first_family_row(selected, seen, rows, family, limit)
+    family_priority = (
+        ["MACD_Divergence", "USDJPY_H4_TREND_PULLBACK", "RSI_Reversal"]
+        if diversify_non_rsi
+        else ["RSI_Reversal", "MACD_Divergence", "USDJPY_H4_TREND_PULLBACK"]
+    )
     for family in family_priority:
-        for row in rows:
-            seed = row.get("strategyJson") if isinstance(row.get("strategyJson"), dict) else {}
-            row_family = str(seed.get("strategyFamily") or row.get("strategyFamily") or "")
-            if row_family != family:
-                continue
-            if _append_balanced_row(selected, seen, row, limit):
-                break
+        if family == "RSI_Reversal" and _selected_family_count(selected, "RSI_Reversal") >= rsi_focus_limit:
+            continue
+        _append_first_family_row(selected, seen, rows, family, limit)
     blocker_priority = [
         "WALK_FORWARD_UNSTABLE",
         "OVERFIT_RISK",
@@ -348,8 +359,45 @@ def _balanced_quality_repair_rows(rows: List[Dict[str, Any]], limit: int) -> Lis
     for row in rows:
         if len(selected) >= limit:
             break
+        if diversify_non_rsi and _row_family(row) == "RSI_Reversal" and _selected_family_count(selected, "RSI_Reversal") >= rsi_focus_limit:
+            continue
         _append_balanced_row(selected, seen, row, limit)
     return selected
+
+
+def _non_rsi_repair_family_count(rows: List[Dict[str, Any]]) -> int:
+    return len({_row_family(row) for row in rows if _row_family(row) and _row_family(row) != "RSI_Reversal"})
+
+
+def _rsi_repair_regime_overcrowded(rows: List[Dict[str, Any]]) -> bool:
+    top_rows = rows[: min(8, len(rows))]
+    if not top_rows:
+        return False
+    if not any(_row_family(row) != "RSI_Reversal" for row in rows):
+        return False
+    rsi_rows = [row for row in top_rows if _row_family(row) == "RSI_Reversal"]
+    rsi_blocker_rows = [
+        row
+        for row in rsi_rows
+        if str(row.get("blockerCode") or "")
+        in {"OVERFIT_RISK", "OVERFIT_RISK_HIGH", "RSI_MIN_TRADE_GATE", "WALK_FORWARD_UNSTABLE"}
+    ]
+    return len(rsi_rows) >= max(3, len(top_rows) // 2) and len(rsi_blocker_rows) >= 2
+
+
+def _append_first_family_row(
+    selected: List[Dict[str, Any]],
+    seen: set[str],
+    rows: List[Dict[str, Any]],
+    family: str,
+    limit: int,
+) -> bool:
+    for row in rows:
+        if _row_family(row) != family:
+            continue
+        if _append_balanced_row(selected, seen, row, limit):
+            return True
+    return False
 
 
 def _selected_family_count(rows: List[Dict[str, Any]], family: str) -> int:
@@ -537,14 +585,39 @@ def _repair_profiles_for_row(row: Dict[str, Any]) -> List[str]:
     blocker = str(row.get("blockerCode") or "")
     base_profiles = _repair_profiles_for_blocker(blocker)
     family_profiles: List[str] = []
-    if family == "BB_Triple" and direction == "SHORT":
-        if blocker in {"INSUFFICIENT_SAMPLES", "STRATEGY_BACKTEST_NO_TRADES", "WALK_FORWARD_INSUFFICIENT", "OVERFIT_RISK"}:
+    if family == "BB_Triple":
+        if direction == "LONG" and blocker in {"WALK_FORWARD_UNSTABLE", "OVERFIT_RISK", "OVERFIT_RISK_HIGH"}:
+            if _is_bb_long_positive_net_segment_loss_row(row):
+                family_profiles = [
+                    "BB_LONG_SEGMENT_LOSS_CLIPPER",
+                    "BB_LONG_POSITIVE_EDGE_RECOVERY",
+                    "BB_LONG_FAST_EXIT",
+                ]
+            elif _is_bb_long_positive_edge_recovery_row(row):
+                family_profiles = [
+                    "BB_LONG_POSITIVE_EDGE_RECOVERY",
+                    "BB_LONG_WALK_FORWARD_BALANCER",
+                    "BB_LONG_FAST_EXIT",
+                ]
+            else:
+                family_profiles = [
+                    "BB_LONG_WALK_FORWARD_BALANCER",
+                    "BB_LONG_VALIDATION_FORWARD_CLIPPER",
+                    "BB_LONG_FAST_EXIT",
+                ]
+        elif direction == "LONG" and blocker in {"INSUFFICIENT_SAMPLES", "STRATEGY_BACKTEST_NO_TRADES", "WALK_FORWARD_INSUFFICIENT"}:
+            family_profiles = [
+                "BB_LONG_SAMPLE_EXPANDER",
+                "BB_LONG_WALK_FORWARD_BALANCER",
+                "BB_LONG_FAST_EXIT",
+            ]
+        elif direction == "SHORT" and blocker in {"INSUFFICIENT_SAMPLES", "STRATEGY_BACKTEST_NO_TRADES", "WALK_FORWARD_INSUFFICIENT", "OVERFIT_RISK"}:
             family_profiles = [
                 "BB_SHORT_SAMPLE_EXPANDER",
                 "BB_SHORT_SAMPLE_EXPANDER_M15",
                 "BB_SHORT_RECLAIM_FAST_EXIT",
             ]
-        elif blocker in {"WALK_FORWARD_UNSTABLE", "MAX_ADVERSE_TOO_HIGH"}:
+        elif direction == "SHORT" and blocker in {"WALK_FORWARD_UNSTABLE", "MAX_ADVERSE_TOO_HIGH"}:
             family_profiles = [
                 "BB_SHORT_RECLAIM_STABILIZER",
                 "BB_SHORT_RECLAIM_FAST_EXIT",
@@ -702,6 +775,9 @@ def _apply_quality_profile(seed: Dict[str, Any], blocker: str, profile: str, off
 
 
 def _apply_family_quality_profile(seed: Dict[str, Any], profile: str, offset: int) -> bool:
+    if profile.startswith("BB_LONG"):
+        _apply_bb_long_reclaim_profile(seed, profile, offset)
+        return True
     if profile.startswith("BB_SHORT"):
         _apply_bb_short_reclaim_profile(seed, profile, offset)
         return True
@@ -718,6 +794,119 @@ def _apply_family_quality_profile(seed: Dict[str, Any], profile: str, offset: in
         _apply_tokyo_range_profile(seed, profile, offset)
         return True
     return False
+
+
+def _apply_bb_long_reclaim_profile(seed: Dict[str, Any], profile: str, offset: int) -> None:
+    indicators = seed.setdefault("indicators", {})
+    bollinger = indicators.setdefault("bollinger", {})
+    exit_cfg = seed.setdefault("exit", {})
+    risk = seed.setdefault("risk", {})
+    seed["direction"] = "LONG"
+    bollinger["timeframe"] = "H1" if profile == "BB_LONG_WALK_FORWARD_BALANCER" else "M15"
+    if profile == "BB_LONG_SEGMENT_LOSS_CLIPPER":
+        bollinger["timeframe"] = "M15"
+        bollinger["period"] = max(18, min(26, int(_num(bollinger.get("period"), 20) + 2)))
+        bollinger["deviations"] = round(max(2.0, min(2.6, _num(bollinger.get("deviations"), 2.0) + 0.1)), 2)
+        bollinger["reclaimBufferPips"] = round(max(1.5, min(4.0, _num(bollinger.get("reclaimBufferPips"), 0.0) + 0.5)), 2)
+        _set_exit(seed, hold_h1=5, hold_m15=3)
+        exit_cfg["trailStartR"] = 1.05
+        exit_cfg["mfeGivebackPct"] = 0.5
+        exit_cfg["breakevenDelayR"] = 0.75
+        risk["riskPips"] = max(15.0, min(20.0, _num(risk.get("riskPips"), 10.0) + 1.0))
+        risk["opportunityLotMultiplier"] = min(0.24, _num(risk.get("opportunityLotMultiplier"), 0.35) + 0.02)
+        return
+    if profile == "BB_LONG_POSITIVE_EDGE_RECOVERY":
+        bollinger["timeframe"] = "H1"
+        bollinger["period"] = max(20, min(32, int(_num(bollinger.get("period"), 20) + 2)))
+        bollinger["deviations"] = round(max(1.9, min(2.55, _num(bollinger.get("deviations"), 2.0) + 0.05)), 2)
+        bollinger["reclaimBufferPips"] = round(max(0.6, min(3.5, _num(bollinger.get("reclaimBufferPips"), 0.0) + 0.6)), 2)
+        _set_exit(seed, hold_h1=4, hold_m15=5)
+        exit_cfg["trailStartR"] = 0.95
+        exit_cfg["mfeGivebackPct"] = 0.46
+        exit_cfg["breakevenDelayR"] = 0.55
+        risk["riskPips"] = max(16.0, min(22.0, _num(risk.get("riskPips"), 10.0)))
+        risk["opportunityLotMultiplier"] = min(0.3, _num(risk.get("opportunityLotMultiplier"), 0.35))
+        return
+    if profile.endswith("SAMPLE_EXPANDER"):
+        bollinger["period"] = max(14, min(28, int(_num(bollinger.get("period"), 20) - 2 + (offset % 2))))
+        bollinger["deviations"] = round(max(1.65, min(2.2, _num(bollinger.get("deviations"), 2.0) - 0.2)), 2)
+        bollinger["reclaimBufferPips"] = round(max(0.2, min(2.5, _num(bollinger.get("reclaimBufferPips"), 0.0) + 0.2)), 2)
+        _set_exit(seed, hold_h1=4, hold_m15=6)
+        exit_cfg["trailStartR"] = 0.95
+        exit_cfg["mfeGivebackPct"] = 0.48
+        exit_cfg["breakevenDelayR"] = 0.6
+        risk["riskPips"] = max(15.0, _num(risk.get("riskPips"), 10.0))
+        risk["opportunityLotMultiplier"] = min(0.32, _num(risk.get("opportunityLotMultiplier"), 0.35))
+        return
+    if profile.endswith("CLIPPER"):
+        bollinger["period"] = max(22, min(36, int(_num(bollinger.get("period"), 20) + 4)))
+        bollinger["deviations"] = round(max(2.1, min(3.0, _num(bollinger.get("deviations"), 2.0) + 0.25)), 2)
+        bollinger["reclaimBufferPips"] = round(max(1.2, min(5.0, _num(bollinger.get("reclaimBufferPips"), 0.0) + 1.2)), 2)
+        _set_exit(seed, hold_h1=2, hold_m15=3)
+        exit_cfg["trailStartR"] = 0.7
+        exit_cfg["mfeGivebackPct"] = 0.38
+        exit_cfg["breakevenDelayR"] = 0.35
+        risk["riskPips"] = max(18.0, _num(risk.get("riskPips"), 10.0))
+        risk["opportunityLotMultiplier"] = min(0.24, _num(risk.get("opportunityLotMultiplier"), 0.35))
+        _tighten_family_entry(seed, offset, strong=True)
+        return
+    if profile.endswith("FAST_EXIT"):
+        bollinger["period"] = max(20, min(34, int(_num(bollinger.get("period"), 20) + 2)))
+        bollinger["deviations"] = round(max(2.0, min(2.8, _num(bollinger.get("deviations"), 2.0) + 0.15)), 2)
+        bollinger["reclaimBufferPips"] = round(max(0.8, min(4.0, _num(bollinger.get("reclaimBufferPips"), 0.0) + 0.8)), 2)
+        _set_exit(seed, hold_h1=2, hold_m15=3)
+        exit_cfg["trailStartR"] = 0.75
+        exit_cfg["mfeGivebackPct"] = 0.4
+        exit_cfg["breakevenDelayR"] = 0.4
+        risk["riskPips"] = max(17.0, _num(risk.get("riskPips"), 10.0))
+        risk["opportunityLotMultiplier"] = min(0.26, _num(risk.get("opportunityLotMultiplier"), 0.35))
+        return
+    bollinger["period"] = max(24, min(40, int(_num(bollinger.get("period"), 20) + 4 + (offset % 2) * 2)))
+    bollinger["deviations"] = round(max(2.15, min(3.2, _num(bollinger.get("deviations"), 2.0) + 0.2)), 2)
+    bollinger["reclaimBufferPips"] = round(max(1.0, min(6.0, _num(bollinger.get("reclaimBufferPips"), 0.0) + 1.0)), 2)
+    _set_exit(seed, hold_h1=3, hold_m15=4)
+    exit_cfg["trailStartR"] = 0.82
+    exit_cfg["mfeGivebackPct"] = 0.42
+    exit_cfg["breakevenDelayR"] = 0.45
+    risk["riskPips"] = max(18.0, _num(risk.get("riskPips"), 10.0))
+    risk["opportunityLotMultiplier"] = min(0.28, _num(risk.get("opportunityLotMultiplier"), 0.35))
+
+
+def _is_bb_long_positive_net_segment_loss_row(row: Dict[str, Any]) -> bool:
+    if _row_family(row) != "BB_Triple":
+        return False
+    seed = row.get("strategyJson") if isinstance(row.get("strategyJson"), dict) else {}
+    if str(seed.get("direction") or row.get("direction") or "").upper() != "LONG":
+        return False
+    breakdown = row.get("fitnessBreakdown") if isinstance(row.get("fitnessBreakdown"), dict) else {}
+    backtest = breakdown.get("strategyBacktest") if isinstance(breakdown.get("strategyBacktest"), dict) else {}
+    walk_forward = breakdown.get("walkForward") if isinstance(breakdown.get("walkForward"), dict) else {}
+    summary = walk_forward.get("summary") if isinstance(walk_forward.get("summary"), dict) else {}
+    net_r = _num(breakdown.get("netR"), _num(backtest.get("netR"), 0.0))
+    trade_count = int(_num(backtest.get("tradeCount"), _num(summary.get("sampleCount"), 0)))
+    validation_net = _num(summary.get("validationNetR"), 0.0)
+    forward_net = _num(summary.get("forwardNetR"), 0.0)
+    return net_r > 0.0 and trade_count >= 20 and validation_net < 0.0 and forward_net > 0.0
+
+
+def _is_bb_long_positive_edge_recovery_row(row: Dict[str, Any]) -> bool:
+    if _row_family(row) != "BB_Triple":
+        return False
+    seed = row.get("strategyJson") if isinstance(row.get("strategyJson"), dict) else {}
+    if str(seed.get("direction") or row.get("direction") or "").upper() != "LONG":
+        return False
+    breakdown = row.get("fitnessBreakdown") if isinstance(row.get("fitnessBreakdown"), dict) else {}
+    walk_forward = breakdown.get("walkForward") if isinstance(breakdown.get("walkForward"), dict) else {}
+    summary = walk_forward.get("summary") if isinstance(walk_forward.get("summary"), dict) else {}
+    strategy_backtest = breakdown.get("strategyBacktest")
+    strategy_backtest_net_r = (
+        (strategy_backtest or {}).get("netR") if isinstance(strategy_backtest, dict) else None
+    )
+    net_r = _num(breakdown.get("netR"), _num(strategy_backtest_net_r, 0.0))
+    validation_net = _num(summary.get("validationNetR"), 0.0)
+    forward_net = _num(summary.get("forwardNetR"), 0.0)
+    stability = _num(summary.get("stabilityScore"), 0.0)
+    return net_r <= 0.0 and validation_net > 0.0 and forward_net > 0.0 and stability >= 0.55
 
 
 def _apply_bb_short_reclaim_profile(seed: Dict[str, Any], profile: str, offset: int) -> None:

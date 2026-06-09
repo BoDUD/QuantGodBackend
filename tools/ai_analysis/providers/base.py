@@ -155,7 +155,7 @@ def provider_safety_payload() -> dict[str, Any]:
         "webhookReceiverAllowed": False,
         "emailDeliveryAllowed": False,
         "walletIntegrationAllowed": False,
-        "polymarketOrderAllowed": False,
+        "externalMarketOrderAllowed": False,
     }
 
 
@@ -170,7 +170,7 @@ FORBIDDEN_TRUTHY_ENV = {
     "QG_TELEGRAM_WEBHOOK_RECEIVER_ALLOWED": "telegramWebhookReceiverAllowed",
     "QG_WEBHOOK_RECEIVER_ALLOWED": "webhookReceiverAllowed",
     "QG_EMAIL_DELIVERY_ALLOWED": "emailDeliveryAllowed",
-    "QG_POLYMARKET_ORDER_ALLOWED": "polymarketOrderAllowed",
+    "QG_EXTERNAL_MARKET_ORDER_ALLOWED": "externalMarketOrderAllowed",
     "QG_WALLET_INTEGRATION_ALLOWED": "walletIntegrationAllowed",
 }
 
