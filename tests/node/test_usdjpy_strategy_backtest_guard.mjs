@@ -30,6 +30,18 @@ test('USDJPY Strategy JSON backtest exposes USDJPY-scoped API endpoints', () => 
   }
 });
 
+test('history production status keeps advisory warnings as HTTP 200', () => {
+  const routes = read('Dashboard/usdjpy_strategy_lab_api_routes.js');
+
+  assert.match(routes, /function statusCodeForHistoryProductionStatus\(payload\)/);
+  assert.match(routes, /payload\.exitCode !== undefined \|\| payload\.stderr \|\| payload\.error/);
+  assert.match(routes, /sendJson\(res, statusCodeForHistoryProductionStatus\(payload\), payload\)/);
+  assert.doesNotMatch(
+    routes,
+    /production-status'[\s\S]{0,900}sendJson\(res, payload && payload\.ok === false \? 500 : 200, payload\)/,
+  );
+});
+
 test('USDJPY Strategy JSON backtest writes SQLite, trades, equity, and report artifacts', () => {
   const schema = read('tools/usdjpy_strategy_backtest/schema.py');
   const report = read('tools/usdjpy_strategy_backtest/report.py');

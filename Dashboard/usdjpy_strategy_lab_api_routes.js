@@ -38,6 +38,12 @@ function sendError(res, statusCode, requestUrl, error) {
   });
 }
 
+function statusCodeForHistoryProductionStatus(payload) {
+  if (!payload || payload.ok !== false) return 200;
+  if (payload.exitCode !== undefined || payload.stderr || payload.error) return 500;
+  return 200;
+}
+
 function isUSDJPYStrategyLabPath(requestUrl) {
   const pathname = String(requestUrl || '').split('?')[0];
   return pathname === '/api/usdjpy-strategy-lab' || pathname.startsWith('/api/usdjpy-strategy-lab/');
@@ -637,7 +643,7 @@ async function handle(req, res, ctx) {
     if (url.searchParams.get('lookbackDays')) args.push('--lookback-days', url.searchParams.get('lookbackDays'));
     if (url.searchParams.get('maxLatestLagHours')) args.push('--max-latest-lag-hours', url.searchParams.get('maxLatestLagHours'));
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_usdjpy_strategy_backtest.py');
-    sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
+    sendJson(res, statusCodeForHistoryProductionStatus(payload), payload);
     return;
   }
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/strategy-backtest/telegram-text') {
