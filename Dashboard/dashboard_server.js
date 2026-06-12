@@ -491,6 +491,47 @@ function withServiceMeta(payload, endpoint, filePath) {
   return { payload, _api: source };
 }
 
+function missingReadOnlyJsonPayload(fileName, endpoint, error) {
+  const base = path.basename(fileName || '');
+  const candidates = [path.join(rootDir, base)];
+  if (fs.existsSync(defaultRuntimeDir)) {
+    candidates.push(path.join(defaultRuntimeDir, base));
+  }
+  return {
+    ok: false,
+    schema: 'quantgod.read_only_json_missing.v1',
+    status: 'MISSING',
+    statusZh: '只读证据文件缺失',
+    endpoint,
+    fileName: base,
+    generatedAtIso: new Date().toISOString(),
+    error: error?.message || String(error || `file not found: ${base}`),
+    reasonZh: `${base} 尚未由本地自动化生成；这是证据缺失，不代表 API 路由不可用。`,
+    nextActionZh: '等待对应自动化写入证据文件，或运行只读/测试专用报告生成流程后刷新页面。',
+    sourceCandidates: candidates,
+    safety: {
+      readOnly: true,
+      walletWriteAllowed: false,
+      orderSendAllowed: false,
+      closeAllowed: false,
+      cancelAllowed: false,
+      credentialStorageAllowed: false,
+      livePresetMutationAllowed: false,
+      mutatesMt5: false
+    },
+    _api: {
+      service: 'quantgod_dashboard_local_api',
+      endpoint,
+      filePath: null,
+      sourceCandidates: candidates,
+      readOnly: true,
+      walletWriteAllowed: false,
+      orderSendAllowed: false,
+      mutatesMt5: false
+    }
+  };
+}
+
 function jstDateKey(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Tokyo',
@@ -1637,8 +1678,14 @@ async function handleQuantGodReadOnlyJson(req, res, fileName, endpoint) {
     const { payload, filePath } = readQuantGodJsonFile(fileName);
     sendJson(res, 200, withServiceMeta(payload, endpoint, filePath));
   } catch (error) {
-    sendJson(res, 404, {
+    const message = error?.message || String(error || '');
+    if (message.startsWith('file not found:')) {
+      sendJson(res, 200, missingReadOnlyJsonPayload(fileName, endpoint, error));
+      return;
+    }
+    sendJson(res, 500, {
       ok: false,
+      status: 'READ_ONLY_JSON_UNAVAILABLE',
       error: error.message || String(error),
       endpoint,
       safety: {
