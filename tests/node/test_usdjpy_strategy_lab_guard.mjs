@@ -64,6 +64,15 @@ test('USDJPY policy separates shadow winner from live-eligible route', () => {
   assert.doesNotMatch(policy, /QuantGod_AutoExecutionPolicy\.json/);
   assert.match(policy, /topShadowPolicy/);
   assert.match(policy, /topLiveEligiblePolicy/);
-  assert.match(policy, /LIVE_ELIGIBLE_STRATEGY\s*=\s*["']RSI_Reversal["']/);
+  assert.match(policy, /LIVE_ELIGIBLE_STRATEG(?:Y|IES)\s*=/);
+  assert.match(policy, /RSI_Reversal/);
+  if (/LIVE_ELIGIBLE_STRATEGIES\s*=/.test(policy)) {
+    assert.match(policy, /MA_Cross/);
+    assert.match(policy, /USDJPY_NIGHT_REVERSION_SAFE/);
+    assert.match(policy, /not in LIVE_ELIGIBLE_STRATEGIES/);
+    assert.match(policy, /strategy in LIVE_ELIGIBLE_STRATEGIES/);
+  } else {
+    assert.match(policy, /LIVE_ELIGIBLE_STRATEGY\s*=\s*["']RSI_Reversal["']/);
+  }
   assert.match(policy, /LIVE_ELIGIBLE_DIRECTION\s*=\s*["']LONG["']/);
 });
