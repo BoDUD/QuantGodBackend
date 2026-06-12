@@ -517,28 +517,43 @@ def _review_checklist(
     runtime_status_source: dict[str, Any],
 ) -> list[dict[str, Any]]:
     markers_passed = bool(marker_checks and all(row.get("present") for row in marker_checks))
+    activation_passed = bool(
+        activation.get("readyForLivePilotActivationReview")
+        or (activation.get("dataPlaneActivationReady") and activation.get("executionModeOnlyBlocked"))
+    )
+    order_contract_passed = bool(
+        order_contract.get("readyForAdapterCodeReview")
+        or (
+            order_contract.get("runtimePreflightDataPlaneReadyForReview")
+            and order_contract.get("runtimePreflightExecutionModeOnlyBlocked")
+        )
+    )
+    receipt_review_passed = bool(
+        receipt_review.get("readyForReceiptReconciliationReview")
+        or (receipt_review.get("dataPlaneReconciliationReady") and receipt_review.get("executionModeOnlyBlocked"))
+    )
     checks = [
         {
             "id": "live_pilot_activation_ready",
             "labelZh": "live pilot 激活评审已到边界",
-            "passed": bool(activation.get("readyForLivePilotActivationReview")),
-            "status": "PASS" if activation.get("readyForLivePilotActivationReview") else "BLOCKED",
+            "passed": activation_passed,
+            "status": "PASS" if activation_passed else "BLOCKED",
             "reasonZh": "需要 activation review 汇总总控、preflight、审批、validator 和 disabled harness。",
             "value": activation.get("status", ""),
         },
         {
             "id": "order_request_contract_ready",
             "labelZh": "MT5 request contract 可评审",
-            "passed": bool(order_contract.get("readyForAdapterCodeReview")),
-            "status": "PASS" if order_contract.get("readyForAdapterCodeReview") else "BLOCKED",
+            "passed": order_contract_passed,
+            "status": "PASS" if order_contract_passed else "BLOCKED",
             "reasonZh": "EA request reader 必须绑定已通过的 request/receipt contract。",
             "value": order_contract.get("status", ""),
         },
         {
             "id": "receipt_reconciliation_ready",
             "labelZh": "receipt 对账规则可评审",
-            "passed": bool(receipt_review.get("readyForReceiptReconciliationReview")),
-            "status": "PASS" if receipt_review.get("readyForReceiptReconciliationReview") else "BLOCKED",
+            "passed": receipt_review_passed,
+            "status": "PASS" if receipt_review_passed else "BLOCKED",
             "reasonZh": "EA request reader 上线前必须先有 planned request 与 review-only receipt 对账。",
             "value": receipt_review.get("status", ""),
         },
@@ -644,6 +659,7 @@ def build_ea_request_reader_review(
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
+    explicit_operator_approval_json = bool(operator_approval_json)
     operator_approval_json, operator_approval_reuse = operator_approval_json_for_refresh(
         runtime_dir,
         operator_approval_json,
@@ -662,7 +678,7 @@ def build_ea_request_reader_review(
     prefer_existing_receipt_review = not receipt_inputs_provided
     common = {
         "operator_approval_json": operator_approval_json,
-        "write": bool(refresh_sources),
+        "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
         "moss_backtest_json": moss_backtest_json,
         "hfm_simulation_profile_json": hfm_simulation_profile_json,
@@ -730,6 +746,13 @@ def build_ea_request_reader_review(
         or order_contract.get("runtimePreflightExecutionModeOnlyBlocked")
         or receipt_review.get("executionModeOnlyBlocked")
     )
+    operator_approval_reused_from_prior = operator_approval_reuse.get("mode") == "reused_prior_accepted_evidence"
+    if execution_mode_only_blocked and (
+        upstream_inputs_provided
+        or explicit_operator_approval_json
+        or operator_approval_reused_from_prior
+    ):
+        review_ready = False
     data_plane_reader_ready = bool(
         activation.get("dataPlaneActivationReady")
         and order_contract.get("runtimePreflightDataPlaneReadyForReview")
@@ -742,7 +765,7 @@ def build_ea_request_reader_review(
         and missing_marker_count == 0
         and runtime_status_ready
     )
-    if data_plane_reader_ready and execution_mode_only_blocked:
+    if data_plane_reader_ready and execution_mode_only_blocked and not review_ready:
         blockers = [
             _blocker(
                 "EXECUTION_MODE_GATES_NOT_ACTIVE",

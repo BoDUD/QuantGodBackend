@@ -968,7 +968,7 @@ def build_live_pilot_activation_review(
     )
     common = {
         "operator_approval_json": operator_approval_json,
-        "write": bool(refresh_sources),
+        "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
         "moss_backtest_json": moss_backtest_json,
         "hfm_simulation_profile_json": hfm_simulation_profile_json,

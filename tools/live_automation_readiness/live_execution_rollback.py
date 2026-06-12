@@ -302,7 +302,7 @@ def build_live_execution_rollback_review(
     )
     common = {
         "operator_approval_json": operator_approval_json,
-        "write": bool(write or refresh_sources),
+        "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
         "moss_backtest_json": moss_backtest_json,
         "hfm_simulation_profile_json": hfm_simulation_profile_json,
@@ -319,6 +319,7 @@ def build_live_execution_rollback_review(
             ea_status_json=ea_status_json,
             receipt_json=receipt_json,
             **adapter,
+            _allow_implementation_spec_rebuild=False,
         )
         receipt = build_receipt_reconciliation_review(
             runtime_dir,

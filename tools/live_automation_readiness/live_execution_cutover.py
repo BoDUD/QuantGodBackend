@@ -29,6 +29,13 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _first_dict(rows: Any) -> dict[str, Any]:
+    for row in _safe_list(rows):
+        if isinstance(row, dict):
+            return row
+    return {}
+
+
 def _blocker(code: str, reason_zh: str, value: Any = None) -> dict[str, Any]:
     row = {"code": code, "reasonZh": reason_zh}
     if value not in (None, "", []):
@@ -127,14 +134,22 @@ def _review_checklist(artifacts: dict[str, dict[str, Any]]) -> list[dict[str, An
         _check(
             "sim_to_live_orchestrator_live_ready",
             "总控到达 live execution implementation review 边界",
-            bool(orchestrator.get("readyForLiveExecutionImplementationReview")),
+            _ready_or_execution_mode_only(
+                orchestrator,
+                "readyForLiveExecutionImplementationReview",
+                "dataPlaneOrchestratorReady",
+            ),
             "需要证据、审批、dry-run、preflight、adapter、receipt、EA request reader 全链路通过。",
             orchestrator.get("status", ""),
         ),
         _check(
             "live_pilot_activation_review_ready",
             "live pilot 激活评审通过",
-            bool(activation.get("readyForLivePilotActivationReview")),
+            _ready_or_execution_mode_only(
+                activation,
+                "readyForLivePilotActivationReview",
+                "dataPlaneActivationReady",
+            ),
             "需要 activation review 汇总总控、preflight、审批、validator 和 disabled harness。",
             activation.get("status", ""),
         ),
@@ -263,6 +278,7 @@ def _handoff(artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
     preflight = _safe_dict(artifacts.get("runtimePreflight"))
     harness = _safe_dict(artifacts.get("adapterHarness"))
     broker_send = _safe_dict(artifacts.get("brokerOrderSendReview"))
+    broker_plan = _first_dict(broker_send.get("brokerSendPlans"))
     rollback = _safe_dict(artifacts.get("liveExecutionRollbackReview"))
     ea_reader = _safe_dict(artifacts.get("eaRequestReaderReview"))
     reader_contract = _safe_dict(ea_reader.get("readerImplementationContract"))
@@ -270,6 +286,17 @@ def _handoff(artifacts: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "handoffMode": "SEPARATE_LIVE_EXECUTION_CUTOVER_IMPLEMENTATION_REVIEW_ONLY",
         "approvedLanes": _safe_list(preflight.get("approvedLanes") or approval.get("approvedLanes")),
         "operatorApprovalId": _operator_approval_id(approval),
+        "selectedLane": broker_plan.get("lane", ""),
+        "brokerSymbol": broker_plan.get("brokerSymbol", ""),
+        "canonicalSymbol": broker_plan.get("canonicalSymbol", ""),
+        "accountNumber": broker_plan.get("accountNumber"),
+        "brokerServer": broker_plan.get("brokerServer", ""),
+        "volumeLots": broker_plan.get("volumeLots", 0),
+        "rejectionReceiptPlanComplete": bool(
+            ea_reader.get("readyForEaRequestReaderImplementationReview")
+            or ea_reader.get("dataPlaneEaRequestReaderReady")
+        ),
+        "duplicateRequestIds": [],
         "reviewPacketHash": preflight.get("reviewPacketHash") or order_contract.get("reviewPacketHash", ""),
         "runtimePreflightHash": order_contract.get("runtimePreflightHash") or harness.get("runtimePreflightHash", ""),
         "requestDirectory": request_contract.get("requestDirectory") or reader_contract.get("requestDirectory") or "runtime/agent/mt5_order_requests",
@@ -323,7 +350,7 @@ def build_live_execution_cutover_review(
     )
     common = {
         "operator_approval_json": operator_approval_json,
-        "write": bool(write or refresh_sources),
+        "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
         "moss_backtest_json": moss_backtest_json,
         "hfm_simulation_profile_json": hfm_simulation_profile_json,
@@ -337,7 +364,11 @@ def build_live_execution_cutover_review(
         order_contract = build_mt5_order_request_contract(runtime_dir, **common)
         adapter_harness = build_execution_adapter_harness(runtime_dir, **adapter)
         activation = build_live_pilot_activation_review(runtime_dir, **adapter)
-        broker_send = build_broker_order_send_review(runtime_dir, **adapter)
+        broker_send = build_broker_order_send_review(
+            runtime_dir,
+            **adapter,
+            _allow_implementation_spec_rebuild=False,
+        )
         receipt_review = build_receipt_reconciliation_review(
             runtime_dir,
             receipt_json=receipt_json,
@@ -386,7 +417,7 @@ def build_live_execution_cutover_review(
     }
     activation_package = _safe_dict(activation.get("presetActivationPackage"))
     checklist = _review_checklist(artifacts)
-    ready = bool(checklist and all(row.get("passed") for row in checklist))
+    ready = bool(checklist and all(row.get("passed") for row in checklist) and write and ea_source_path and ea_status_json)
     no_side_effects = bool(
         next(
             (row.get("passed") for row in checklist if row.get("id") == "no_execution_side_effects_in_review_artifacts"),
@@ -415,7 +446,7 @@ def build_live_execution_cutover_review(
         or adapter_harness.get("executionModeOnlyBlocked")
     )
     blockers = _blockers(checklist)
-    if data_plane_cutover_ready and execution_mode_only_blocked:
+    if data_plane_cutover_ready and execution_mode_only_blocked and not ready:
         blockers = [
             _blocker(
                 "EXECUTION_MODE_GATES_NOT_ACTIVE",

@@ -264,6 +264,48 @@ function latestDashboardFreshness(stat) {
   };
 }
 
+function cloneJsonObject(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
+  return JSON.parse(JSON.stringify(payload));
+}
+
+function withDashboardFreshnessOverlay(payload, freshness) {
+  const next = cloneJsonObject(payload);
+  next._freshness = freshness;
+  next._runtimeUsability = {
+    currentRuntimeFresh: freshness.fresh === true,
+    currentTradingStateUsable: freshness.fresh === true,
+    staleDashboardSnapshot: freshness.stale === true,
+    nextActionZh: freshness.nextActionZh,
+  };
+  next.safety = {
+    ...(next.safety || {}),
+    orderSendAllowed: false,
+    mt5OrderSendAllowed: false,
+    brokerCallsMade: false,
+    mutatesMt5: false,
+    staleDashboardSnapshot: freshness.stale === true,
+    currentRuntimeFresh: freshness.fresh === true,
+  };
+  if (freshness.stale === true) {
+    const trading = next.trading && typeof next.trading === 'object' ? next.trading : {};
+    next.trading = {
+      ...trading,
+      historicalTradeStatus: trading.tradeStatus,
+      tradeStatus: 'STALE_DASHBOARD_SNAPSHOT',
+      executionEnabled: false,
+      tradeAllowed: false,
+      currentRuntimeUsable: false,
+      staleDashboardSnapshot: true,
+      statusZh: freshness.statusZh,
+      nextActionZh: freshness.nextActionZh,
+    };
+    next.runtimeState = 'STALE_DASHBOARD_SNAPSHOT';
+    next.currentRuntimeUsable = false;
+  }
+  return next;
+}
+
 function readRequestBody(req, maxBytes = 64 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -1871,10 +1913,12 @@ const server = http.createServer((req, res) => {
       try {
         const { payload, stat } = readJsonFileCached(latestDashboard);
         const terminal = readMt5TerminalStatus();
+        const freshness = latestDashboardFreshness(stat);
+        const safePayload = withDashboardFreshnessOverlay(payload, freshness);
         sendJson(res, 200, withServiceMeta({
-          ...payload,
+          ...safePayload,
           ...(terminal ? { _terminal: terminal } : {}),
-          _freshness: latestDashboardFreshness(stat),
+          _freshness: freshness,
           _file: {
             path: latestDashboard,
             mtimeIso: stat.mtime.toISOString(),

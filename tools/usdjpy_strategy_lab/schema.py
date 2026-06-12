@@ -157,17 +157,32 @@ def status_cn(status: Any) -> str:
 
 
 def assert_no_secret_or_execution_flags(payload: Any, path: str = "root") -> None:
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            lower = str(key).lower()
-            if lower in SECRET_KEYS or any(secret in lower for secret in SECRET_KEYS):
-                raise ValueError(f"secret-like field is forbidden at {path}.{key}")
-            if key in EXECUTION_KEYS and bool(value):
-                raise ValueError(f"truthy execution flag is forbidden at {path}.{key}")
-            assert_no_secret_or_execution_flags(value, f"{path}.{key}")
-    elif isinstance(payload, list):
-        for idx, item in enumerate(payload):
-            assert_no_secret_or_execution_flags(item, f"{path}[{idx}]")
+    stack: list[tuple[Any, str]] = [(payload, path)]
+    seen: set[int] = set()
+    while stack:
+        current, current_path = stack.pop()
+        if isinstance(current, dict):
+            marker = id(current)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            for key, value in current.items():
+                child_path = f"{current_path}.{key}"
+                lower = str(key).lower()
+                if lower in SECRET_KEYS or any(secret in lower for secret in SECRET_KEYS):
+                    raise ValueError(f"secret-like field is forbidden at {child_path}")
+                if key in EXECUTION_KEYS and bool(value):
+                    raise ValueError(f"truthy execution flag is forbidden at {child_path}")
+                if isinstance(value, (dict, list)):
+                    stack.append((value, child_path))
+        elif isinstance(current, list):
+            marker = id(current)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            for idx, item in enumerate(current):
+                if isinstance(item, (dict, list)):
+                    stack.append((item, f"{current_path}[{idx}]"))
 
 
 @dataclass

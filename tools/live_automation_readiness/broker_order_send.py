@@ -6,14 +6,18 @@ from typing import Any
 
 from .ea_request_consumption import (
     build_ea_request_consumption_review,
+    read_existing_ea_request_consumption_review,
     read_ea_request_consumption_review,
 )
 from .live_execution_adapter import (
     build_live_execution_adapter_write_review,
+    read_existing_live_execution_adapter_write_review,
     read_live_execution_adapter_write_review,
 )
 from .live_execution_implementation_spec import (
     build_live_execution_implementation_spec,
+    build_live_execution_implementation_spec_cutover_proxy,
+    read_existing_live_execution_implementation_spec,
     read_live_execution_implementation_spec,
 )
 from .order_request_contract import build_mt5_order_request_contract, read_mt5_order_request_contract
@@ -455,6 +459,7 @@ def build_broker_order_send_review(
     hfm_simulation_profile_json: str = "",
     hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
+    _allow_implementation_spec_rebuild: bool = True,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     should_rebuild = bool(
@@ -475,7 +480,7 @@ def build_broker_order_send_review(
         "receipt_json": receipt_json,
         "request_json": request_json,
         "operator_approval_json": operator_approval_json,
-        "write": bool(write or refresh_sources),
+        "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
         "moss_backtest_json": moss_backtest_json,
         "hfm_simulation_profile_json": hfm_simulation_profile_json,
@@ -484,34 +489,60 @@ def build_broker_order_send_review(
     }
     common = {
         "operator_approval_json": operator_approval_json,
-        "write": bool(write or refresh_sources),
+        "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
         "moss_backtest_json": moss_backtest_json,
         "hfm_simulation_profile_json": hfm_simulation_profile_json,
         "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots or [],
     }
-    implementation_spec = read_live_execution_implementation_spec(runtime_dir)
+    implementation_spec = (
+        read_live_execution_implementation_spec(runtime_dir)
+        if _allow_implementation_spec_rebuild
+        else read_existing_live_execution_implementation_spec(runtime_dir)
+    )
     if should_rebuild and not implementation_spec.get("readyForLiveExecutionImplementationSpecReview"):
-        implementation_spec = build_live_execution_implementation_spec(runtime_dir, **kwargs)
-    ea_consumption = read_ea_request_consumption_review(runtime_dir)
+        if _allow_implementation_spec_rebuild:
+            implementation_spec = build_live_execution_implementation_spec(runtime_dir, **kwargs)
+        elif not (
+            implementation_spec.get("dataPlaneImplementationSpecReady")
+            and "broker_order_send_path" in _step_ids(implementation_spec)
+        ):
+            implementation_spec = build_live_execution_implementation_spec_cutover_proxy(runtime_dir)
+    ea_consumption = (
+        read_ea_request_consumption_review(runtime_dir)
+        if _allow_implementation_spec_rebuild
+        else read_existing_ea_request_consumption_review(runtime_dir)
+    )
     if should_rebuild and (
         not ea_consumption.get("readyForEaRequestConsumptionReview")
         or not _ea_consumption_hashes_current(ea_consumption)
     ):
-        ea_consumption = build_ea_request_consumption_review(runtime_dir, **kwargs)
+        ea_consumption = build_ea_request_consumption_review(
+            runtime_dir,
+            **kwargs,
+            _allow_implementation_spec_rebuild=_allow_implementation_spec_rebuild,
+        )
     preflight = read_live_runtime_preflight_probe(runtime_dir)
     if should_rebuild and not preflight.get("runtimeProbePassed"):
         preflight = build_live_runtime_preflight_probe(runtime_dir, **common)
     order_contract = read_mt5_order_request_contract(runtime_dir)
     if should_rebuild and not order_contract.get("readyForAdapterCodeReview"):
         order_contract = build_mt5_order_request_contract(runtime_dir, **common)
-    adapter_write = read_live_execution_adapter_write_review(runtime_dir)
+    adapter_write = (
+        read_live_execution_adapter_write_review(runtime_dir)
+        if _allow_implementation_spec_rebuild
+        else read_existing_live_execution_adapter_write_review(runtime_dir)
+    )
     if should_rebuild and (
         not adapter_write.get("readyForLiveExecutionAdapterWriteReview")
         or not _adapter_write_hashes_current(adapter_write)
     ):
-        adapter_write = build_live_execution_adapter_write_review(runtime_dir, **kwargs)
+        adapter_write = build_live_execution_adapter_write_review(
+            runtime_dir,
+            **kwargs,
+            _allow_implementation_spec_rebuild=_allow_implementation_spec_rebuild,
+        )
     write_by_id = _by_request_id(_safe_list(adapter_write.get("writePlans")))
     release_gate = _broker_release_gate(ea_consumption)
     broker_send_plans = [

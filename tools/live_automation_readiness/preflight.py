@@ -665,7 +665,7 @@ def build_live_runtime_preflight_probe(
     replay = (
         build_dry_run_intent_replay(
             runtime_dir,
-            write=bool(refresh_sources),
+            write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
             moss_backtest_json=moss_backtest_json,
@@ -679,7 +679,7 @@ def build_live_runtime_preflight_probe(
     lane_spec = (
         build_live_execution_lane_spec(
             runtime_dir,
-            write=bool(refresh_sources),
+            write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
             moss_backtest_json=moss_backtest_json,

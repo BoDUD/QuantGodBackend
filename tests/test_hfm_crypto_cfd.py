@@ -1564,6 +1564,28 @@ class HFMCryptoCfdTests(unittest.TestCase):
             self.assertGreaterEqual(sim_review["metrics"]["pnl"], 20.0)
             self.assertFalse(sim_review["mt5OrderSendAllowed"])
 
+    def test_hfm_crypto_rates_export_read_missing_is_lightweight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "MQL5" / "Files"
+            rates_dir = runtime / "hfm_crypto" / "rates"
+            rates_dir.mkdir(parents=True)
+            (rates_dir / "BTCUSD___BTCUSD__M15.csv").write_text(
+                "epoch,timestamp,open,high,low,close,tick_volume,spread,real_volume\n"
+                "1800000000,2026.05.31 00:00:00,50000,50100,49900,50050,100,0,0\n",
+                encoding="utf-8",
+            )
+
+            with patch("tools.hfm_crypto_cfd.rates_export.build_hfm_crypto_rates_export_review") as build_mock:
+                review = read_hfm_crypto_rates_export_review(runtime)
+
+            build_mock.assert_not_called()
+            self.assertEqual(review["schema"], "quantgod.hfm_crypto_cfd.rates_export_review.v1")
+            self.assertEqual(review["status"], "WAITING_HFM_CRYPTO_RATES_EXPORT")
+            self.assertFalse(review["ratesExportFound"])
+            self.assertFalse(review["ratesReadyForSimulation"])
+            self.assertFalse(review["autogenProfileReady"])
+            self.assertFalse(review["safety"]["orderSendAllowed"])
+
     def test_hfm_crypto_copyrates_export_reconstructs_manifest_from_partial_csvs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp) / "MQL5" / "Files"

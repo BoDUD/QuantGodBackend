@@ -616,6 +616,18 @@ def _first_dict(rows: Any) -> dict[str, Any]:
     return {}
 
 
+def _canonical_execution_lane_id(value: Any) -> str:
+    text = str(value or "").strip()
+    mapping = {
+        "hfmCryptoCfd": "HFM_CRYPTO_CFD",
+        "HFM_CRYPTO_CFD": "HFM_CRYPTO_CFD",
+        "forexMt5": "FOREX_MT5",
+        "FOREX_MT5": "FOREX_MT5",
+        "USDJPY_MT5": "USDJPY_MT5",
+    }
+    return mapping.get(text, text)
+
+
 def _implementation_blueprint(runtime_dir: Path, cutover: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any]:
     handoff = _safe_dict(cutover.get("implementationHandoff"))
     adapter_write = _read_existing_json(live_execution_adapter_write_review_path(runtime_dir))
@@ -626,10 +638,16 @@ def _implementation_blueprint(runtime_dir: Path, cutover: dict[str, Any], steps:
     consumption_plan = _first_dict(ea_consumption.get("consumptionPlans"))
     broker_plan = _first_dict(broker_send.get("brokerSendPlans"))
     rejection_plan = _safe_dict(consumption_plan.get("rejectionReceiptPlan"))
+    rejection_receipt_plan_complete = bool(
+        rejection_plan.get("complete") is True
+        or handoff.get("rejectionReceiptPlanComplete") is True
+    )
     target_lane = (
         str(broker_plan.get("lane") or "")
+        or str(handoff.get("selectedLane") or "")
         or str((_safe_list(handoff.get("approvedLanes")) or [""])[0] or "")
     )
+    target_lane = _canonical_execution_lane_id(target_lane)
     target_request_id = (
         str(broker_plan.get("requestId") or "")
         or str(consumption_plan.get("requestId") or "")
@@ -754,22 +772,22 @@ def _implementation_blueprint(runtime_dir: Path, cutover: dict[str, Any], steps:
         "liveExecutionStillForbidden": True,
         "selectedLane": target_lane,
         "requestId": target_request_id,
-        "brokerSymbol": broker_plan.get("brokerSymbol", ""),
-        "canonicalSymbol": broker_plan.get("canonicalSymbol", ""),
-        "accountNumber": broker_plan.get("accountNumber"),
-        "brokerServer": broker_plan.get("brokerServer", ""),
+        "brokerSymbol": broker_plan.get("brokerSymbol") or handoff.get("brokerSymbol", ""),
+        "canonicalSymbol": broker_plan.get("canonicalSymbol") or handoff.get("canonicalSymbol", ""),
+        "accountNumber": broker_plan.get("accountNumber") or handoff.get("accountNumber"),
+        "brokerServer": broker_plan.get("brokerServer") or handoff.get("brokerServer", ""),
         "requestDirectory": handoff.get("requestDirectory", ""),
         "receiptDirectory": handoff.get("receiptDirectory", ""),
         "reviewPacketHash": handoff.get("reviewPacketHash", ""),
         "runtimePreflightHash": handoff.get("runtimePreflightHash", ""),
-        "reviewPlanVolumeLots": broker_plan.get("volumeLots", 0),
+        "reviewPlanVolumeLots": broker_plan.get("volumeLots") or handoff.get("volumeLots", 0),
         "initialLiveVolumeLotsCandidate": 0.01,
         "initialLiveVolumeRequiresSeparateRiskReview": True,
         "packageCount": len(packages),
         "implementationPackages": packages,
         "allRequiredStepsMapped": bool(required_step_ids and required_step_ids.issubset(package_step_ids)),
-        "rejectionReceiptPlanComplete": rejection_plan.get("complete") is True,
-        "duplicateRequestIds": ea_consumption.get("duplicateRequestIds", []),
+        "rejectionReceiptPlanComplete": rejection_receipt_plan_complete,
+        "duplicateRequestIds": ea_consumption.get("duplicateRequestIds", handoff.get("duplicateRequestIds", [])),
         "hardBlocksBeforeAnyLiveOrder": hard_blocks,
         "wouldWriteRequestFile": False,
         "wouldWriteReceiptFile": False,
@@ -790,6 +808,84 @@ def _implementation_blueprint(runtime_dir: Path, cutover: dict[str, Any], steps:
         "eaRequestFilesConsumed": False,
         "eaOrderSendAllowed": False,
     }
+
+
+def build_live_execution_implementation_spec_cutover_proxy(runtime_dir: Path) -> dict[str, Any]:
+    """Return a non-recursive review-only spec while cutover is assembling dependencies."""
+    runtime_dir = Path(runtime_dir)
+    cutover_proxy = {
+        "status": "WAITING_EXECUTION_MODE_ACTIVATION",
+        "readyForSeparateLiveExecutionCutoverImplementationReview": False,
+        "dataPlaneCutoverReady": True,
+        "executionModeOnlyBlocked": True,
+        "implementationHandoff": {
+            "handoffMode": "CUTOVER_REVIEW_IN_PROGRESS_NON_RECURSIVE_PROXY",
+            "implementationMustStaySeparate": True,
+            "requestDirectory": "runtime/agent/mt5_order_requests",
+            "receiptDirectory": "runtime/agent/mt5_order_receipts",
+            "requiredFuturePrs": [
+                "live_execution_adapter_write_path",
+                "ea_request_reader_consumption_path",
+                "broker_order_send_path",
+                "receipt_writer_and_reconciliation_path",
+                "rollback_and_auto_disable_path",
+            ],
+        },
+        "blockers": [
+            _blocker(
+                "EXECUTION_MODE_GATES_NOT_ACTIVE",
+                "cutover 正在生成 broker send 证据；implementation spec 使用非递归代理，真实执行仍关闭。",
+            )
+        ],
+    }
+    steps = _implementation_steps(cutover_proxy)
+    payload = {
+        "ok": True,
+        "schema": LIVE_EXECUTION_IMPLEMENTATION_SPEC_SCHEMA_VERSION,
+        "generatedAtIso": utc_now_iso(),
+        "runtimeDir": str(runtime_dir),
+        "status": "WAITING_EXECUTION_MODE_ACTIVATION",
+        "statusZh": "live execution implementation spec 数据面代理已生成，等待执行模式闸门",
+        "specMode": "IMPLEMENTATION_SPEC_REVIEW_ONLY_NO_EXECUTION_NON_RECURSIVE_PROXY",
+        "readyForLiveExecutionImplementationSpecReview": False,
+        "dataPlaneImplementationSpecReady": True,
+        "executionModeOnlyBlocked": True,
+        "implementationCanStart": False,
+        "disabledFirstImplementationWorkReady": True,
+        "nextCodeWorkAllowedInReviewOnly": True,
+        "liveExecutionStillForbidden": True,
+        "implementationSteps": steps,
+        "implementationStepCount": len(steps),
+        "implementationAcceptanceMatrix": _acceptance_matrix(steps),
+        "executionSafetyTraceabilityMatrix": _execution_safety_traceability_matrix(steps),
+        "implementationHandoff": _safe_dict(cutover_proxy.get("implementationHandoff")),
+        "blockers": _safe_list(cutover_proxy.get("blockers")),
+        "executionReady": False,
+        "canPromoteToLiveNow": False,
+        "autoPromotionToLiveAllowed": False,
+        "liveExecutionCutoverAllowed": False,
+        "livePilotActivationAllowed": False,
+        "requestWritesAllowed": False,
+        "requestFilesWritten": False,
+        "receiptWritesAllowed": False,
+        "receiptFilesWritten": False,
+        "brokerCallsMade": False,
+        "adapterExecutionAllowed": False,
+        "orderSendAllowed": False,
+        "mt5OrderSendAllowed": False,
+        "writesMt5OrderRequest": False,
+        "mt5PendingOrderIntentsWritten": False,
+        "brokerExecutionAllowed": False,
+        "autoDisableMutationAllowed": False,
+        "eaRequestReaderAllowed": False,
+        "eaRequestReaderEnabled": False,
+        "eaRequestFilesRead": False,
+        "eaRequestFilesConsumed": False,
+        "eaOrderSendAllowed": False,
+        "safety": dict(SAFETY),
+    }
+    assert_no_execution_flags(payload)
+    return payload
 
 
 def build_live_execution_implementation_spec(
@@ -860,7 +956,7 @@ def build_live_execution_implementation_spec(
         for row in execution_mode_blocker_rows
         if isinstance(row, dict) and row.get("code")
     ))
-    if data_plane_implementation_spec_ready and execution_mode_only_blocked:
+    if data_plane_implementation_spec_ready and execution_mode_only_blocked and not cutover_ready:
         blockers = [
             _blocker(
                 "EXECUTION_MODE_GATES_NOT_ACTIVE",
@@ -1001,3 +1097,7 @@ def read_live_execution_implementation_spec(runtime_dir: Path) -> dict[str, Any]
         except Exception:
             pass
     return build_live_execution_implementation_spec(Path(runtime_dir), write=False)
+
+
+def read_existing_live_execution_implementation_spec(runtime_dir: Path) -> dict[str, Any]:
+    return _read_existing_json(live_execution_implementation_spec_path(Path(runtime_dir)))

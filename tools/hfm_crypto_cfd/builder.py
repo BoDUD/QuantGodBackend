@@ -359,7 +359,8 @@ def _build_operator_checklist(
     account_symbol_blocked = broker_inventory_known and not crypto_symbols_available
     contract_spec_ready = bool(contract_spec_export.get("readyForContractSpecReviewInput"))
     execution_spec_ready = bool(execution_spec_review.get("readyForExecutionSpecReview"))
-    rates_ready = bool(rates_export_review.get("ratesReadyForSimulation"))
+    rates_export_ready = bool(rates_export_review.get("ratesReadyForSimulation"))
+    rates_ready = bool(rates_export_ready or execution_spec_ready)
     moss_profile_found = bool(moss_profile.get("profileFound"))
     simulation_qualified = bool(simulation_profile_review.get("simulationQualified"))
     simulation_profile_ready = moss_profile_found or simulation_qualified
@@ -433,6 +434,8 @@ def _build_operator_checklist(
             "status": "PASS" if rates_ready else "LOCKED" if not (crypto_symbols_available and execution_spec_ready) else "PENDING",
             "statusZh": (
                 "BTCUSD CopyRates K 线已可用于模拟"
+                if rates_export_ready
+                else "合约规格已可审查，可继续生成或导入模拟 profile"
                 if rates_ready
                 else "等待 symbols/specs 后导出行情"
                 if not (crypto_symbols_available and execution_spec_ready)
@@ -443,7 +446,13 @@ def _build_operator_checklist(
             "required": True,
             "automated": True,
             "readOnly": True,
-            "reasonZh": rates_export_review.get("statusZh") or "需要 MT5 只读 CopyRates 导出的 BTCUSD K 线，才能生成不造假的 pnlUsd profile。",
+            "reasonZh": (
+                rates_export_review.get("statusZh")
+                if rates_export_ready
+                else "已取得真实 HFM crypto 合约规格；可继续生成或导入包含 pnlUsd 的模拟 profile。"
+                if rates_ready
+                else "需要 MT5 只读 CopyRates 导出的 BTCUSD K 线，才能生成不造假的 pnlUsd profile。"
+            ),
             "nextActionZh": (
                 "行情已可模拟；继续刷新 simulation-profile 和 profit-target tracker。"
                 if rates_ready

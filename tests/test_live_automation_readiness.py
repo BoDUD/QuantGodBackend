@@ -792,6 +792,109 @@ class LiveAutomationReadinessTests(unittest.TestCase):
             saved = read_broker_order_send_review(runtime)
             self.assertEqual(saved["schema"], review["schema"])
 
+    def test_broker_send_cutover_internal_mode_uses_non_recursive_spec_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            request_id = "sandbox-review-cutover-proxy"
+            canonical_preview = json.dumps({
+                "requestId": request_id,
+                "lane": "HFM_CRYPTO_CFD",
+                "brokerSymbol": "#BTCUSD",
+                "canonicalSymbol": "BTCUSD",
+                "side": "BUY",
+                "orderType": "MARKET",
+                "volumeLots": 0.01,
+                "reviewPacketHash": "review-hash",
+                "runtimePreflightHash": "preflight-hash",
+                "killSwitchOk": True,
+                "runtimeFresh": True,
+                "spreadProbeOk": True,
+                "symbolMappingOk": True,
+                "dryRunReplayPassed": True,
+            })
+            self._write_json(ea_request_consumption_review_path(runtime), {
+                "schema": "quantgod.ea_request_consumption_review.v1",
+                "status": "READY_FOR_EA_REQUEST_CONSUMPTION_REVIEW",
+                "readyForEaRequestConsumptionReview": True,
+                "dataPlaneEaRequestConsumptionReady": True,
+                "runtimeStatusReview": {
+                    "brokerOrderSendWrapper": {
+                        "releaseGate": {
+                            "tokenRequired": True,
+                            "tokenProvided": False,
+                        }
+                    }
+                },
+                "consumptionPlans": [{
+                    "requestId": request_id,
+                    "requestPath": f"runtime/agent/mt5_order_requests/{request_id}.json",
+                    "receiptPath": f"runtime/agent/mt5_order_receipts/{request_id}.receipt.json",
+                    "requestDirectory": "runtime/agent/mt5_order_requests",
+                    "receiptDirectory": "runtime/agent/mt5_order_receipts",
+                    "idempotencyKey": request_id,
+                    "defaultAction": "REJECT_REVIEW_ONLY",
+                    "adapterWriterValidatorHashMatches": True,
+                }],
+            })
+            self._write_json(runtime_preflight_path(runtime), {
+                "schema": "quantgod.live_runtime_preflight_probe.v1",
+                "status": "READY_FOR_RUNTIME_PREFLIGHT_REVIEW",
+                "runtimeProbePassed": True,
+                "dataPlaneReadyForLivePilotReview": True,
+                "dashboardSnapshot": {
+                    "fresh": True,
+                    "account": {"number": 186054398, "server": "HFMarketsGlobal-Live16", "currency": "USD"},
+                },
+                "laneRuntimeChecks": [{
+                    "lane": "HFM_CRYPTO_CFD",
+                    "brokerSymbol": "#BTCUSD",
+                    "canonicalSymbol": "BTCUSD",
+                    "passed": True,
+                }],
+            })
+            self._write_json(order_request_contract_path(runtime), {
+                "schema": "quantgod.mt5_order_request_contract.v1",
+                "status": "READY_FOR_ORDER_REQUEST_CONTRACT_REVIEW",
+                "readyForAdapterCodeReview": True,
+                "runtimePreflightDataPlaneReadyForReview": True,
+                "laneContracts": [{
+                    "lane": "HFM_CRYPTO_CFD",
+                    "brokerSymbol": "#BTCUSD",
+                    "canonicalSymbol": "BTCUSD",
+                }],
+            })
+            self._write_json(live_execution_adapter_write_review_path(runtime), {
+                "schema": "quantgod.live_execution_adapter_write_review.v1",
+                "status": "READY_FOR_LIVE_EXECUTION_ADAPTER_WRITE_REVIEW",
+                "readyForLiveExecutionAdapterWriteReview": True,
+                "dataPlaneAdapterWriteReady": True,
+                "writePlans": [{
+                    "requestId": request_id,
+                    "lane": "HFM_CRYPTO_CFD",
+                    "brokerSymbol": "#BTCUSD",
+                    "canonicalSymbol": "BTCUSD",
+                    "validatorHashMatches": True,
+                    "canonicalJsonPreview": canonical_preview,
+                }],
+            })
+
+            review = build_broker_order_send_review(
+                runtime,
+                request_json="trigger-rebuild-without-spec.json",
+                write=True,
+                _allow_implementation_spec_rebuild=False,
+            )
+
+            self.assertEqual(review["status"], "WAITING_EXECUTION_MODE_ACTIVATION")
+            self.assertTrue(review["dataPlaneBrokerOrderSendReady"])
+            self.assertTrue(review["executionModeOnlyBlocked"])
+            self.assertEqual(review["implementationSpecStatus"], "WAITING_EXECUTION_MODE_ACTIVATION")
+            self.assertIn("BROKER_ORDER_SEND_RELEASE_TOKEN_MISSING", {row["code"] for row in review["blockers"]})
+            self.assertFalse(live_execution_implementation_spec_path(runtime).exists())
+            self.assertFalse(review["orderSendAllowed"])
+            self.assertFalse(review["brokerCallsMade"])
+            self.assertFalse(review["writesMt5OrderRequest"])
+
     def test_receipt_reconciliation_requires_ready_broker_send_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
@@ -6072,6 +6175,46 @@ class LiveAutomationReadinessTests(unittest.TestCase):
             self.assertEqual(run_ids, {"reviewPacket", "approvalDraft", "dryRunPlan", "pipeline"})
             self.assertTrue((runtime / "agent" / "QuantGod_LivePromotionController.json").exists())
 
+    def test_readiness_status_build_does_not_recompute_usdjpy_research(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            bases = runtime / "Bases" / "HFMarketsGlobal-Live12" / "history" / "#BTCUSD"
+            bases.mkdir(parents=True)
+            (bases / "2026.hcc").write_text("fixture", encoding="utf-8")
+            profile = runtime / "moss_backtest.json"
+            profile.write_text(json.dumps({
+                "agentId": "agt_crypto_ready",
+                "metrics": {
+                    "pnlUsd": 68.4,
+                    "roi": "18.2%",
+                    "sharpe": "1.6",
+                    "maxDrawdown": "7.2%",
+                    "liquidations": 0,
+                    "trades": 48,
+                },
+            }), encoding="utf-8")
+
+            with mock.patch(
+                "tools.live_automation_readiness.builder.build_usdjpy_policy",
+                side_effect=AssertionError("USDJPY policy should be read-only in status build"),
+            ) as policy_mock:
+                with mock.patch(
+                    "tools.live_automation_readiness.builder.build_promotion_decision",
+                    side_effect=AssertionError("USDJPY promotion should be read-only in status build"),
+                ) as promotion_mock:
+                    payload = build_live_automation_readiness(
+                        runtime,
+                        moss_backtest_json=str(profile),
+                        write=False,
+                    )
+
+            policy_mock.assert_not_called()
+            promotion_mock.assert_not_called()
+            self.assertEqual(payload["lanes"]["usdjpyMt5"]["promotionStage"], "UNKNOWN")
+            self.assertTrue(payload["lanes"]["hfmCryptoCfd"]["simulationQualified"])
+            self.assertFalse(payload["orderSendAllowed"])
+            self.assertFalse(payload["mt5OrderSendAllowed"])
+
     def test_hfm_crypto_btc_profile_prefers_btc_dry_run_intent_when_many_symbols_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
@@ -8288,7 +8431,13 @@ class LiveAutomationReadinessTests(unittest.TestCase):
             self.assertFalse(broker_send["brokerExecutionAllowed"])
             self.assertFalse(broker_send["writesMt5OrderRequest"])
             self.assertFalse(broker_send["orderSendAllowed"])
-            self.assertEqual(broker_send["blockers"], [])
+            self.assertTrue(all(
+                row["code"] in {
+                    "EXECUTION_MODE_GATES_NOT_ACTIVE",
+                    "BROKER_ORDER_SEND_RELEASE_TOKEN_MISSING",
+                }
+                for row in broker_send["blockers"]
+            ))
             saved_broker_send = read_broker_order_send_review(runtime)
             self.assertEqual(saved_broker_send["schema"], broker_send["schema"])
 

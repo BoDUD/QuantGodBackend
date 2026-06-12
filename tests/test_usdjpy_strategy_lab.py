@@ -9,7 +9,13 @@ from tools.usdjpy_strategy_lab.data_loader import sample_runtime
 from tools.usdjpy_strategy_lab.data_loader import focus_runtime_snapshot
 from tools.usdjpy_strategy_lab.policy_builder import _build_spread_gate, build_usdjpy_policy
 from tools.usdjpy_strategy_lab.dry_run_bridge import build_dry_run_decision
-from tools.usdjpy_strategy_lab.schema import FOCUS_SYMBOL, ENTRY_STANDARD, ENTRY_OPPORTUNITY, ENTRY_BLOCKED
+from tools.usdjpy_strategy_lab.schema import (
+    ENTRY_BLOCKED,
+    ENTRY_OPPORTUNITY,
+    ENTRY_STANDARD,
+    FOCUS_SYMBOL,
+    assert_no_secret_or_execution_flags,
+)
 from tools.usdjpy_strategy_lab.strategy_catalog import build_strategy_catalog
 from tools.usdjpy_strategy_lab.strategy_signals import build_candidate_signals
 from tools.usdjpy_strategy_lab.strategy_scoreboard import build_strategy_scoreboard
@@ -113,6 +119,17 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertEqual(feedback["entryContext"]["contextQuality"], "RAW")
             self.assertFalse(feedback["safety"]["orderSendAllowed"])
             self.assertIn("factorAvailability", feedback["entryContext"])
+
+    def test_secret_and_execution_scan_handles_shared_and_cyclic_payloads(self):
+        shared = {"safe": True, "orderSendAllowed": False}
+        payload = {"rows": [shared, shared], "nested": {"items": []}}
+        payload["nested"]["items"].append(payload)
+        assert_no_secret_or_execution_flags(payload)
+
+        with self.assertRaisesRegex(ValueError, "secret-like field"):
+            assert_no_secret_or_execution_flags({"nested": {"api_key": "x"}})
+        with self.assertRaisesRegex(ValueError, "truthy execution flag"):
+            assert_no_secret_or_execution_flags({"nested": {"orderSendAllowed": True}})
 
     def test_strategy_factory_catalog_and_signals_are_shadow_only(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -116,6 +116,17 @@ def _rate_csv_candidates(runtime_dir: Path) -> list[Path]:
 
 
 def _series_from_csv_path(path: Path) -> dict[str, Any]:
+    metadata = _series_metadata_from_csv_path(path)
+    rows = _read_rate_rows(path, limit=20_000)
+    return {
+        **metadata,
+        "copiedBars": len(rows),
+        "ok": bool(rows),
+        "mtimeIso": _mtime_iso(path),
+    }
+
+
+def _series_metadata_from_csv_path(path: Path) -> dict[str, Any]:
     stem = path.stem
     canonical = stem.split("___", 1)[0].split("__", 1)[0].upper().replace("#", "")
     broker = canonical
@@ -126,23 +137,19 @@ def _series_from_csv_path(path: Path) -> dict[str, Any]:
         maybe_timeframe = stem.rsplit("__", 1)[-1].upper()
         if maybe_timeframe:
             timeframe = maybe_timeframe
-    rows = _read_rate_rows(path, limit=20_000)
     return {
         "brokerSymbol": broker,
         "canonicalSymbol": canonical,
         "timeframe": timeframe,
         "file": str(path),
         "csvPath": str(path),
-        "copiedBars": len(rows),
-        "ok": bool(rows),
-        "mtimeIso": _mtime_iso(path),
     }
 
 
 def _partial_csv_manifest(runtime_dir: Path) -> tuple[dict[str, Any], Path | None]:
     candidates = [
         path for path in _rate_csv_candidates(runtime_dir)
-        if _series_from_csv_path(path).get("canonicalSymbol") in HFM_CRYPTO_USD_CANONICALS
+        if _series_metadata_from_csv_path(path).get("canonicalSymbol") in HFM_CRYPTO_USD_CANONICALS
     ]
     if not candidates:
         return {}, None
@@ -215,6 +222,30 @@ def _manifest_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(value, list):
             return [dict(item) for item in value if isinstance(item, dict)]
     return []
+
+
+def _missing_rates_export_review(runtime_dir: Path, manifest_path: Path | None = None) -> dict[str, Any]:
+    blocker = {
+        "code": "HFM_CRYPTO_RATES_EXPORT_MISSING",
+        "reasonZh": f"尚未发现 MT5 只读 CopyRates 导出的 {EA_RATES_EXPORT_FILE}。",
+    }
+    return {
+        "ok": True,
+        "schema": RATES_EXPORT_REVIEW_SCHEMA_VERSION,
+        "generatedAt": utc_now_iso(),
+        "runtimeDir": str(runtime_dir),
+        "status": "WAITING_HFM_CRYPTO_RATES_EXPORT",
+        "statusZh": "等待 HFM crypto CopyRates 行情导出",
+        "ratesExportFound": False,
+        "ratesReadyForSimulation": False,
+        "autogenProfileReady": False,
+        "manifestPath": str(manifest_path or ""),
+        "manifestFromPartialCsvs": False,
+        "series": [],
+        "blockers": [blocker],
+        "nextRequiredActionZh": "运行只读 MT5 HFM crypto CopyRates exporter，生成 BTCUSD K 线后再自动生成 pnlUsd profile。",
+        "safety": dict(SAFETY),
+    }
 
 
 def _canonical_from_row(row: dict[str, Any]) -> str:
@@ -595,23 +626,9 @@ def build_hfm_crypto_rates_export_review(
             manifest_path = manifest_path or partial_manifest_path
 
     if not manifest_path or not manifest:
-        blockers.append({"code": "HFM_CRYPTO_RATES_EXPORT_MISSING", "reasonZh": f"尚未发现 MT5 只读 CopyRates 导出的 {EA_RATES_EXPORT_FILE}。"})
-        payload = {
-            "ok": True,
-            "schema": RATES_EXPORT_REVIEW_SCHEMA_VERSION,
-            "generatedAt": utc_now_iso(),
-            "status": "WAITING_HFM_CRYPTO_RATES_EXPORT",
-            "statusZh": "等待 HFM crypto CopyRates 行情导出",
-            "ratesExportFound": False,
-            "ratesReadyForSimulation": False,
-            "autogenProfileReady": False,
-            "manifestPath": str(manifest_path or ""),
-            "manifestFromPartialCsvs": False,
-            "series": [],
-            "blockers": blockers,
-            "nextRequiredActionZh": "运行只读 MT5 HFM crypto CopyRates exporter，生成 BTCUSD K 线后再自动生成 pnlUsd profile。",
-            "safety": dict(SAFETY),
-        }
+        payload = _missing_rates_export_review(runtime_dir, manifest_path)
+        if blockers:
+            payload["blockers"] = blockers
         if write:
             out = rates_export_review_path(runtime_dir)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -695,7 +712,8 @@ def build_hfm_crypto_rates_export_review(
 
 
 def read_hfm_crypto_rates_export_review(runtime_dir: Path) -> dict[str, Any]:
-    path = rates_export_review_path(Path(runtime_dir))
+    runtime_dir = Path(runtime_dir)
+    path = rates_export_review_path(runtime_dir)
     if path.exists() and path.is_file():
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -703,4 +721,4 @@ def read_hfm_crypto_rates_export_review(runtime_dir: Path) -> dict[str, Any]:
                 return {"ok": True, **payload}
         except Exception:
             pass
-    return build_hfm_crypto_rates_export_review(Path(runtime_dir), write=False)
+    return _missing_rates_export_review(runtime_dir)

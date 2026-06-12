@@ -27,16 +27,45 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _stable_digest_payload(payload: Any) -> Any:
+def _stable_digest_payload(payload: Any, *, _depth: int = 0, _seen: set[int] | None = None) -> Any:
     volatile_keys = {"generatedAt", "generatedAtIso"}
+    if _seen is None:
+        _seen = set()
+    if _depth > 8:
+        return {"__truncated__": "max_depth", "type": type(payload).__name__}
     if isinstance(payload, dict):
-        return {
-            key: _stable_digest_payload(value)
-            for key, value in payload.items()
-            if key not in volatile_keys
+        ident = id(payload)
+        if ident in _seen:
+            return {"__truncated__": "cycle", "type": "dict"}
+        _seen.add(ident)
+        keys = sorted(key for key in payload.keys() if key not in volatile_keys)
+        head = keys[:80]
+        rows = {
+            key: _stable_digest_payload(payload[key], _depth=_depth + 1, _seen=_seen)
+            for key in head
         }
+        if len(keys) > len(head):
+            rows["__truncatedKeyCount__"] = len(keys) - len(head)
+            rows["__totalKeyCount__"] = len(keys)
+        _seen.remove(ident)
+        return rows
     if isinstance(payload, list):
-        return [_stable_digest_payload(item) for item in payload]
+        ident = id(payload)
+        if ident in _seen:
+            return {"__truncated__": "cycle", "type": "list"}
+        _seen.add(ident)
+        head = payload[:80]
+        rows = [_stable_digest_payload(item, _depth=_depth + 1, _seen=_seen) for item in head]
+        if len(payload) > len(head):
+            rows.append({"__truncatedItemCount__": len(payload) - len(head), "__totalItemCount__": len(payload)})
+        _seen.remove(ident)
+        return rows
+    if isinstance(payload, str) and len(payload) > 2000:
+        return {
+            "__truncated__": "long_string",
+            "length": len(payload),
+            "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        }
     return payload
 
 
@@ -290,7 +319,7 @@ def build_live_operator_approval_evidence_review(
     runtime_dir = Path(runtime_dir)
     draft = build_live_operator_approval_draft(
         runtime_dir,
-        write=bool(refresh_sources),
+        write=bool(write and refresh_sources),
         refresh_sources=refresh_sources,
         moss_backtest_json=moss_backtest_json,
         hfm_simulation_profile_json=hfm_simulation_profile_json,

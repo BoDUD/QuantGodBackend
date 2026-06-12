@@ -976,6 +976,11 @@ def build_sim_to_live_orchestrator(
     live_execution_ready = bool(adapter_review_ready and live_stages and all(row.get("passed") for row in live_stages))
     data_plane_orchestrator_ready = _data_plane_orchestrator_ready(stages, live_stages)
     execution_mode_only_blocked = bool(data_plane_orchestrator_ready and not live_execution_ready)
+    execution_mode_status_blocked = bool(
+        data_plane_orchestrator_ready
+        and execution_mode_only_blocked
+        and (not adapter_review_ready or live_current.get("stageId") not in {"", "disabled_adapter_harness"})
+    )
     activation_gate_checklist = _execution_activation_gate_checklist(artifacts)
     activation_gate_summary = _execution_activation_gate_summary(activation_gate_checklist)
     release_gate_checklist = _release_gate_checklist(artifacts)
@@ -987,25 +992,25 @@ def build_sim_to_live_orchestrator(
     if live_execution_ready:
         status = "READY_FOR_LIVE_EXECUTION_IMPLEMENTATION_REVIEW"
         status_zh = "可进入 live execution 实现评审"
+    elif execution_mode_status_blocked:
+        status = "WAITING_EXECUTION_MODE_ACTIVATION"
+        status_zh = "sim-to-live 总控数据面已通过，等待执行模式闸门"
     elif adapter_review_ready:
         status = "READY_FOR_EXECUTION_ADAPTER_IMPLEMENTATION_REVIEW"
         status_zh = "可进入 execution adapter 实现评审"
-    elif data_plane_orchestrator_ready and execution_mode_only_blocked:
-        status = "WAITING_EXECUTION_MODE_ACTIVATION"
-        status_zh = "sim-to-live 总控数据面已通过，等待执行模式闸门"
     else:
         status = "WAITING_SIM_TO_LIVE_ORCHESTRATOR_INPUTS"
         status_zh = "等待模拟转实盘总控输入"
     if live_execution_ready:
         next_required_action_zh = "进入单独 live execution implementation PR；本总控仍不会写 MT5 请求文件或调用 broker。"
+    elif execution_mode_status_blocked:
+        next_required_action_zh = "HFM/BTC 总控数据面、审批、dry-run、adapter review、sandbox、validator 和 live execution review-only artifacts 已具备；仅剩执行模式闸门。"
     elif adapter_review_ready:
         next_required_action_zh = live_current.get("nextRequiredActionZh") or "继续补齐 live execution 后半段评审证据。"
-    elif data_plane_orchestrator_ready and execution_mode_only_blocked:
-        next_required_action_zh = "HFM/BTC 总控数据面、审批、dry-run、adapter review、sandbox、validator 和 live execution review-only artifacts 已具备；仅剩执行模式闸门。"
     else:
         next_required_action_zh = current.get("nextRequiredActionZh") or "继续补齐当前阶段证据。"
     blockers = _blockers(stages, artifacts)
-    if data_plane_orchestrator_ready and execution_mode_only_blocked:
+    if execution_mode_status_blocked:
         blockers = [
             _blocker(
                 "EXECUTION_MODE_GATES_NOT_ACTIVE",

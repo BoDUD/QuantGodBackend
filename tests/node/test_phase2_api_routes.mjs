@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -66,6 +66,45 @@ test('JSON endpoint returns envelope from runtime dir', async () => {
     assert.equal(res.body.ok, true);
     assert.equal(res.body.data.status, 'ok');
     assert.equal(res.body.safety.readOnlyDataPlane, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('dashboard state overlays stale MT5 snapshot with non-execution safety', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'qg-phase2-dashboard-stale-'));
+  try {
+    const dashboardPath = path.join(dir, 'QuantGod_Dashboard.json');
+    await writeFile(
+      dashboardPath,
+      JSON.stringify({
+        account: { number: 186054398, server: 'HFMarketsGlobal-Live12', equity: 10020.5 },
+        trading: {
+          tradeStatus: 'RUNNING',
+          executionEnabled: true,
+          tradeAllowed: true,
+        },
+        safety: {
+          orderSendAllowed: true,
+        },
+      }),
+      'utf8',
+    );
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(dashboardPath, old, old);
+
+    const res = await invoke('/api/dashboard/state', { defaultRuntimeDir: dir, repoRoot: dir, rootDir: dir });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body._freshness.status, 'STALE_DASHBOARD_SNAPSHOT');
+    assert.equal(res.body.data._freshness.status, 'STALE_DASHBOARD_SNAPSHOT');
+    assert.equal(res.body.data.safety.orderSendAllowed, false);
+    assert.equal(res.body.data.safety.mt5OrderSendAllowed, false);
+    assert.equal(res.body.data.trading.historicalTradeStatus, 'RUNNING');
+    assert.equal(res.body.data.trading.tradeStatus, 'STALE_DASHBOARD_SNAPSHOT');
+    assert.equal(res.body.data.trading.executionEnabled, false);
+    assert.equal(res.body.data.trading.tradeAllowed, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -118,7 +118,7 @@ def build_dry_run_intent_replay(
     lane_spec = (
         build_live_execution_lane_spec(
             runtime_dir,
-            write=bool(refresh_sources),
+            write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
             moss_backtest_json=moss_backtest_json,
@@ -132,7 +132,7 @@ def build_dry_run_intent_replay(
     dry_run_plan = (
         build_dry_run_live_execution_plan(
             runtime_dir,
-            write=bool(refresh_sources),
+            write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             moss_backtest_json=moss_backtest_json,
             hfm_simulation_profile_json=hfm_simulation_profile_json,

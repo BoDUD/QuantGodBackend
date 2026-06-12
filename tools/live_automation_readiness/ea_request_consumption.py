@@ -7,10 +7,13 @@ from typing import Any
 from .ea_request_reader_review import build_ea_request_reader_review, read_ea_request_reader_review
 from .live_execution_adapter import (
     build_live_execution_adapter_write_review,
+    read_existing_live_execution_adapter_write_review,
     read_live_execution_adapter_write_review,
 )
 from .live_execution_implementation_spec import (
     build_live_execution_implementation_spec,
+    build_live_execution_implementation_spec_cutover_proxy,
+    read_existing_live_execution_implementation_spec,
     read_live_execution_implementation_spec,
 )
 from .schema import (
@@ -547,7 +550,10 @@ def _blockers(
     checklist: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
-    if not implementation_spec.get("readyForLiveExecutionImplementationSpecReview"):
+    if not (
+        implementation_spec.get("readyForLiveExecutionImplementationSpecReview")
+        or implementation_spec.get("dataPlaneImplementationSpecReady")
+    ):
         blockers.append(_blocker(
             "LIVE_EXECUTION_IMPLEMENTATION_SPEC_NOT_READY",
             "live execution implementation spec 尚未可评审。",
@@ -558,13 +564,19 @@ def _blockers(
             "EA_REQUEST_CONSUMPTION_STEP_MISSING",
             "implementation spec 尚未声明 ea_request_reader_consumption_path。",
         ))
-    if not adapter_write.get("readyForLiveExecutionAdapterWriteReview"):
+    if not (
+        adapter_write.get("readyForLiveExecutionAdapterWriteReview")
+        or adapter_write.get("dataPlaneAdapterWriteReady")
+    ):
         blockers.append(_blocker(
             "LIVE_EXECUTION_ADAPTER_WRITE_REVIEW_NOT_READY",
             "adapter writer 审查尚未通过。",
             adapter_write.get("status", ""),
         ))
-    if not ea_reader.get("readyForEaRequestReaderImplementationReview"):
+    if not (
+        ea_reader.get("readyForEaRequestReaderImplementationReview")
+        or ea_reader.get("dataPlaneEaRequestReaderReady")
+    ):
         blockers.append(_blocker(
             "EA_REQUEST_READER_REVIEW_NOT_READY",
             "EA request reader 审查尚未通过。",
@@ -595,6 +607,7 @@ def build_ea_request_consumption_review(
     hfm_simulation_profile_json: str = "",
     hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
+    _allow_implementation_spec_rebuild: bool = True,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     should_rebuild = bool(
@@ -615,22 +628,40 @@ def build_ea_request_consumption_review(
         "receipt_json": receipt_json,
         "request_json": request_json,
         "operator_approval_json": operator_approval_json,
-        "write": bool(write or refresh_sources),
+        "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
         "moss_backtest_json": moss_backtest_json,
         "hfm_simulation_profile_json": hfm_simulation_profile_json,
         "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots or [],
     }
-    implementation_spec = read_live_execution_implementation_spec(runtime_dir)
+    implementation_spec = (
+        read_live_execution_implementation_spec(runtime_dir)
+        if _allow_implementation_spec_rebuild
+        else read_existing_live_execution_implementation_spec(runtime_dir)
+    )
     if should_rebuild and not implementation_spec.get("readyForLiveExecutionImplementationSpecReview"):
-        implementation_spec = build_live_execution_implementation_spec(runtime_dir, **kwargs)
-    adapter_write = read_live_execution_adapter_write_review(runtime_dir)
+        if _allow_implementation_spec_rebuild:
+            implementation_spec = build_live_execution_implementation_spec(runtime_dir, **kwargs)
+        elif not (
+            implementation_spec.get("dataPlaneImplementationSpecReady")
+            and "ea_request_reader_consumption_path" in _step_ids(implementation_spec)
+        ):
+            implementation_spec = build_live_execution_implementation_spec_cutover_proxy(runtime_dir)
+    adapter_write = (
+        read_live_execution_adapter_write_review(runtime_dir)
+        if _allow_implementation_spec_rebuild
+        else read_existing_live_execution_adapter_write_review(runtime_dir)
+    )
     if should_rebuild and (
         not adapter_write.get("readyForLiveExecutionAdapterWriteReview")
         or not _adapter_write_hashes_current(adapter_write)
     ):
-        adapter_write = build_live_execution_adapter_write_review(runtime_dir, **kwargs)
+        adapter_write = build_live_execution_adapter_write_review(
+            runtime_dir,
+            **kwargs,
+            _allow_implementation_spec_rebuild=_allow_implementation_spec_rebuild,
+        )
     ea_reader = read_ea_request_reader_review(runtime_dir)
     if should_rebuild and not ea_reader.get("readyForEaRequestReaderImplementationReview"):
         ea_reader = build_ea_request_reader_review(runtime_dir, **kwargs)
@@ -727,7 +758,8 @@ def build_ea_request_consumption_review(
         or adapter_write.get("executionModeOnlyBlocked")
         or ea_reader.get("executionModeOnlyBlocked")
     )
-    if data_plane_ea_request_consumption_ready and execution_mode_only_blocked:
+    ready = bool(checklist and all(row.get("passed") for row in checklist) and not blockers)
+    if data_plane_ea_request_consumption_ready and execution_mode_only_blocked and not ready:
         blockers = [
             _blocker(
                 "EXECUTION_MODE_GATES_NOT_ACTIVE",
@@ -736,7 +768,6 @@ def build_ea_request_consumption_review(
             )
         ]
         blockers.extend(_execution_mode_blockers(implementation_spec, adapter_write, ea_reader))
-    ready = bool(checklist and all(row.get("passed") for row in checklist) and not blockers)
     payload = {
         "ok": True,
         "schema": EA_REQUEST_CONSUMPTION_REVIEW_SCHEMA_VERSION,
@@ -826,3 +857,15 @@ def read_ea_request_consumption_review(runtime_dir: Path) -> dict[str, Any]:
         except Exception:
             pass
     return build_ea_request_consumption_review(Path(runtime_dir), write=False)
+
+
+def read_existing_ea_request_consumption_review(runtime_dir: Path) -> dict[str, Any]:
+    path = ea_request_consumption_review_path(Path(runtime_dir))
+    if path.exists() and path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+    return {}

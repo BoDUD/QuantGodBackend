@@ -23,6 +23,8 @@ const JSON_HEADERS = {
 const CSV_FULL_READ_BYTES = 1024 * 1024;
 const CSV_TAIL_MIN_BYTES = 256 * 1024;
 const CSV_TAIL_BYTES_PER_ROW = 2048;
+const DASHBOARD_STATE_ENDPOINT = '/api/dashboard/state';
+const latestDashboardFreshMs = Number.parseInt(process.env.QG_LATEST_DASHBOARD_FRESH_MS || '1800000', 10) || 1800000;
 
 const PHASE2_API_SAFETY = Object.freeze({
   mode: 'QUANTGOD_PHASE2_API_V1',
@@ -213,6 +215,74 @@ function fileMeta(filePath, stat, format) {
   };
 }
 
+function latestDashboardFreshness(stat) {
+  if (!stat) return {};
+  const ageMs = Math.max(0, Date.now() - Number(stat.mtimeMs || 0));
+  const fresh = ageMs <= latestDashboardFreshMs;
+  return {
+    mode: 'LATEST_DASHBOARD_MTIME_WATCH',
+    status: fresh ? 'FRESH_DASHBOARD_SNAPSHOT' : 'STALE_DASHBOARD_SNAPSHOT',
+    statusZh: fresh ? 'MT5 dashboard 快照新鲜' : 'MT5 dashboard 快照已过期',
+    fresh,
+    stale: !fresh,
+    ageMs,
+    ageSeconds: Math.round(ageMs / 100) / 10,
+    maxAgeMs: latestDashboardFreshMs,
+    maxAgeSeconds: Math.round(latestDashboardFreshMs / 100) / 10,
+    blockers: fresh ? [] : ['live_dashboard_snapshot_stale'],
+    nextActionZh: fresh
+      ? '继续读取最新 MT5 dashboard。'
+      : '恢复主 MT5/EA 进程并刷新 QuantGod_Dashboard.json；不要把旧快照当成当前实盘状态。',
+    orderSendAllowed: false,
+    mt5OrderSendAllowed: false,
+    brokerCallsMade: false,
+    mutatesMt5: false,
+  };
+}
+
+function cloneJsonObject(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
+  return JSON.parse(JSON.stringify(payload));
+}
+
+function withDashboardFreshnessOverlay(payload, stat) {
+  const freshness = latestDashboardFreshness(stat);
+  const next = cloneJsonObject(payload);
+  next._freshness = freshness;
+  next._runtimeUsability = {
+    currentRuntimeFresh: freshness.fresh === true,
+    currentTradingStateUsable: freshness.fresh === true,
+    staleDashboardSnapshot: freshness.stale === true,
+    nextActionZh: freshness.nextActionZh,
+  };
+  next.safety = {
+    ...(next.safety || {}),
+    orderSendAllowed: false,
+    mt5OrderSendAllowed: false,
+    brokerCallsMade: false,
+    mutatesMt5: false,
+    staleDashboardSnapshot: freshness.stale === true,
+    currentRuntimeFresh: freshness.fresh === true,
+  };
+  if (freshness.stale === true) {
+    const trading = next.trading && typeof next.trading === 'object' ? next.trading : {};
+    next.trading = {
+      ...trading,
+      historicalTradeStatus: trading.tradeStatus,
+      tradeStatus: 'STALE_DASHBOARD_SNAPSHOT',
+      executionEnabled: false,
+      tradeAllowed: false,
+      currentRuntimeUsable: false,
+      staleDashboardSnapshot: true,
+      statusZh: freshness.statusZh,
+      nextActionZh: freshness.nextActionZh,
+    };
+    next.runtimeState = 'STALE_DASHBOARD_SNAPSHOT';
+    next.currentRuntimeUsable = false;
+  }
+  return { payload: next, freshness };
+}
+
 function withEnvelope(payload, endpoint, filePath, stat, format, extra = {}) {
   return {
     ok: true,
@@ -394,8 +464,13 @@ function handleJsonEndpoint(req, res, ctx, endpoint, fileName) {
   }
   try {
     const text = stripBom(fs.readFileSync(resolved.filePath, 'utf8'));
-    const payload = JSON.parse(text || '{}');
-    sendJson(res, 200, withEnvelope(payload, endpoint, resolved.filePath, resolved.stat, 'json'));
+    const rawPayload = JSON.parse(text || '{}');
+    if (endpoint === DASHBOARD_STATE_ENDPOINT) {
+      const { payload, freshness } = withDashboardFreshnessOverlay(rawPayload, resolved.stat);
+      sendJson(res, 200, withEnvelope(payload, endpoint, resolved.filePath, resolved.stat, 'json', { _freshness: freshness }));
+      return true;
+    }
+    sendJson(res, 200, withEnvelope(rawPayload, endpoint, resolved.filePath, resolved.stat, 'json'));
   } catch (error) {
     sendError(res, 500, endpoint, `json_parse_failed: ${error.message}`, fileMeta(resolved.filePath, resolved.stat, 'json'));
   }
@@ -639,6 +714,8 @@ module.exports = {
   JSON_ENDPOINTS,
   NOTIFY_ENDPOINTS,
   PHASE2_API_SAFETY,
+  latestDashboardFreshness,
+  withDashboardFreshnessOverlay,
   handle,
   isPhase2Path,
   parseCsv,

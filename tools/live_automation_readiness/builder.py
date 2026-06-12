@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -23,6 +24,7 @@ HFM_SHARPE_MIN = 1.0
 HFM_MAX_DRAWDOWN_MAX_PCT = 15.0
 HFM_TRADE_COUNT_MIN = 20
 HFM_LIQUIDATION_MAX = 0
+_READINESS_BUILD_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -55,6 +57,97 @@ def _capture_source(name: str, loader: Callable[[], dict[str, Any]]) -> dict[str
         return {"ok": True, "name": name, "payload": _safe_dict(payload)}
     except Exception as exc:  # pragma: no cover - defensive against partial runtime folders
         return {"ok": False, "name": name, "error": str(exc), "payload": {}}
+
+
+def _path_fingerprint(value: str) -> tuple[Any, ...]:
+    if not value:
+        return ("", None, None)
+    path = Path(value)
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), stat.st_size, stat.st_mtime_ns)
+
+
+def _dir_fingerprint(path: Path) -> tuple[Any, ...]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), stat.st_mtime_ns)
+
+
+def _readiness_cache_key(
+    runtime_dir: Path,
+    *,
+    refresh_sources: bool,
+    moss_backtest_json: str,
+    hfm_simulation_profile_json: str,
+    hfm_contract_spec_json: str,
+    extra_bases_roots: list[str],
+) -> tuple[Any, ...]:
+    return (
+        str(runtime_dir.resolve()),
+        bool(refresh_sources),
+        _path_fingerprint(moss_backtest_json),
+        _path_fingerprint(hfm_simulation_profile_json),
+        _path_fingerprint(hfm_contract_spec_json),
+        tuple(_dir_fingerprint(Path(root)) for root in extra_bases_roots),
+        _dir_fingerprint(runtime_dir / "Bases"),
+        _path_fingerprint(str(runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json")),
+        _path_fingerprint(str(runtime_dir / "agent" / "QuantGod_AutonomousPromotionDecision.json")),
+    )
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_usdjpy_policy(runtime_dir: Path) -> dict[str, Any]:
+    payload = _read_json(Path(runtime_dir) / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json")
+    if payload:
+        return payload
+    return {
+        "ok": False,
+        "symbol": "USDJPYc",
+        "status": "USDJPY_POLICY_ARTIFACT_MISSING",
+        "usdDeploymentGate": {
+            "liveAllowed": False,
+            "targetStage": "UNKNOWN",
+            "blockers": [
+                _blocker(
+                    "USD_RUNTIME_FRESH_REQUIRED",
+                    "美元账户需要 FRESH runtime；当前 status build 未重建 USDJPY policy。",
+                    "MISSING_USDJPY_POLICY_ARTIFACT",
+                    "FRESH",
+                )
+            ],
+        },
+        "topPolicy": {},
+        "safety": dict(SAFETY),
+    }
+
+
+def _read_usdjpy_promotion_decision(runtime_dir: Path) -> dict[str, Any]:
+    payload = _read_json(Path(runtime_dir) / "agent" / "QuantGod_AutonomousPromotionDecision.json")
+    if payload:
+        return payload
+    return {
+        "ok": False,
+        "schema": "quantgod.autonomous_promotion_decision.v1",
+        "status": "AUTONOMOUS_PROMOTION_ARTIFACT_MISSING",
+        "stage": "UNKNOWN",
+        "executionStage": "UNKNOWN",
+        "candidates": [],
+        "safety": dict(SAFETY),
+    }
 
 
 def _build_forex_live12_runtime_handoff(runtime_dir: Path, *, write: bool = False) -> dict[str, Any]:
@@ -234,6 +327,45 @@ def _build_usdjpy_lane(
     }
 
 
+def _compact_local_evidence(local_evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "found": bool(local_evidence.get("found")),
+        "canonicalSymbols": _safe_list(local_evidence.get("canonicalSymbols")),
+        "brokerSymbols": _safe_list(local_evidence.get("brokerSymbols")),
+        "findingCount": len(_safe_list(local_evidence.get("findings"))),
+    }
+
+
+def _compact_standalone_exporter(standalone_exporter: dict[str, Any]) -> dict[str, Any]:
+    bundle = _safe_dict(standalone_exporter.get("bundle"))
+    target = _safe_dict(standalone_exporter.get("target"))
+    output = _safe_dict(standalone_exporter.get("output"))
+    return {
+        "status": standalone_exporter.get("status"),
+        "statusZh": standalone_exporter.get("statusZh"),
+        "standaloneExporterReady": bool(standalone_exporter.get("standaloneExporterReady")),
+        "targetInstalledAndCompiled": bool(standalone_exporter.get("targetInstalledAndCompiled")),
+        "targetExpertInstalledAndCompiled": bool(standalone_exporter.get("targetExpertInstalledAndCompiled")),
+        "bundle": {
+            "stagedScriptPath": bundle.get("stagedScriptPath", ""),
+            "stagedExpertPath": bundle.get("stagedExpertPath", ""),
+        },
+        "target": {
+            "targetCompiledPath": target.get("targetCompiledPath", ""),
+            "targetExpertCompiledPath": target.get("targetExpertCompiledPath", ""),
+        },
+        "output": {
+            "expectedSpecsPath": output.get("expectedSpecsPath", ""),
+            "expectedSpecsRowCount": output.get("expectedSpecsRowCount", 0),
+            "expectedRatesSeriesCount": output.get("expectedRatesSeriesCount", 0),
+            "expectedRuntimeProbeLiveTickCount": output.get("expectedRuntimeProbeLiveTickCount", 0),
+        },
+        "blockers": _safe_list(standalone_exporter.get("blockers"))[:8],
+        "nextRequiredActionZh": standalone_exporter.get("nextRequiredActionZh"),
+        "safety": dict(SAFETY),
+    }
+
+
 def _hfm_metric_blockers(metrics: dict[str, Any], profile_found: bool) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not profile_found:
@@ -342,6 +474,25 @@ def _build_hfm_crypto_lane(source: dict[str, Any]) -> dict[str, Any]:
             "HFM_CRYPTO_EXECUTION_LANE_REVIEW_REQUIRED",
             "HFM crypto 合约规格已可审查，但真实 MT5 执行 lane 仍未单独设计和启用。",
         ))
+    local_evidence = _safe_dict(state.get("localEvidence"))
+    compact_shadow_state = {
+        "status": state.get("status"),
+        "statusZh": state.get("statusZh"),
+        "targetSymbols": _safe_list(state.get("targetSymbols")),
+        "localEvidence": _compact_local_evidence(local_evidence),
+        "brokerSymbolCandidates": _safe_list(state.get("brokerSymbolCandidates"))[:32],
+        "mossBacktestProfile": {
+            "profileFound": bool(moss.get("profileFound")),
+            "metrics": metrics,
+        },
+        "contractSpecExport": contract_spec_export,
+        "simulationProfileReview": simulation_review,
+        "executionSpecReview": execution_spec,
+        "shadowPlan": _safe_dict(state.get("shadowPlan")),
+        "riskBoundary": _safe_dict(state.get("riskBoundary")),
+        "blockers": state_blockers[:16],
+        "sourceFiles": _safe_dict(state.get("sourceFiles")),
+    }
     return {
         "lane": "HFM_CRYPTO_CFD",
         "laneZh": "HFM Crypto CFD 实盘候选",
@@ -370,7 +521,7 @@ def _build_hfm_crypto_lane(source: dict[str, Any]) -> dict[str, Any]:
         "simulationProfileReview": simulation_review,
         "contractSpecExportReady": bool(contract_spec_export.get("readyForContractSpecReviewInput")),
         "contractSpecExport": contract_spec_export,
-        "standaloneExporterBundle": standalone_exporter,
+        "standaloneExporterBundle": _compact_standalone_exporter(standalone_exporter),
         "executionSpecReady": execution_spec_ready,
         "executionSpecReview": execution_spec,
         "thresholds": {
@@ -380,7 +531,12 @@ def _build_hfm_crypto_lane(source: dict[str, Any]) -> dict[str, Any]:
             "tradeCountMin": HFM_TRADE_COUNT_MIN,
             "liquidationCountMax": HFM_LIQUIDATION_MAX,
         },
-        "shadowLane": lane,
+        "shadowLane": {
+            "status": lane.get("status"),
+            "statusZh": lane.get("statusZh"),
+            "summary": summary,
+            "hfmCryptoCfdState": compact_shadow_state,
+        },
         "reviewBlockers": review_blockers,
         "nextRequiredActionZh": (
             state.get("nextRequiredActionZh")
@@ -486,23 +642,42 @@ def build_live_automation_readiness(
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
+    cache_key = _readiness_cache_key(
+        runtime_dir,
+        refresh_sources=refresh_sources,
+        moss_backtest_json=moss_backtest_json,
+        hfm_simulation_profile_json=hfm_simulation_profile_json,
+        hfm_contract_spec_json=hfm_contract_spec_json,
+        extra_bases_roots=extra_bases_roots or [],
+    )
+    if not write and cache_key in _READINESS_BUILD_CACHE:
+        return copy.deepcopy(_READINESS_BUILD_CACHE[cache_key])
+    rebuild_usdjpy_research = bool(write or refresh_sources)
     usdjpy_policy_source = _capture_source(
         "usdjpy_policy",
-        lambda: build_usdjpy_policy(runtime_dir, write=bool(refresh_sources)),
+        lambda: (
+            build_usdjpy_policy(runtime_dir, write=bool(write and refresh_sources))
+            if rebuild_usdjpy_research
+            else _read_usdjpy_policy(runtime_dir)
+        ),
     )
     promotion_source = _capture_source(
         "usdjpy_autonomous_promotion",
-        lambda: build_promotion_decision(runtime_dir, write=bool(refresh_sources)),
+        lambda: (
+            build_promotion_decision(runtime_dir, write=bool(write and refresh_sources))
+            if rebuild_usdjpy_research
+            else _read_usdjpy_promotion_decision(runtime_dir)
+        ),
     )
     usdjpy_handoff_source = _capture_source(
         "forex_live12_runtime_handoff",
-        lambda: _build_forex_live12_runtime_handoff(runtime_dir, write=bool(refresh_sources)),
+        lambda: _build_forex_live12_runtime_handoff(runtime_dir, write=bool(write and refresh_sources)),
     )
     hfm_source = _capture_source(
         "hfm_crypto_shadow",
         lambda: build_hfm_crypto_shadow_lane(
             runtime_dir,
-            write=bool(refresh_sources),
+            write=bool(write and refresh_sources),
             moss_backtest_json=moss_backtest_json,
             simulation_profile_json=hfm_simulation_profile_json,
             contract_spec_json=hfm_contract_spec_json,
@@ -564,6 +739,8 @@ def build_live_automation_readiness(
         out = readiness_path(runtime_dir)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        _READINESS_BUILD_CACHE[cache_key] = copy.deepcopy(payload)
     return payload
 
 

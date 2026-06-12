@@ -156,7 +156,7 @@ def build_mt5_order_request_contract(
     preflight = (
         build_live_runtime_preflight_probe(
             runtime_dir,
-            write=bool(refresh_sources),
+            write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
             moss_backtest_json=moss_backtest_json,

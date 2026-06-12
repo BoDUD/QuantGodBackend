@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from .schema import (
     utc_now_iso,
 )
 
+_REVIEW_PACKET_BUILD_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
 
 def _safe_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -24,6 +27,46 @@ def _safe_list(value: Any) -> list[Any]:
 
 def _blocker(code: str, reason_zh: str) -> dict[str, Any]:
     return {"code": code, "reasonZh": reason_zh}
+
+
+def _path_fingerprint(value: str) -> tuple[Any, ...]:
+    if not value:
+        return ("", None, None)
+    path = Path(value)
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), stat.st_size, stat.st_mtime_ns)
+
+
+def _dir_fingerprint(path: Path) -> tuple[Any, ...]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), stat.st_mtime_ns)
+
+
+def _review_packet_cache_key(
+    runtime_dir: Path,
+    *,
+    refresh_sources: bool,
+    moss_backtest_json: str,
+    hfm_simulation_profile_json: str,
+    hfm_contract_spec_json: str,
+    extra_bases_roots: list[str],
+) -> tuple[Any, ...]:
+    return (
+        str(runtime_dir.resolve()),
+        bool(refresh_sources),
+        _path_fingerprint(moss_backtest_json),
+        _path_fingerprint(hfm_simulation_profile_json),
+        _path_fingerprint(hfm_contract_spec_json),
+        tuple(_dir_fingerprint(Path(root)) for root in extra_bases_roots),
+        _dir_fingerprint(runtime_dir / "Bases"),
+        _path_fingerprint(str(review_packet_path(runtime_dir))),
+    )
 
 
 def _check_item(item_id: str, label_zh: str, passed: bool, reason_zh: str) -> dict[str, Any]:
@@ -332,6 +375,16 @@ def build_live_execution_review_packet(
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
+    cache_key = _review_packet_cache_key(
+        runtime_dir,
+        refresh_sources=refresh_sources,
+        moss_backtest_json=moss_backtest_json,
+        hfm_simulation_profile_json=hfm_simulation_profile_json,
+        hfm_contract_spec_json=hfm_contract_spec_json,
+        extra_bases_roots=extra_bases_roots or [],
+    )
+    if not write and cache_key in _REVIEW_PACKET_BUILD_CACHE:
+        return copy.deepcopy(_REVIEW_PACKET_BUILD_CACHE[cache_key])
     readiness = (
         build_live_automation_readiness(
             runtime_dir,
@@ -386,6 +439,8 @@ def build_live_execution_review_packet(
         out = review_packet_path(runtime_dir)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        _REVIEW_PACKET_BUILD_CACHE[cache_key] = copy.deepcopy(payload)
     return payload
 
 

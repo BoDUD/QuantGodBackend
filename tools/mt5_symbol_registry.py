@@ -9,12 +9,14 @@ credentials, or sends trade requests.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -356,8 +358,13 @@ def get_lot_size_info(symbol: str) -> dict[str, Any]:
     return dict(LOT_SIZE_PROFILES.get(market_type) or LOT_SIZE_PROFILES["unknown"])
 
 
+@lru_cache(maxsize=1)
+def _static_symbol_catalog_cached() -> tuple[dict[str, Any], ...]:
+    return tuple(normalize_symbol_row(dict(row)) for row in STATIC_SYMBOLS)
+
+
 def static_symbol_catalog() -> list[dict[str, Any]]:
-    return [normalize_symbol_row(dict(row)) for row in STATIC_SYMBOLS]
+    return [copy.deepcopy(row) for row in _static_symbol_catalog_cached()]
 
 
 def infer_symbol_identity(row: dict[str, Any]) -> dict[str, Any]:
