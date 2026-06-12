@@ -211,14 +211,17 @@ test('CSV endpoint uses partial tail read for large limited ledgers', async () =
   }
 });
 
-test('missing files produce safe 404 envelope', async () => {
+test('missing JSON evidence produces safe structured missing envelope', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'qg-phase2-missing-'));
   try {
     await mkdir(dir, { recursive: true });
     const res = await invoke('/api/dashboard/state', { defaultRuntimeDir: dir, repoRoot: dir, rootDir: dir });
-    assert.equal(res.statusCode, 404);
+    assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, false);
+    assert.equal(res.body.status, 'MISSING');
+    assert.equal(res.body.schema, 'quantgod.phase2_json_missing.v1');
     assert.equal(res.body.safety.orderSendAllowed, false);
+    assert.equal(res.body.safety.livePresetMutationAllowed, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

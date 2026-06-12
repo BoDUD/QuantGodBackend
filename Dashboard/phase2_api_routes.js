@@ -294,6 +294,21 @@ function withEnvelope(payload, endpoint, filePath, stat, format, extra = {}) {
   };
 }
 
+function missingJsonEnvelope(endpoint, fileName, resolved) {
+  return {
+    ok: false,
+    schema: 'quantgod.phase2_json_missing.v1',
+    status: 'MISSING',
+    statusZh: '只读证据文件缺失',
+    endpoint,
+    fileName: path.basename(fileName || ''),
+    reasonZh: `${path.basename(fileName || '')} 尚未由本地自动化生成；这是证据缺失，不代表 API 路由不可用。`,
+    nextActionZh: '等待对应只读自动化写入证据文件，或运行 tester/report-only 生成流程后刷新页面。',
+    source: fileMeta(resolved.filePath, null, 'json'),
+    safety: PHASE2_API_SAFETY,
+  };
+}
+
 function stripBom(text) {
   return String(text || '').replace(/^\uFEFF/, '');
 }
@@ -459,7 +474,7 @@ function filterRows(rows, searchParams) {
 function handleJsonEndpoint(req, res, ctx, endpoint, fileName) {
   const resolved = resolveRuntimeFile(fileName, ctx);
   if (!resolved.stat) {
-    sendError(res, 404, endpoint, 'file_not_found', { fileName: path.basename(fileName) });
+    sendJson(res, 200, missingJsonEnvelope(endpoint, fileName, resolved));
     return true;
   }
   try {
