@@ -309,6 +309,30 @@ function missingJsonEnvelope(endpoint, fileName, resolved) {
   };
 }
 
+function missingCsvEnvelope(endpoint, fileName, resolved, scope) {
+  return {
+    ok: false,
+    schema: 'quantgod.phase2_csv_missing.v1',
+    status: 'MISSING',
+    statusZh: '只读 CSV 证据文件缺失',
+    endpoint,
+    scope,
+    fileName: path.basename(fileName || ''),
+    reasonZh: `${path.basename(fileName || '')} 尚未由本地自动化生成；这是 CSV 证据缺失，不代表 API 路由不可用。`,
+    nextActionZh: '等待对应只读自动化写入 CSV 证据，或运行 report-only/tester-only 生成流程后刷新页面。',
+    data: {
+      headers: [],
+      rows: [],
+      totalRows: 0,
+      returnedRows: 0,
+      partialRead: false,
+      missing: true,
+    },
+    source: fileMeta(resolved.filePath, null, 'csv'),
+    safety: PHASE2_API_SAFETY,
+  };
+}
+
 function stripBom(text) {
   return String(text || '').replace(/^\uFEFF/, '');
 }
@@ -507,7 +531,7 @@ function handleCsvEndpoint(req, res, ctx, endpoint, fileName) {
   }
   const resolved = resolveRuntimeFile(fileName, scopedCtx);
   if (!resolved.stat) {
-    sendError(res, 404, endpoint, 'file_not_found', { scope, fileName: path.basename(fileName), rows: [] });
+    sendJson(res, 200, missingCsvEnvelope(endpoint, fileName, resolved, scope));
     return true;
   }
   try {

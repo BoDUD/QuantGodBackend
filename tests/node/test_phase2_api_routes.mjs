@@ -226,3 +226,22 @@ test('missing JSON evidence produces safe structured missing envelope', async ()
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('missing primary CSV evidence produces safe structured empty ledger envelope', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'qg-phase2-missing-csv-'));
+  try {
+    await mkdir(dir, { recursive: true });
+    const res = await invoke('/api/shadow/candidates?limit=500', { defaultRuntimeDir: dir, repoRoot: dir, rootDir: dir });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.status, 'MISSING');
+    assert.equal(res.body.schema, 'quantgod.phase2_csv_missing.v1');
+    assert.equal(res.body.data.missing, true);
+    assert.deepEqual(res.body.data.rows, []);
+    assert.equal(res.body.data.returnedRows, 0);
+    assert.equal(res.body.safety.orderSendAllowed, false);
+    assert.equal(res.body.safety.livePresetMutationAllowed, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
