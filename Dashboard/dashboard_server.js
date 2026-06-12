@@ -110,7 +110,7 @@ const mt5AdaptiveControlScript = path.join(repoRoot, 'tools', 'mt5_adaptive_cont
 const paramLabAutoTesterScript = path.join(repoRoot, 'tools', 'run_param_lab_auto_tester_window.py');
 const dailyReviewScript = path.join(repoRoot, 'tools', 'build_daily_review.py');
 const mt5ReadonlyEndpoints = new Set(['status', 'account', 'positions', 'orders', 'symbols', 'quote', 'snapshot']);
-const mt5SymbolRegistryEndpoints = new Set(['registry', 'resolve']);
+const mt5SymbolRegistryEndpoints = new Set(['registry', 'resolve', 'symbols']);
 const mt5TradingEndpoints = new Set(['status', 'profiles', 'save-profile', 'login', 'order', 'close', 'cancel']);
 const mt5PlatformEndpoints = new Set([
   'status',
@@ -846,7 +846,8 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
 
 function buildMt5SymbolRegistryArgs(endpoint, parsedUrl) {
   const params = parsedUrl.searchParams;
-  const args = ['--endpoint', endpoint];
+  const normalizedEndpoint = endpoint === 'symbols' ? 'registry' : endpoint;
+  const args = ['--endpoint', normalizedEndpoint];
   const symbol = cleanMt5ReadonlyParam(params.get('symbol') || params.get('canonical') || params.get('brokerSymbol') || '', 160);
   const group = cleanMt5ReadonlyParam(params.get('group') || '*', 120) || '*';
   const query = cleanMt5ReadonlyParam(params.get('q') || params.get('query') || '', 120);
@@ -908,7 +909,13 @@ async function handleMt5SymbolRegistry(req, res, endpoint) {
       ...payload,
       _api: {
         service: 'quantgod_dashboard_mt5_symbol_registry',
-        endpoint: endpoint === 'resolve' ? '/api/mt5-symbol-registry/resolve' : '/api/mt5-symbol-registry',
+        endpoint:
+          endpoint === 'resolve'
+            ? '/api/mt5-symbol-registry/resolve'
+            : endpoint === 'symbols'
+              ? '/api/mt5-symbol-registry/symbols'
+              : '/api/mt5-symbol-registry',
+        aliasOf: endpoint === 'symbols' ? '/api/mt5-symbol-registry' : undefined,
         script: mt5SymbolRegistryScript,
         readOnly: true,
         orderSendAllowed: false,
