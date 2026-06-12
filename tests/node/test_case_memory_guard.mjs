@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createRequire } from 'node:module';
@@ -77,16 +78,26 @@ test('case memory candidates remain shadow-only and readable', () => {
 });
 
 test('case memory API falls back to repo research runtime when account runtime has no artifacts', () => {
-  const accountRuntime = path.join(repo, 'runtime', 'missing_case_memory_for_guard');
-  const scope = caseMemoryRoutes.resolveCaseMemoryRuntimeScope({
-    repoRoot: repo,
-    defaultRuntimeDir: accountRuntime,
-  });
-  assert.equal(scope.scope, 'research-fallback');
-  assert.equal(scope.accountRuntimeDir, accountRuntime);
-  assert.equal(scope.fallbackReason, 'CASE_MEMORY_ARTIFACTS_MISSING_IN_ACCOUNT_RUNTIME');
-  assert.equal(scope.orderSendAllowed, false);
-  assert.equal(scope.livePresetMutationAllowed, false);
-  assert.equal(scope.writesMt5OrderRequest, false);
-  assert.match(scope.artifactPath, /QuantGod_CaseMemoryStrategyCandidates\.json$/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qg-case-memory-guard-'));
+  try {
+    const repoRoot = path.join(root, 'repo');
+    const accountRuntime = path.join(root, 'account-runtime');
+    const artifactPath = path.join(repoRoot, 'runtime', 'case_memory', 'QuantGod_CaseMemoryStrategyCandidates.json');
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(artifactPath, '{}\n', 'utf8');
+
+    const scope = caseMemoryRoutes.resolveCaseMemoryRuntimeScope({
+      repoRoot,
+      defaultRuntimeDir: accountRuntime,
+    });
+    assert.equal(scope.scope, 'research-fallback');
+    assert.equal(scope.accountRuntimeDir, accountRuntime);
+    assert.equal(scope.fallbackReason, 'CASE_MEMORY_ARTIFACTS_MISSING_IN_ACCOUNT_RUNTIME');
+    assert.equal(scope.orderSendAllowed, false);
+    assert.equal(scope.livePresetMutationAllowed, false);
+    assert.equal(scope.writesMt5OrderRequest, false);
+    assert.equal(scope.artifactPath, artifactPath);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
