@@ -457,8 +457,18 @@ def _entry_feedback_policy(trades: List[Dict[str, Any]], rolling: Dict[str, Any]
             "memoryCanIncreaseAggression": aggression,
             "reasonZh": "表现稳定才允许提高进攻建议；手动 aggressive 档位仍由用户控制。",
         },
-        "tpSlGuidance": _tp_sl_guidance(_merge_factor_penalties(factor_penalties, fine_factor_penalties), data_gap_penalties, loss_streak, exit_efficiency),
-        "candidatePenaltyRules": _candidate_penalty_rules(symbol_penalties, direction_penalties, data_gap_penalties, _merge_factor_penalties(factor_penalties, fine_factor_penalties)),
+        "tpSlGuidance": _tp_sl_guidance(
+            _merge_factor_penalties(factor_penalties, fine_factor_penalties),
+            data_gap_penalties,
+            loss_streak,
+            exit_efficiency,
+        ),
+        "candidatePenaltyRules": _candidate_penalty_rules(
+            symbol_penalties,
+            direction_penalties,
+            data_gap_penalties,
+            _merge_factor_penalties(factor_penalties, fine_factor_penalties),
+        ),
         "safety": dict(SAFETY),
     }
 
@@ -714,9 +724,23 @@ def _data_gap_penalties(exits: List[Dict[str, Any]], entries: Dict[str, Dict[str
         if _score_value(entry.get("professionalScore")) < 0.65:
             low_professional_losses += 1
     if low_coverage_losses >= 2:
-        penalties.append({"gap": "dataCoverage", "lossCount": low_coverage_losses, "penalty": 0.12, "reasonZh": "低覆盖亏损偏多，提高覆盖门槛。"})
+        penalties.append(
+            {
+                "gap": "dataCoverage",
+                "lossCount": low_coverage_losses,
+                "penalty": 0.12,
+                "reasonZh": "低覆盖亏损偏多，提高覆盖门槛。",
+            }
+        )
     if low_professional_losses >= 2:
-        penalties.append({"gap": "professionalScore", "lossCount": low_professional_losses, "penalty": 0.1, "reasonZh": "专业评分不足的亏损偏多，降低弱信号权重。"})
+        penalties.append(
+            {
+                "gap": "professionalScore",
+                "lossCount": low_professional_losses,
+                "penalty": 0.1,
+                "reasonZh": "专业评分不足的亏损偏多，降低弱信号权重。",
+            }
+        )
     return penalties
 
 
@@ -990,9 +1014,15 @@ def _entry_context_quality_reason(row: Dict[str, Any], quality: str) -> str:
     if explicit:
         return str(explicit)
     if quality == "HISTORY_CONTEXT_MISSING":
-        return "历史平仓/执行反馈只有结果字段，缺少入场评分、因子、EV 和 TP/SL 计划；只能用于保守复盘/降级，不能作为升王牌证据。"
+        return (
+            "历史平仓/执行反馈只有结果字段，缺少入场评分、因子、EV 和 TP/SL 计划；"
+            "只能用于保守复盘/降级，不能作为升王牌证据。"
+        )
     if quality == "BRIDGED_HISTORY_CONTEXT":
-        return "历史平仓/执行反馈已桥接部分入场上下文，但不是原始开仓快照；只能用于复盘/降级，不能作为升王牌证据。"
+        return (
+            "历史平仓/执行反馈已桥接部分入场上下文，但不是原始开仓快照；"
+            "只能用于复盘/降级，不能作为升王牌证据。"
+        )
     if quality == "SHADOW_PROXY":
         return "代理上下文只可辅助研究，不能作为升实盘/升王牌的完整证据。"
     return ""
@@ -1063,20 +1093,67 @@ def _bridged_history_entry_context(row: Dict[str, Any]) -> Dict[str, Any]:
         },
         "estimates": {
             "ev": _history_score_or_default(row, profit_r, "estimatedEV", "ev", "expectedValue"),
-            "winProbability": _history_score_or_default(row, 0.55 if profit_r > 0 else 0.45 if profit_r < 0 else 0.50, "estimatedWinProbability", "winProbability", "winProb"),
-            "riskReward": _history_score_or_default(row, _history_risk_reward(profit_r, mfe_r, mae_r), "estimatedRiskReward", "riskReward", "rr"),
+            "winProbability": _history_score_or_default(
+                row,
+                0.55 if profit_r > 0 else 0.45 if profit_r < 0 else 0.50,
+                "estimatedWinProbability",
+                "winProbability",
+                "winProb",
+            ),
+            "riskReward": _history_score_or_default(
+                row,
+                _history_risk_reward(profit_r, mfe_r, mae_r),
+                "estimatedRiskReward",
+                "riskReward",
+                "rr",
+            ),
             "positionScale": _history_score_or_default(row, 0.20, "positionScaling", "positionScale", "riskMultiplier"),
         },
         "riskPlan": {
-            "stopLossR": _history_score_or_default(row, max(1.0, mae_r) if mae_r else 1.0, "stopLossR", "slR", "initialStopR"),
-            "targetR": _history_score_or_default(row, max(1.2, mfe_r, abs(profit_r)) if (mfe_r or profit_r) else 1.2, "takeProfitR", "tpR", "targetR"),
+            "stopLossR": _history_score_or_default(
+                row,
+                max(1.0, mae_r) if mae_r else 1.0,
+                "stopLossR",
+                "slR",
+                "initialStopR",
+            ),
+            "targetR": _history_score_or_default(
+                row,
+                max(1.2, mfe_r, abs(profit_r)) if (mfe_r or profit_r) else 1.2,
+                "takeProfitR",
+                "tpR",
+                "targetR",
+            ),
             "firstTakeProfitR": _history_score_or_default(row, 0.6, "tp1R", "firstTakeProfitR"),
-            "secondTakeProfitR": _history_score_or_default(row, max(1.2, mfe_r, abs(profit_r)) if (mfe_r or profit_r) else 1.2, "tp2R", "secondTakeProfitR"),
+            "secondTakeProfitR": _history_score_or_default(
+                row,
+                max(1.2, mfe_r, abs(profit_r)) if (mfe_r or profit_r) else 1.2,
+                "tp2R",
+                "secondTakeProfitR",
+            ),
             "trailStartR": _history_score_or_default(row, 0.8, "trailingStartR", "trailStartR"),
             "givebackPct": _history_score_or_default(row, 0.45, "mfeGivebackPct", "givebackPct"),
-            "timeoutMinutes": _history_score_or_default(row, float(duration or 90), "maxHoldMinutes", "timeoutMinutes", "durationMinutes"),
-            "stopLossPips": _history_score_or_default(row, abs(price_move_pips) if price_move_pips else 6.0, "stopLossPriceMove", "stopLossPips", "slPips"),
-            "takeProfitPips": _history_score_or_default(row, max(abs(price_move_pips) * 1.4, 8.0) if price_move_pips else 8.0, "takeProfitPriceMove", "takeProfitPips", "tpPips"),
+            "timeoutMinutes": _history_score_or_default(
+                row,
+                float(duration or 90),
+                "maxHoldMinutes",
+                "timeoutMinutes",
+                "durationMinutes",
+            ),
+            "stopLossPips": _history_score_or_default(
+                row,
+                abs(price_move_pips) if price_move_pips else 6.0,
+                "stopLossPriceMove",
+                "stopLossPips",
+                "slPips",
+            ),
+            "takeProfitPips": _history_score_or_default(
+                row,
+                max(abs(price_move_pips) * 1.4, 8.0) if price_move_pips else 8.0,
+                "takeProfitPriceMove",
+                "takeProfitPips",
+                "tpPips",
+            ),
         },
         "factorAttributionSummary": _history_attribution_summary(row, entry_regime, exit_regime, profit_r, mfe_r, mae_r, comment),
     }
@@ -1233,10 +1310,22 @@ def _review_suggestions(
             suggestions.append({"trigger": tag, "actionZh": action, "confidence": "MEDIUM"})
     for row in symbol_perf[:3]:
         if float(row.get("totalProfitR") or 0) < 0 and int(row.get("sampleCount") or 0) >= 3:
-            suggestions.append({"trigger": f"SYMBOL_{row.get('symbol')}", "actionZh": f"{row.get('symbol')} 持续拖累，降低开仓权重。", "confidence": "MEDIUM"})
+            suggestions.append(
+                {
+                    "trigger": f"SYMBOL_{row.get('symbol')}",
+                    "actionZh": f"{row.get('symbol')} 持续拖累，降低开仓权重。",
+                    "confidence": "MEDIUM",
+                }
+            )
     for row in direction_perf:
         if float(row.get("totalProfitR") or 0) < 0 and int(row.get("sampleCount") or 0) >= 3:
-            suggestions.append({"trigger": f"DIRECTION_{row.get('side')}", "actionZh": f"{row.get('side')} 近期弱，降低这一侧进攻欲望。", "confidence": "MEDIUM"})
+            suggestions.append(
+                {
+                    "trigger": f"DIRECTION_{row.get('side')}",
+                    "actionZh": f"{row.get('side')} 近期弱，降低这一侧进攻欲望。",
+                    "confidence": "MEDIUM",
+                }
+            )
     for row in memory_completeness.get("lowCoverageFields", [])[:4]:
         field = row.get("field")
         category = row.get("category")
@@ -1290,7 +1379,10 @@ def _review_suggestions(
             suggestions.append(
                 {
                     "trigger": f"FINE_FACTOR_MISSING_{row.get('factor')}",
-                    "actionZh": f"{row.get('factor')} 细因子在亏损单中缺失 {row.get('lossMissingCount')} 次，优先补采集并降低信息不完整信号权重。",
+                    "actionZh": (
+                        f"{row.get('factor')} 细因子在亏损单中缺失 {row.get('lossMissingCount')} 次，"
+                        "优先补采集并降低信息不完整信号权重。"
+                    ),
                     "confidence": "MEDIUM",
                 }
             )
@@ -1299,7 +1391,10 @@ def _review_suggestions(
             suggestions.append(
                 {
                     "trigger": f"FINE_FACTOR_RAW_MISSING_{row.get('factor')}",
-                    "actionZh": f"{row.get('factor')} 细因子在亏损单中缺少原始开仓快照 {row.get('lossRawMissingCount')} 次，桥接值只可研究，优先补真实采集。",
+                    "actionZh": (
+                        f"{row.get('factor')} 细因子在亏损单中缺少原始开仓快照 "
+                        f"{row.get('lossRawMissingCount')} 次，桥接值只可研究，优先补真实采集。"
+                    ),
                     "confidence": "HIGH" if float(row.get("rawCoverageRatio") or 0) < 0.5 else "MEDIUM",
                 }
             )
