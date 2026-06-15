@@ -35,6 +35,107 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             self.assertTrue(Path(paths["latest"]).exists())
             saved = json.loads(Path(paths["latest"]).read_text(encoding="utf-8"))
             self.assertIn("historyProduction", saved)
+            self.assertEqual(saved["historyProduction"]["status"], "WARN")
+            self.assertIn("M15 历史覆盖不足", saved["historyProduction"]["blockersZh"])
+
+    def test_history_audit_requires_all_core_timeframes_and_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "backtest" / "usdjpy.sqlite"
+            db.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(db))
+            for table in ("bars_m1", "bars_m5", "bars_m15", "bars_h1"):
+                conn.execute(f"CREATE TABLE {table} (time TEXT, close REAL)")
+                conn.execute(f"INSERT INTO {table} VALUES ('2026-06-01T00:00:00Z', 155.0)")
+            conn.commit()
+            conn.close()
+            (root / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_history_production_status.v1",
+                        "status": "PASS",
+                        "historyTargetSatisfied": True,
+                        "requiredSpanDays": 316.2,
+                        "maxLatestLagHours": 96.0,
+                        "timeframes": {
+                            timeframe: {
+                                "timeframe": timeframe,
+                                "barCount": 1000,
+                                "earliestBar": "2025-06-01T00:00:00Z",
+                                "latestBar": "2026-06-01T00:00:00Z",
+                                "spanDays": 365.0,
+                                "requiredSpanDays": 316.2,
+                                "latestLagHours": 12.0,
+                                "maxLatestLagHours": 96.0,
+                                "spanOk": True,
+                                "densityOk": True,
+                                "freshnessOk": True,
+                                "passed": True,
+                            }
+                            for timeframe in ("M1", "M5", "M15", "H1")
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = build_report(root)
+
+            history = report["historyProduction"]
+            self.assertEqual(history["status"], "PASS")
+            self.assertTrue(history["coverageGatePassed"])
+            self.assertTrue(history["freshnessGatePassed"])
+            self.assertEqual(history["passedTimeframes"], 4)
+            self.assertEqual(history["databasePath"], "backtest/usdjpy.sqlite")
+
+    def test_history_audit_blocks_when_production_freshness_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "backtest" / "usdjpy.sqlite"
+            db.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(db))
+            for table in ("bars_m1", "bars_m5", "bars_m15", "bars_h1"):
+                conn.execute(f"CREATE TABLE {table} (time TEXT, close REAL)")
+                conn.execute(f"INSERT INTO {table} VALUES ('2026-06-01T00:00:00Z', 155.0)")
+            conn.commit()
+            conn.close()
+            (root / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_history_production_status.v1",
+                        "status": "WARN",
+                        "historyTargetSatisfied": False,
+                        "requiredSpanDays": 316.2,
+                        "maxLatestLagHours": 96.0,
+                        "timeframes": {
+                            timeframe: {
+                                "timeframe": timeframe,
+                                "barCount": 1000,
+                                "earliestBar": "2025-06-01T00:00:00Z",
+                                "latestBar": "2026-06-01T00:00:00Z",
+                                "spanDays": 365.0,
+                                "requiredSpanDays": 316.2,
+                                "latestLagHours": 240.0,
+                                "maxLatestLagHours": 96.0,
+                                "spanOk": True,
+                                "densityOk": True,
+                                "freshnessOk": False,
+                                "passed": False,
+                            }
+                            for timeframe in ("M1", "M5", "M15", "H1")
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = build_report(root)
+
+            history = report["historyProduction"]
+            self.assertEqual(history["status"], "WARN")
+            self.assertFalse(history["freshnessGatePassed"])
+            self.assertIn("M1 最新 K 线延迟超阈值", history["blockersZh"])
+            self.assertIn("USDJPY 历史数据覆盖或 freshness 未通过", report["blockersZh"])
 
     def test_strategy_family_parity_uses_backtest_coverage_matrix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

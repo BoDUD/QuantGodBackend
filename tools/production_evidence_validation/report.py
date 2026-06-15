@@ -88,7 +88,7 @@ def build_report(runtime_dir: Path) -> dict[str, Any]:
     if execution_feedback.get("coreCoverage", 0) < thresholds.get("minCoreCoverage", 0.95):
         blockers.append("执行反馈核心字段覆盖率不足")
     if history.get("status") != "PASS":
-        blockers.append("USDJPY 历史数据深度或表覆盖不足")
+        blockers.append("USDJPY 历史数据覆盖或 freshness 未通过")
     if ga.get("status") != "PASS":
         blockers.append("GA 多代稳定性证据不足")
     if rsi_lineage.get("status") != "PASS":
