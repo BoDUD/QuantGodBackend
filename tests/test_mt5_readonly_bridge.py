@@ -453,8 +453,14 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
                     os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = old_max_age
 
         self.assertEqual(positions["status"], "STALE_EA_SNAPSHOT")
+        self.assertEqual(positions["_freshness"]["status"], "STALE_EA_SNAPSHOT")
+        self.assertTrue(positions["_freshness"]["stale"])
+        self.assertFalse(positions["_freshness"]["orderSendAllowed"])
+        self.assertIn("live_dashboard_snapshot_stale", positions["_freshness"]["blockers"])
         self.assertTrue(positions["positions"]["staleSuppressed"])
         self.assertEqual(positions["positions"]["items"], [])
+        self.assertEqual(snapshot["_freshness"]["status"], "STALE_EA_SNAPSHOT")
+        self.assertTrue(snapshot["_freshness"]["sourceFile"].endswith("QuantGod_Dashboard.json"))
         self.assertEqual(snapshot["positions"]["items"], [])
         self.assertEqual(snapshot["orders"]["items"], [])
         self.assertEqual(snapshot["warning"], "ea_snapshot_stale_positions_and_orders_suppressed")
@@ -483,6 +489,8 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         self.assertEqual(positions["positions"]["count"], 1)
         self.assertEqual(positions["positions"]["items"][0]["ticket"], 621204078)
         self.assertTrue(positions["source"]["fresh"])
+        self.assertEqual(positions["_freshness"]["status"], "FRESH_EA_SNAPSHOT")
+        self.assertTrue(positions["_freshness"]["fresh"])
 
     def test_explicit_only_runtime_candidates_skip_default_fallbacks(self):
         keys = [

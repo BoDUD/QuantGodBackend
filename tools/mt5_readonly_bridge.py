@@ -196,6 +196,33 @@ def ea_snapshot_fresh(stat: os.stat_result | None) -> bool:
     return age <= ea_snapshot_max_age_seconds()
 
 
+def ea_snapshot_freshness(file_path: Path | None, stat: os.stat_result | None) -> dict[str, Any]:
+    age = ea_snapshot_age_seconds(stat)
+    max_age = ea_snapshot_max_age_seconds()
+    fresh = age is not None and age <= max_age
+    source_file = str(file_path) if file_path else ""
+    return {
+        "mode": "MT5_READONLY_EA_SNAPSHOT_MTIME_WATCH",
+        "status": "FRESH_EA_SNAPSHOT" if fresh else "STALE_EA_SNAPSHOT",
+        "statusLabel": "EA snapshot fresh" if fresh else "EA snapshot stale",
+        "fresh": fresh,
+        "stale": not fresh,
+        "ageSeconds": round(age, 3) if age is not None else None,
+        "maxAgeSeconds": max_age,
+        "sourceFile": source_file,
+        "blockers": [] if fresh else ["live_dashboard_snapshot_stale"],
+        "nextAction": (
+            "Continue reading the latest EA dashboard snapshot."
+            if fresh
+            else "Restore the MT5/EA dashboard writer so QuantGod_Dashboard.json is refreshed before using live account state."
+        ),
+        "orderSendAllowed": False,
+        "mt5OrderSendAllowed": False,
+        "brokerCallsMade": False,
+        "mutatesMt5": False,
+    }
+
+
 def stale_collection_payload(kind: str, symbol: str, stat: os.stat_result | None) -> dict[str, Any]:
     age = ea_snapshot_age_seconds(stat)
     max_age = ea_snapshot_max_age_seconds()
@@ -508,6 +535,7 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
     snapshot_age = ea_snapshot_age_seconds(stat)
     snapshot_max_age = ea_snapshot_max_age_seconds()
     snapshot_fresh = ea_snapshot_fresh(stat)
+    freshness = ea_snapshot_freshness(file_path, stat)
     runtime = dashboard.get("runtime") if isinstance(dashboard.get("runtime"), dict) else {}
     payload.update(
         {
@@ -531,6 +559,7 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
                 "fresh": snapshot_fresh,
                 "readError": read_error,
             },
+            "_freshness": freshness,
         }
     )
     if not snapshot_fresh:
