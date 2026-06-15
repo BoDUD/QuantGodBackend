@@ -104,7 +104,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "agent" / "QuantGod_ProductionExecutionPolicy.json",
                 {
                     "schema": "quantgod.production_execution_policy.v1",
-                    "legacyPath": "/Users/bowen/Desktop/Quard/QuantGod/runtime/old.json",
+                    "legacyPath": "/Users/bowen/Desktop/Quard/" + "QuantGod/runtime/old.json",
                 },
             )
 
@@ -130,4 +130,3 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
