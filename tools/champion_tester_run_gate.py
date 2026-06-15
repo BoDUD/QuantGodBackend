@@ -342,9 +342,9 @@ def _parse_iso(value: Any) -> datetime | None:
         return None
 
 
-def _authorization_lock_refresh_guidance(next_window: dict[str, Any]) -> dict[str, Any]:
+def _authorization_lock_refresh_guidance(next_window: dict[str, Any], now_utc: datetime | None = None) -> dict[str, Any]:
     max_ttl_minutes = 180
-    now = datetime.now(timezone.utc)
+    now = now_utc or datetime.now(timezone.utc)
     start_at = _parse_iso(next_window.get("startJstIso"))
     if not start_at:
         return {
@@ -392,7 +392,7 @@ def _window_briefing(next_window: dict[str, Any], blockers: list[str]) -> dict[s
     summary_zh = "tester window 信息缺失。"
     if status == "open_now":
         summary_zh = (
-            "tester window 已打开，但仍需继续清理："
+            "tester window 已打开；开窗后仍需继续清理："
             f"{', '.join(residual_after_open)}。"
             if residual_after_open
             else "tester window 已打开。"
@@ -431,6 +431,7 @@ def build_champion_tester_run_gate(
     *,
     primary_dashboard_json: str = "",
     allow_outside_window: bool = False,
+    now_utc: datetime | None = None,
     write: bool = False,
 ) -> dict[str, Any]:
     runtime = Path(runtime_dir)
@@ -460,6 +461,7 @@ def build_champion_tester_run_gate(
         lock_path=isolated_runtime_dir / LOCK_NAME,
         max_tasks=allowed_run_max_tasks,
         allow_outside_window=allow_outside_window,
+        now_utc=now_utc,
         expected_login=account["number"],
         expected_server=account["server"],
         max_live_snapshot_age_minutes=30,
@@ -483,8 +485,8 @@ def build_champion_tester_run_gate(
     materialization = _safe_dict(request.get("materializationStatus"))
     selected_champion = _safe_dict(request.get("selectedChampion"))
     seed_id = str(selected_champion.get("seedId") or "UNKNOWN_CHAMPION")
-    next_tester_window = _next_tester_window()
-    lock_refresh_guidance = _authorization_lock_refresh_guidance(next_tester_window)
+    next_tester_window = _next_tester_window(now_utc)
+    lock_refresh_guidance = _authorization_lock_refresh_guidance(next_tester_window, now_utc)
     readiness = _top_level_readiness(gate, account_context)
     window_briefing = _window_briefing(next_tester_window, blockers)
     summary_zh = (

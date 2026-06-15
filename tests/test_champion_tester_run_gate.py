@@ -11,6 +11,9 @@ from tools.champion_tester_run_gate import build_champion_tester_run_gate
 from tools.champion_tester_lock_draft import build_champion_tester_lock_draft
 
 
+RUN_GATE_TEST_NOW = datetime(2026, 6, 15, 3, 0, tzinfo=timezone.utc)
+
+
 class ChampionTesterRunGateTests(unittest.TestCase):
     def _write_json(self, path: Path, payload: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -22,7 +25,7 @@ class ChampionTesterRunGateTests(unittest.TestCase):
         tester_root = runtime / "HFM_MT5_Tester_Isolated"
         isolated_runtime = tester_root / "MQL5" / "Files"
         live_runtime = root / "live" / "MQL5" / "Files"
-        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now = RUN_GATE_TEST_NOW
 
         (tester_root / "MQL5" / "Profiles" / "Tester").mkdir(parents=True)
         (tester_root / "terminal64.exe").write_text("stub", encoding="ascii")
@@ -146,6 +149,7 @@ class ChampionTesterRunGateTests(unittest.TestCase):
                     runtime,
                     primary_dashboard_json=str(dashboard),
                     allow_outside_window=True,
+                    now_utc=RUN_GATE_TEST_NOW,
                     write=False,
                 )
 
@@ -179,6 +183,7 @@ class ChampionTesterRunGateTests(unittest.TestCase):
                     runtime,
                     primary_dashboard_json=str(dashboard),
                     allow_outside_window=True,
+                    now_utc=RUN_GATE_TEST_NOW,
                     write=False,
                 )
                 draft = build_champion_tester_lock_draft(
@@ -220,6 +225,7 @@ class ChampionTesterRunGateTests(unittest.TestCase):
                     runtime,
                     primary_dashboard_json=str(dashboard),
                     allow_outside_window=True,
+                    now_utc=RUN_GATE_TEST_NOW,
                     write=False,
                 )
 
@@ -254,6 +260,7 @@ class ChampionTesterRunGateTests(unittest.TestCase):
                     runtime,
                     primary_dashboard_json=str(dashboard),
                     allow_outside_window=False,
+                    now_utc=RUN_GATE_TEST_NOW,
                     write=False,
                 )
 
@@ -296,6 +303,7 @@ class ChampionTesterRunGateTests(unittest.TestCase):
                     runtime,
                     primary_dashboard_json=str(dashboard),
                     allow_outside_window=True,
+                    now_utc=RUN_GATE_TEST_NOW,
                     write=False,
                 )
 
