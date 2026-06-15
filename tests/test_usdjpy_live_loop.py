@@ -108,6 +108,27 @@ class USDJPYLiveLoopTests(unittest.TestCase):
             self.assertFalse(payload["runtimeReady"])
             self.assertEqual(payload["runtime"]["freshnessTier"], "HARD_STALE")
 
+    def test_stale_runtime_snapshot_mtime_blocks_even_with_embedded_fresh_age(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            runtime = Path(tmp) / "runtime"
+            write_ready_preset(root)
+            sample_runtime(runtime, overwrite=True)
+            snapshot_path = runtime / "QuantGod_MT5RuntimeSnapshot_USDJPYc.json"
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            snapshot["runtimeFresh"] = True
+            snapshot["runtimeAgeSeconds"] = 2
+            snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+            old_time = time.time() - 3600
+            os.utime(snapshot_path, (old_time, old_time))
+
+            payload = build_live_loop(root, runtime, write=True)
+
+            self.assertEqual(payload["state"], STATE_EVIDENCE_MISSING)
+            self.assertFalse(payload["runtimeReady"])
+            self.assertEqual(payload["runtime"]["freshnessTier"], "HARD_STALE")
+            self.assertGreater(payload["runtime"]["ageSeconds"], 3500)
+
     def test_hard_spread_blocker_is_prioritized_in_why_no_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"

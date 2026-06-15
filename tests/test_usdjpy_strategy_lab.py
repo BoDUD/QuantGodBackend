@@ -208,6 +208,31 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             risk = build_risk_check(runtime)
             self.assertEqual(risk["status"], "PASS")
 
+    def test_runtime_snapshot_file_age_overrides_embedded_fresh_age(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            sample_runtime(runtime, overwrite=True)
+            snapshot_path = runtime / "QuantGod_MT5RuntimeSnapshot_USDJPYc.json"
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            snapshot["runtimeFresh"] = True
+            snapshot["runtimeAgeSeconds"] = 2
+            snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+            old_time = time.time() - 3600
+            os.utime(snapshot_path, (old_time, old_time))
+
+            snapshot = focus_runtime_snapshot(runtime)
+            self.assertIsNotNone(snapshot)
+            self.assertFalse(snapshot["runtimeFresh"])
+            self.assertGreater(snapshot["runtimeAgeSeconds"], 3500)
+            self.assertEqual(snapshot["_embeddedRuntimeAgeSeconds"], 2)
+
+            policy = build_usdjpy_policy(runtime)
+            self.assertEqual(policy["evidence"]["runtimeFreshnessTier"], "HARD_STALE")
+            self.assertTrue(any("运行快照严重陈旧" in "；".join(item["reasons"]) for item in policy["strategies"]))
+            self.assertFalse(
+                any("HFM EA Dashboard 新鲜快照" in "；".join(item["reasons"]) for item in policy["strategies"])
+            )
+
     def test_fastlane_fast_state_is_accepted_by_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)

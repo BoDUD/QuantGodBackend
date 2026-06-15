@@ -113,7 +113,7 @@ def _dashboard_fastlane_fallback(runtime_dir: Path) -> Optional[Dict[str, Any]]:
     age = to_float(dashboard.get("runtimeAgeSeconds"), 9999.0)
     tick_age = to_float(runtime.get("tickAgeSeconds"), 9999.0)
     fresh_limit = runtime_fresh_limit_seconds()
-    if not (bool(dashboard.get("runtimeFresh")) or age <= fresh_limit or tick_age <= 30):
+    if not (bool(dashboard.get("runtimeFresh")) or age <= fresh_limit):
         return None
     return {
         "found": True,
@@ -199,6 +199,33 @@ def runtime_fresh_limit_seconds(default: float = 180.0) -> float:
     return max(30.0, to_float(os.environ.get("QG_USDJPY_RUNTIME_FRESH_SECONDS"), default))
 
 
+def effective_runtime_age_seconds(snapshot: Dict[str, Any], default: float = 9999.0) -> float:
+    ages: List[float] = []
+    for key in ("runtimeAgeSeconds", "_fileAgeSeconds"):
+        value = snapshot.get(key)
+        age = to_float(value, -1.0)
+        if age >= 0:
+            ages.append(age)
+    if not ages:
+        return default
+    return max(ages)
+
+
+def with_effective_runtime_freshness(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(snapshot)
+    embedded_age = to_float(payload.get("runtimeAgeSeconds"), -1.0)
+    file_age = to_float(payload.get("_fileAgeSeconds"), -1.0)
+    effective_age = effective_runtime_age_seconds(payload)
+    if embedded_age >= 0:
+        payload.setdefault("_embeddedRuntimeAgeSeconds", embedded_age)
+    if file_age >= 0:
+        payload.setdefault("_fileRuntimeAgeSeconds", file_age)
+    payload["runtimeAgeSeconds"] = effective_age
+    payload["_effectiveRuntimeAgeSeconds"] = effective_age
+    payload["runtimeFresh"] = effective_age <= runtime_fresh_limit_seconds()
+    return payload
+
+
 def to_direction(value: Any) -> str:
     text = str(value or "").strip().upper()
     if text in {"BUY", "LONG", "1", "多", "买", "买入"}:
@@ -230,6 +257,7 @@ def focus_runtime_snapshot(runtime_dir: Path, symbol: str = FOCUS_SYMBOL) -> Opt
         candidates.append(payload)
     payload = min(candidates, key=lambda item: to_float(item.get("_fileAgeSeconds"), 999999.0)) if candidates else None
     if payload and ("symbol" not in payload or is_focus_symbol(payload.get("symbol") or payload.get("watchlist") or symbol)):
+        payload = with_effective_runtime_freshness(payload)
         if "runtime" in payload and "watchlist" in payload:
             runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
             market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
@@ -237,8 +265,6 @@ def focus_runtime_snapshot(runtime_dir: Path, symbol: str = FOCUS_SYMBOL) -> Opt
             payload.setdefault("schema", "quantgod.hfm_ea_dashboard_snapshot.v1")
             payload.setdefault("symbol", payload.get("watchlist") or symbol)
             payload.setdefault("fallback", False)
-            payload.setdefault("runtimeAgeSeconds", payload.get("_fileAgeSeconds", 9999))
-            payload.setdefault("runtimeFresh", float(payload.get("runtimeAgeSeconds", 9999)) <= runtime_fresh_limit_seconds())
             payload.setdefault("current_price", {
                 "bid": market.get("bid"),
                 "ask": market.get("ask"),
