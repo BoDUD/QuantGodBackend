@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -12,6 +13,9 @@ from tools.usdjpy_strategy_lab.entry_context_feedback import build_entry_context
 
 
 class ExecutionFeedbackProducerTests(unittest.TestCase):
+    def _sha256(self, path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
     def test_sample_generates_complete_shadow_feedback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
@@ -24,6 +28,34 @@ class ExecutionFeedbackProducerTests(unittest.TestCase):
             ledger = runtime / "execution" / "QuantGod_LiveExecutionFeedback.jsonl"
             self.assertTrue(ledger.exists())
             self.assertIn("USDJPY_RSI_REVERSAL_LONG_V1", ledger.read_text(encoding="utf-8"))
+            manifest_path = runtime / "execution" / "QuantGod_LiveExecutionFeedbackArtifactManifest.json"
+            report_path = runtime / "execution" / "QuantGod_LiveExecutionFeedbackProducerReport.json"
+            self.assertTrue(manifest_path.exists())
+            self.assertEqual(report["artifactManifest"]["schemaVersion"], 1)
+            self.assertEqual(
+                report["artifactManifest"]["schema"],
+                "quantgod.execution_feedback_producer.artifact_manifest.v1",
+            )
+            self.assertEqual(
+                report["artifactManifest"]["path"],
+                "execution/QuantGod_LiveExecutionFeedbackArtifactManifest.json",
+            )
+            self.assertTrue(report["artifactManifest"]["present"])
+            self.assertEqual(report["artifactManifest"]["hashAlgorithm"], "sha256")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schemaVersion"], 1)
+            self.assertEqual(manifest["artifactCount"], 2)
+            self.assertFalse(manifest["safety"]["orderSendAllowed"])
+            rows = {row["artifactId"]: row for row in manifest["artifacts"]}
+            self.assertEqual(rows["ledger"]["path"], "execution/QuantGod_LiveExecutionFeedback.jsonl")
+            self.assertEqual(
+                rows["producerReport"]["path"],
+                "execution/QuantGod_LiveExecutionFeedbackProducerReport.json",
+            )
+            self.assertEqual(rows["ledger"]["sha256"], self._sha256(ledger))
+            self.assertEqual(rows["producerReport"]["sha256"], self._sha256(report_path))
+            self.assertGreater(rows["ledger"]["sizeBytes"], 0)
+            self.assertGreater(rows["producerReport"]["sizeBytes"], 0)
 
     def test_shadow_candidate_mfe_mae_pips_backfill_feedback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

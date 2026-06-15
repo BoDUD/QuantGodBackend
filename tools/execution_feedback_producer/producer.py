@@ -8,11 +8,91 @@ from pathlib import Path
 from typing import Any
 
 from .io_utils import ensure_dir, read_csv_rows, read_json, read_jsonl, write_json, write_jsonl
-from .schema import CORE_FIELDS, FEEDBACK_LEDGER, FOCUS_SYMBOL, OUTPUT_DIR, PRODUCER_REPORT, SAFETY, SCHEMA
+from .schema import (
+    ARTIFACT_MANIFEST,
+    CORE_FIELDS,
+    FEEDBACK_LEDGER,
+    FOCUS_SYMBOL,
+    OUTPUT_DIR,
+    PRODUCER_REPORT,
+    SAFETY,
+    SCHEMA,
+    SCHEMA_ARTIFACT_MANIFEST,
+)
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _relative_artifact_path(runtime_dir: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(runtime_dir.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_specs(runtime_dir: Path) -> list[tuple[str, Path, str]]:
+    out_dir = runtime_dir / OUTPUT_DIR
+    return [
+        ("ledger", out_dir / FEEDBACK_LEDGER, "quantgod.execution_feedback.v1"),
+        ("producerReport", out_dir / PRODUCER_REPORT, SCHEMA),
+    ]
+
+
+def _artifact_manifest_path(runtime_dir: Path) -> Path:
+    return runtime_dir / OUTPUT_DIR / ARTIFACT_MANIFEST
+
+
+def _artifact_manifest(runtime_dir: Path, generated_at: str) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for artifact_id, path, schema in _artifact_specs(runtime_dir):
+        exists = path.exists()
+        rows.append(
+            {
+                "artifactId": artifact_id,
+                "schema": schema,
+                "path": _relative_artifact_path(runtime_dir, path),
+                "exists": exists,
+                "sizeBytes": path.stat().st_size if exists else 0,
+                "sha256": _file_sha256(path) if exists else "",
+            }
+        )
+    return {
+        "ok": True,
+        "schema": SCHEMA_ARTIFACT_MANIFEST,
+        "schemaVersion": 1,
+        "generatedAt": generated_at,
+        "artifactCount": len(rows),
+        "artifacts": rows,
+        "safety": dict(SAFETY),
+    }
+
+
+def _artifact_manifest_summary(
+    runtime_dir: Path,
+    manifest: dict[str, Any] | None = None,
+    *,
+    present: bool | None = None,
+) -> dict[str, Any]:
+    path = _artifact_manifest_path(runtime_dir)
+    artifact_count = int((manifest or {}).get("artifactCount") or len(_artifact_specs(runtime_dir)))
+    return {
+        "schema": SCHEMA_ARTIFACT_MANIFEST,
+        "schemaVersion": 1,
+        "path": _relative_artifact_path(runtime_dir, path),
+        "present": path.exists() if present is None else present,
+        "artifactCount": artifact_count,
+        "hashAlgorithm": "sha256",
+    }
 
 
 def _float(row: dict[str, Any], *keys: str, default: float | None = None) -> float | None:
@@ -813,12 +893,15 @@ def build_feedback(runtime_dir: Path, write: bool = False) -> dict[str, Any]:
     complete_rows = [row for row in rows if _complete(row)]
     entry_context_coverage = _entry_context_coverage(complete_rows)
     entry_context_source_audit = _entry_context_source_audit(complete_rows)
+    generated_at = _now_iso()
     report = {
         "schema": SCHEMA,
-        "generatedAt": _now_iso(),
+        "generatedAt": generated_at,
         "status": "PASS" if len(complete_rows) >= 5 else "WARN",
         "summaryZh": "执行反馈样本已自动补齐" if len(complete_rows) >= 5 else "执行反馈样本仍需积累",
         "ledgerPath": str(ledger_path),
+        "ledgerRelativePath": _relative_artifact_path(runtime_dir, ledger_path),
+        "artifactManifest": _artifact_manifest_summary(runtime_dir, present=write),
         "existingCount": len(existing),
         "generatedCount": generated,
         "sampleCount": len(rows),
@@ -837,6 +920,7 @@ def build_feedback(runtime_dir: Path, write: bool = False) -> dict[str, Any]:
     if write:
         write_jsonl(ledger_path, rows)
         write_json(out_dir / PRODUCER_REPORT, report)
+        write_json(_artifact_manifest_path(runtime_dir), _artifact_manifest(runtime_dir, generated_at))
     return report
 
 

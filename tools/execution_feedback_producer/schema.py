@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Final
 
 SCHEMA: Final[str] = "quantgod.execution_feedback_producer.v1"
+SCHEMA_ARTIFACT_MANIFEST: Final[str] = "quantgod.execution_feedback_producer.artifact_manifest.v1"
 FOCUS_SYMBOL: Final[str] = "USDJPYc"
 OUTPUT_DIR: Final[str] = "execution"
 FEEDBACK_LEDGER: Final[str] = "QuantGod_LiveExecutionFeedback.jsonl"
 PRODUCER_REPORT: Final[str] = "QuantGod_LiveExecutionFeedbackProducerReport.json"
+ARTIFACT_MANIFEST: Final[str] = "QuantGod_LiveExecutionFeedbackArtifactManifest.json"
 
 CORE_FIELDS: Final[tuple[str, ...]] = (
     "strategyId",
