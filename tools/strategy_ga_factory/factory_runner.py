@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import (
     Any,
@@ -40,10 +41,12 @@ from .schema import (
     ALLOWED_PROMOTION_STAGES,
     SAFETY,
     SCHEMA_ELITE_ARCHIVE,
+    SCHEMA_ARTIFACT_MANIFEST,
     SCHEMA_FACTORY_STATE,
     SCHEMA_GRAVEYARD,
     SCHEMA_LINEAGE_TREE,
     SCHEMA_REFLECTION_REPORT,
+    artifact_manifest_path,
     elite_archive_path,
     graveyard_path,
     intent_plan_path,
@@ -89,7 +92,9 @@ def build_factory_state(runtime_dir: Path, *, write: bool = True) -> Dict[str, A
             "ledger": str(ledger_path(runtime_dir)),
             "intentPlan": str(intent_plan_path(runtime_dir)),
             "reflectionReport": str(reflection_report_path(runtime_dir)),
+            "artifactManifest": str(artifact_manifest_path(runtime_dir)),
         },
+        "artifactManifest": _artifact_manifest_summary(runtime_dir, present=write),
         "eliteArchive": elite_archive,
         "graveyard": graveyard,
         "lineageTree": lineage_tree,
@@ -124,6 +129,8 @@ def build_factory_state(runtime_dir: Path, *, write: bool = True) -> Dict[str, A
                 "nextGenerationStatus",
             ],
         )
+        manifest = _artifact_manifest(runtime_dir, generated_at)
+        write_json(artifact_manifest_path(runtime_dir), manifest)
     return state
 
 
@@ -147,7 +154,79 @@ def read_factory_state(runtime_dir: Path) -> Dict[str, Any]:
         },
         "evolutionLockPolicy": _evolution_lock_policy(),
         "reflectionReport": _reflection_report({}, [], {"eliteCount": 0}, {"graveyardCount": 0}),
+        "artifactManifest": _artifact_manifest_summary(Path(runtime_dir)),
         "safety": dict(SAFETY),
+    }
+
+
+def _relative_artifact_path(runtime_dir: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(runtime_dir.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_specs(runtime_dir: Path) -> List[tuple[str, Path, str]]:
+    return [
+        ("state", state_path(runtime_dir), SCHEMA_FACTORY_STATE),
+        ("eliteArchive", elite_archive_path(runtime_dir), SCHEMA_ELITE_ARCHIVE),
+        ("graveyard", graveyard_path(runtime_dir), SCHEMA_GRAVEYARD),
+        ("lineageTree", lineage_tree_path(runtime_dir), SCHEMA_LINEAGE_TREE),
+        ("reflectionReport", reflection_report_path(runtime_dir), SCHEMA_REFLECTION_REPORT),
+        ("ledger", ledger_path(runtime_dir), "quantgod.strategy_ga_factory.ledger.v1"),
+    ]
+
+
+def _artifact_manifest(runtime_dir: Path, generated_at: str) -> Dict[str, Any]:
+    artifacts = _artifact_specs(runtime_dir)
+    rows: List[Dict[str, Any]] = []
+    for artifact_id, path, schema in artifacts:
+        exists = path.exists()
+        rows.append(
+            {
+                "artifactId": artifact_id,
+                "schema": schema,
+                "path": _relative_artifact_path(runtime_dir, path),
+                "exists": exists,
+                "sizeBytes": path.stat().st_size if exists else 0,
+                "sha256": _file_sha256(path) if exists else "",
+            }
+        )
+    return {
+        "ok": True,
+        "schema": SCHEMA_ARTIFACT_MANIFEST,
+        "schemaVersion": 1,
+        "agentVersion": AGENT_VERSION,
+        "generatedAt": generated_at,
+        "artifactCount": len(rows),
+        "artifacts": rows,
+        "safety": dict(SAFETY),
+    }
+
+
+def _artifact_manifest_summary(
+    runtime_dir: Path,
+    manifest: Dict[str, Any] | None = None,
+    *,
+    present: bool | None = None,
+) -> Dict[str, Any]:
+    path = artifact_manifest_path(runtime_dir)
+    artifact_count = int((manifest or {}).get("artifactCount") or len(_artifact_specs(runtime_dir)))
+    return {
+        "schema": SCHEMA_ARTIFACT_MANIFEST,
+        "schemaVersion": 1,
+        "path": _relative_artifact_path(runtime_dir, path),
+        "present": path.exists() if present is None else present,
+        "artifactCount": artifact_count,
+        "hashAlgorithm": "sha256",
     }
 
 

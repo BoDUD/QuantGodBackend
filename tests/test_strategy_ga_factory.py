@@ -1,5 +1,7 @@
 """Regression tests for Strategy JSON GA Factory archive creation."""
 
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -42,6 +44,13 @@ class StrategyGAFactoryTests(unittest.TestCase):
             )
             self.assertGreaterEqual(state["reflectionReport"]["segmentCount"], 4)
             self.assertTrue(state["reflectionReport"]["safety"]["gaFactoryAuditOnly"])
+            self.assertEqual(
+                state["artifactManifest"]["schema"],
+                "quantgod.strategy_ga_factory.artifact_manifest.v1",
+            )
+            self.assertEqual(state["artifactManifest"]["path"], "ga_factory/QuantGod_GAFactoryArtifactManifest.json")
+            self.assertTrue(state["artifactManifest"]["present"])
+            self.assertEqual(state["artifactManifest"]["hashAlgorithm"], "sha256")
 
             factory_dir = runtime_dir / "ga_factory"
             for name in [
@@ -51,8 +60,26 @@ class StrategyGAFactoryTests(unittest.TestCase):
                 "QuantGod_GALineageTree.json",
                 "QuantGod_GAFactoryReflectionReport.json",
                 "QuantGod_GAFactoryLedger.csv",
+                "QuantGod_GAFactoryArtifactManifest.json",
             ]:
                 self.assertTrue((factory_dir / name).exists(), name)
+
+            manifest = json.loads((factory_dir / "QuantGod_GAFactoryArtifactManifest.json").read_text())
+            self.assertEqual(manifest["schema"], "quantgod.strategy_ga_factory.artifact_manifest.v1")
+            self.assertEqual(manifest["schemaVersion"], 1)
+            self.assertFalse(manifest["safety"]["orderSendAllowed"])
+            self.assertEqual(manifest["artifactCount"], 6)
+            for artifact in manifest["artifacts"]:
+                artifact_path = artifact["path"]
+                self.assertFalse(artifact_path.startswith("/"), artifact_path)
+                full_path = runtime_dir / artifact_path
+                self.assertTrue(full_path.exists(), artifact_path)
+                self.assertEqual(
+                    artifact["sha256"],
+                    hashlib.sha256(full_path.read_bytes()).hexdigest(),
+                    artifact_path,
+                )
+                self.assertGreater(artifact["sizeBytes"], 0)
 
             status = read_factory_state(runtime_dir)
             self.assertTrue(status["ok"])

@@ -22,6 +22,7 @@ SCHEMA_GRAVEYARD = "quantgod.strategy_ga_factory.strategy_graveyard.v1"
 SCHEMA_LINEAGE_TREE = "quantgod.strategy_ga_factory.lineage_tree.v1"
 SCHEMA_INTENT_PLAN = "quantgod.strategy_ga_factory.intent_plan.v1"
 SCHEMA_REFLECTION_REPORT = "quantgod.strategy_ga_factory.reflection_report.v1"
+SCHEMA_ARTIFACT_MANIFEST = "quantgod.strategy_ga_factory.artifact_manifest.v1"
 
 STATE_FILE = "QuantGod_GAFactoryState.json"
 ELITE_ARCHIVE_FILE = "QuantGod_GAEliteArchive.json"
@@ -30,6 +31,7 @@ LINEAGE_TREE_FILE = "QuantGod_GALineageTree.json"
 LEDGER_FILE = "QuantGod_GAFactoryLedger.csv"
 INTENT_PLAN_FILE = "QuantGod_StrategyFactoryIntentPlan.json"
 REFLECTION_REPORT_FILE = "QuantGod_GAFactoryReflectionReport.json"
+ARTIFACT_MANIFEST_FILE = "QuantGod_GAFactoryArtifactManifest.json"
 
 ALLOWED_PROMOTION_STAGES: List[str] = [
     "SHADOW",
@@ -85,3 +87,7 @@ def intent_plan_path(runtime_dir: Path) -> Path:
 
 def reflection_report_path(runtime_dir: Path) -> Path:
     return ga_factory_dir(runtime_dir) / REFLECTION_REPORT_FILE
+
+
+def artifact_manifest_path(runtime_dir: Path) -> Path:
+    return ga_factory_dir(runtime_dir) / ARTIFACT_MANIFEST_FILE
