@@ -11,6 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 SCHEMA_REPORT = "quantgod.case_memory_strategy_candidate_report.v1"
 SCHEMA_CANDIDATE = "quantgod.case_memory_strategy_candidate.v1"
+SCHEMA_ARTIFACT_MANIFEST = "quantgod.case_memory_artifact_manifest.v1"
 AGENT_VERSION = "p4-3"
 
 CASE_MEMORY_SOURCES: List[str] = [
@@ -44,3 +45,7 @@ def report_path(runtime_dir: Path) -> Path:
 
 def candidate_ledger_path(runtime_dir: Path) -> Path:
     return case_memory_dir(runtime_dir) / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl"
+
+
+def artifact_manifest_path(runtime_dir: Path) -> Path:
+    return case_memory_dir(runtime_dir) / "QuantGod_CaseMemoryArtifactManifest.json"

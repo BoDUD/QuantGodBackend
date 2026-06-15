@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -332,6 +333,9 @@ def _write_bridged_history_context_sample(runtime: Path) -> None:
 
 
 class CaseMemoryCandidateTests(unittest.TestCase):
+    def _sha256(self, path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
     def test_builds_shadow_strategy_json_candidates_from_case_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             runtime = Path(temp)
@@ -351,6 +355,29 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertTrue(
                 (runtime / "case_memory" / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl").exists()
             )
+            manifest_path = runtime / "case_memory" / "QuantGod_CaseMemoryArtifactManifest.json"
+            report_path = runtime / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"
+            ledger_path = runtime / "case_memory" / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl"
+            self.assertTrue(manifest_path.exists())
+            self.assertEqual(report["artifactManifest"]["schema"], "quantgod.case_memory_artifact_manifest.v1")
+            self.assertEqual(report["artifactManifest"]["schemaVersion"], 1)
+            self.assertEqual(report["artifactManifest"]["path"], "case_memory/QuantGod_CaseMemoryArtifactManifest.json")
+            self.assertTrue(report["artifactManifest"]["present"])
+            self.assertEqual(report["artifactManifest"]["hashAlgorithm"], "sha256")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schemaVersion"], 1)
+            self.assertEqual(manifest["artifactCount"], 2)
+            self.assertFalse(manifest["safety"]["orderSendAllowed"])
+            rows = {row["artifactId"]: row for row in manifest["artifacts"]}
+            self.assertEqual(rows["candidateReport"]["path"], "case_memory/QuantGod_CaseMemoryStrategyCandidates.json")
+            self.assertEqual(
+                rows["candidateLedger"]["path"],
+                "case_memory/QuantGod_CaseMemoryStrategyCandidateLedger.jsonl",
+            )
+            self.assertEqual(rows["candidateReport"]["sha256"], self._sha256(report_path))
+            self.assertEqual(rows["candidateLedger"]["sha256"], self._sha256(ledger_path))
+            self.assertGreater(rows["candidateReport"]["sizeBytes"], 0)
+            self.assertGreater(rows["candidateLedger"]["sizeBytes"], 0)
 
     def test_case_memory_preserves_non_rsi_strategy_family_for_ga_seed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
