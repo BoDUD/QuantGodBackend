@@ -48,6 +48,7 @@ test('phase2 path registry includes required API domains', () => {
   assert.equal(routes.isPhase2Path('/api/research/entry-blockers'), true);
   assert.equal(routes.isPhase2Path('/api/research/entry-blockers-ledger'), true);
   assert.equal(routes.isPhase2Path('/api/shadow/signals'), true);
+  assert.equal(routes.isPhase2Path('/api/shadow-signals'), true);
   assert.equal(routes.isPhase2Path('/api/notify/config'), true);
   assert.equal(routes.isPhase2Path('/api/notify/daily-digest'), true);
   assert.equal(routes.isPhase2Path('/api/notify/runtime-scan'), true);
@@ -241,6 +242,22 @@ test('missing primary CSV evidence produces safe structured empty ledger envelop
     assert.equal(res.body.data.returnedRows, 0);
     assert.equal(res.body.safety.orderSendAllowed, false);
     assert.equal(res.body.safety.livePresetMutationAllowed, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('legacy shadow signals endpoint maps to structured Phase2 CSV envelope', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'qg-phase2-shadow-signals-alias-'));
+  try {
+    await mkdir(dir, { recursive: true });
+    const res = await invoke('/api/shadow-signals?limit=20', { defaultRuntimeDir: dir, repoRoot: dir, rootDir: dir });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.endpoint, '/api/shadow-signals');
+    assert.equal(res.body.fileName, 'QuantGod_ShadowSignalLedger.csv');
+    assert.equal(res.body.schema, 'quantgod.phase2_csv_missing.v1');
+    assert.deepEqual(res.body.data.rows, []);
+    assert.equal(res.body.safety.orderSendAllowed, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

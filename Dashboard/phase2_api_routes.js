@@ -64,6 +64,7 @@ const CSV_ENDPOINTS = Object.freeze({
   '/api/trades/close-history': 'QuantGod_CloseHistory.csv',
   '/api/trades/outcome-labels': 'QuantGod_TradeOutcomeLabels.csv',
   '/api/trades/trading-audit': 'QuantGod_MT5TradingAuditLedger.csv',
+  '/api/shadow-signals': 'QuantGod_ShadowSignalLedger.csv',
   '/api/shadow/signals': 'QuantGod_ShadowSignalLedger.csv',
   '/api/shadow/outcomes': 'QuantGod_ShadowOutcomeLedger.csv',
   '/api/shadow/candidates': 'QuantGod_ShadowCandidateLedger.csv',
