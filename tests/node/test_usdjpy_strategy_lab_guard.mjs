@@ -67,8 +67,11 @@ test('USDJPY policy separates shadow winner from live-eligible route', () => {
   assert.match(policy, /LIVE_ELIGIBLE_STRATEG(?:Y|IES)\s*=/);
   assert.match(policy, /RSI_Reversal/);
   if (/LIVE_ELIGIBLE_STRATEGIES\s*=/.test(policy)) {
-    assert.match(policy, /MA_Cross/);
-    assert.match(policy, /USDJPY_NIGHT_REVERSION_SAFE/);
+    const liveEligibleMatch = policy.match(/LIVE_ELIGIBLE_STRATEGIES\s*=\s*\{([^}]+)\}/);
+    assert.ok(liveEligibleMatch, 'LIVE_ELIGIBLE_STRATEGIES must be a literal RSI-only set');
+    assert.match(liveEligibleMatch[1], /RSI_Reversal/);
+    assert.doesNotMatch(liveEligibleMatch[1], /MA_Cross/);
+    assert.doesNotMatch(liveEligibleMatch[1], /USDJPY_NIGHT_REVERSION_SAFE/);
     assert.match(policy, /not in LIVE_ELIGIBLE_STRATEGIES/);
     assert.match(policy, /strategy in LIVE_ELIGIBLE_STRATEGIES/);
   } else {

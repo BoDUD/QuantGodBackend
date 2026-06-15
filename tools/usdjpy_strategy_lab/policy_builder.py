@@ -41,7 +41,7 @@ from .strategy_signals import build_candidate_signals
 from .strategy_scoreboard import build_strategy_scoreboard
 
 FASTLANE_PASS_STATES = {"OK", "PASS", "PASSED", "GOOD", "HEALTHY", "FAST", "EA_DASHBOARD_OK"}
-LIVE_ELIGIBLE_STRATEGY = "RSI_Reversal"
+LIVE_ELIGIBLE_STRATEGIES = {"RSI_Reversal"}
 LIVE_ELIGIBLE_DIRECTION = "LONG"
 RUNTIME_FRESH_SECONDS = 30.0
 RUNTIME_HARD_STALE_SECONDS = 90.0
@@ -418,8 +418,8 @@ def _usd_deployment_gate(
     entry_mode = str(top_policy.get("entryMode") or top_policy.get("entryDecision") or "MISSING")
     if not top_policy:
         block("NO_TOP_POLICY", "没有可评估的 USDJPY RSI live policy。")
-    if str(top_policy.get("strategy") or "") != LIVE_ELIGIBLE_STRATEGY:
-        block("USD_STRATEGY_LOCK", "美元账户只允许 RSI_Reversal。", top_policy.get("strategy"), LIVE_ELIGIBLE_STRATEGY)
+    if str(top_policy.get("strategy") or "") not in LIVE_ELIGIBLE_STRATEGIES:
+        block("USD_STRATEGY_LOCK", "美元账户只允许 RSI_Reversal。", top_policy.get("strategy"), sorted(LIVE_ELIGIBLE_STRATEGIES))
     if str(top_policy.get("direction") or "").upper() != LIVE_ELIGIBLE_DIRECTION:
         block("USD_DIRECTION_LOCK", "美元账户只允许 LONG。", top_policy.get("direction"), LIVE_ELIGIBLE_DIRECTION)
     if entry_mode != ENTRY_STANDARD or not bool(top_policy.get("allowed")):
@@ -635,7 +635,7 @@ def _fastlane_ok(quality: Dict[str, Any]) -> tuple[bool, List[str]]:
 
 
 def _is_live_route(item: PolicyItem) -> bool:
-    return item.strategy == LIVE_ELIGIBLE_STRATEGY and str(item.direction).upper() == LIVE_ELIGIBLE_DIRECTION
+    return item.strategy in LIVE_ELIGIBLE_STRATEGIES and str(item.direction).upper() == LIVE_ELIGIBLE_DIRECTION
 
 
 def _is_live_eligible(item: PolicyItem) -> bool:
@@ -721,7 +721,7 @@ def _sltp_available(plan: Dict[str, Any], strategy: str, direction: str) -> tupl
 def _soften_live_route_trigger(status: str, strategy: str, direction: str, trigger_status: str, trigger_reasons: List[str]) -> tuple[str, List[str]]:
     if status != STATUS_RUNNABLE:
         return trigger_status, trigger_reasons
-    if strategy != LIVE_ELIGIBLE_STRATEGY or str(direction).upper() != LIVE_ELIGIBLE_DIRECTION:
+    if strategy not in LIVE_ELIGIBLE_STRATEGIES or str(direction).upper() != LIVE_ELIGIBLE_DIRECTION:
         return trigger_status, trigger_reasons
     if trigger_status != "BLOCKED":
         return trigger_status, trigger_reasons
@@ -889,19 +889,19 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
             sltp_ok=sltp_ok,
             sltp_reasons=sltp_reasons,
             news_gate=news_gate,
-            diagnostics=diagnostics if strategy == LIVE_ELIGIBLE_STRATEGY and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION else {},
-            spread_gate=spread_gate if strategy == LIVE_ELIGIBLE_STRATEGY and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION else {"hardBlock": False},
+            diagnostics=diagnostics if strategy in LIVE_ELIGIBLE_STRATEGIES and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION else {},
+            spread_gate=spread_gate if strategy in LIVE_ELIGIBLE_STRATEGIES and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION else {"hardBlock": False},
         )
         quorum = _signal_quorum(
             status=str(status or ""),
             score=score,
             trigger_status=trigger_status,
             runtime_tier=runtime_tier,
-            diagnostics=diagnostics if strategy == LIVE_ELIGIBLE_STRATEGY and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION else {},
+            diagnostics=diagnostics if strategy in LIVE_ELIGIBLE_STRATEGIES and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION else {},
             news_gate=news_gate,
         )
         reasons.extend(hard_reasons if hard_status == "BLOCKED" else [])
-        live_route = strategy == LIVE_ELIGIBLE_STRATEGY and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION
+        live_route = strategy in LIVE_ELIGIBLE_STRATEGIES and str(direction).upper() == LIVE_ELIGIBLE_DIRECTION
         entry_mode = STATUS_WATCH_ONLY
         allowed = False
         strictness = "WATCH_ONLY_QUORUM"
