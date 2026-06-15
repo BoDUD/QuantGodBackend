@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -221,6 +222,89 @@ def ea_snapshot_freshness(file_path: Path | None, stat: os.stat_result | None) -
         "brokerCallsMade": False,
         "mutatesMt5": False,
     }
+
+
+def detect_mt5_host_process(file_path: Path | None) -> dict[str, Any]:
+    hints: list[str] = []
+    if file_path:
+        parts = [str(file_path)]
+        try:
+            parts.extend(str(parent) for parent in file_path.parents[:5])
+        except Exception:
+            pass
+        hints = [value for value in parts if value]
+    if str(os.environ.get("QG_MT5_READONLY_PROCESS_SCAN_DISABLED", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return {
+            "status": "PROCESS_SCAN_DISABLED",
+            "terminalProcessDetected": False,
+            "targetProcessDetected": False,
+            "matchingProcessCount": 0,
+            "targetHint": hints[0] if hints else "",
+        }
+    if os.name == "nt":
+        command = ["tasklist", "/FO", "CSV", "/NH"]
+    else:
+        command = ["ps", "-axo", "pid=,comm=,args="]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=2)
+    except Exception as exc:
+        return {
+            "status": "PROCESS_SCAN_FAILED",
+            "terminalProcessDetected": False,
+            "targetProcessDetected": False,
+            "matchingProcessCount": 0,
+            "targetHint": hints[0] if hints else "",
+            "error": str(exc),
+        }
+    rows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    terminal_rows = [
+        row
+        for row in rows
+        if re.search(r"\b(terminal64(?:\.exe)?|metatrader|wine64(?:-preloader)?|wine-preloader)\b", row, re.I)
+    ]
+    hint_matches = []
+    for row in terminal_rows:
+        normalized_row = row.replace("\\", "/")
+        for hint in hints:
+            if hint and hint.replace("\\", "/") in normalized_row:
+                hint_matches.append(row)
+                break
+    target_detected = bool(hint_matches)
+    terminal_detected = bool(terminal_rows)
+    return {
+        "status": "RUNNING" if terminal_detected else "MISSING",
+        "terminalProcessDetected": terminal_detected,
+        "targetProcessDetected": target_detected,
+        "matchingProcessCount": len(terminal_rows),
+        "targetHint": hints[0] if hints else "",
+        "matchedTargetProcessCount": len(hint_matches),
+        "scanner": "tasklist" if os.name == "nt" else "ps",
+    }
+
+
+def attach_host_process_freshness(freshness: dict[str, Any], host_process: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(freshness)
+    if (
+        freshness.get("stale") is True
+        and host_process.get("terminalProcessDetected") is False
+        and host_process.get("status") in {"MISSING", "PROCESS_SCAN_DISABLED", "PROCESS_SCAN_FAILED"}
+    ):
+        blockers = list(enriched.get("blockers") or [])
+        if "mt5_terminal_process_missing" not in blockers:
+            blockers.append("mt5_terminal_process_missing")
+        enriched["blockers"] = blockers
+        if host_process.get("status") == "MISSING":
+            enriched["nextAction"] = (
+                "Restore the MT5 terminal/EA dashboard writer process and refresh QuantGod_Dashboard.json before using live account state."
+            )
+        enriched["hostProcessStatus"] = host_process.get("status")
+        enriched["terminalProcessDetected"] = False
+    return enriched
 
 
 def stale_collection_payload(kind: str, symbol: str, stat: os.stat_result | None) -> dict[str, Any]:
@@ -535,14 +619,24 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
     snapshot_age = ea_snapshot_age_seconds(stat)
     snapshot_max_age = ea_snapshot_max_age_seconds()
     snapshot_fresh = ea_snapshot_fresh(stat)
-    freshness = ea_snapshot_freshness(file_path, stat)
+    host_process = detect_mt5_host_process(file_path)
+    freshness = attach_host_process_freshness(ea_snapshot_freshness(file_path, stat), host_process)
     runtime = dashboard.get("runtime") if isinstance(dashboard.get("runtime"), dict) else {}
+    terminal = ea_terminal_payload(dashboard, file_path)
+    terminal.update(
+        {
+            "hostProcessStatus": host_process.get("status"),
+            "hostProcessDetected": bool(host_process.get("terminalProcessDetected")),
+            "targetHostProcessDetected": bool(host_process.get("targetProcessDetected")),
+        }
+    )
     payload.update(
         {
             "mode": "MT5_READONLY_BRIDGE_V1_EA_SNAPSHOT_FALLBACK",
             "status": "EA_SNAPSHOT" if snapshot_fresh else "STALE_EA_SNAPSHOT",
             "bridgeStatus": "MT5_PYTHON_UNAVAILABLE_EA_SNAPSHOT_FALLBACK",
-            "terminal": ea_terminal_payload(dashboard, file_path),
+            "terminal": terminal,
+            "hostProcess": host_process,
             "account": ea_account_payload(dashboard),
             "runtime": runtime,
             "watchlist": dashboard.get("watchlist", ""),

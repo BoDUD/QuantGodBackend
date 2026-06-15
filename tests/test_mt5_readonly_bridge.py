@@ -465,6 +465,41 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot["orders"]["items"], [])
         self.assertEqual(snapshot["warning"], "ea_snapshot_stale_positions_and_orders_suppressed")
 
+    def test_stale_ea_snapshot_reports_missing_terminal_process(self):
+        old_runtime = os.environ.get("QG_RUNTIME_DIR")
+        old_max_age = os.environ.get("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS")
+        old_detector = bridge.detect_mt5_host_process
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime = Path(tmp_dir)
+            self.write_dashboard_with_trade_state(runtime, time.time() - 600)
+            os.environ["QG_RUNTIME_DIR"] = tmp_dir
+            os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = "60"
+            bridge.detect_mt5_host_process = lambda file_path: {
+                "status": "MISSING",
+                "terminalProcessDetected": False,
+                "targetProcessDetected": False,
+                "matchingProcessCount": 0,
+                "targetHint": str(file_path),
+            }
+            try:
+                snapshot = bridge.build_ea_snapshot_fallback(self.fallback_args("snapshot"))
+            finally:
+                bridge.detect_mt5_host_process = old_detector
+                if old_runtime is None:
+                    os.environ.pop("QG_RUNTIME_DIR", None)
+                else:
+                    os.environ["QG_RUNTIME_DIR"] = old_runtime
+                if old_max_age is None:
+                    os.environ.pop("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS", None)
+                else:
+                    os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = old_max_age
+
+        self.assertEqual(snapshot["hostProcess"]["status"], "MISSING")
+        self.assertFalse(snapshot["terminal"]["hostProcessDetected"])
+        self.assertIn("mt5_terminal_process_missing", snapshot["_freshness"]["blockers"])
+        self.assertIn("MT5 terminal/EA dashboard writer process", snapshot["_freshness"]["nextAction"])
+        self.assertFalse(snapshot["_freshness"]["orderSendAllowed"])
+
     def test_fresh_ea_snapshot_keeps_positions(self):
         old_runtime = os.environ.get("QG_RUNTIME_DIR")
         old_max_age = os.environ.get("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS")
