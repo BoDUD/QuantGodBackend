@@ -12,9 +12,9 @@
 
 ## 已迁出内容
 
-- `frontend/` → `Boowenn/QuantGodFrontend`
-- `cloudflare/` → `Boowenn/QuantGodInfra`
-- 完整 `docs/` → `Boowenn/QuantGodDocs`
+- `frontend/` → `BoDUD/QuantGodFrontend`
+- `cloudflare/` → `BoDUD/QuantGodInfra`
+- 完整 `docs/` → `BoDUD/QuantGodDocs`
 
 ## 构建联动
 
