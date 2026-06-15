@@ -1,4 +1,0 @@
-interface:
-  display_name: "QuantGod Trading Agent"
-  short_description: "Build and audit QuantGod trading-agent workflows"
-  default_prompt: "Use $quantgod-trading-agent to build, audit, and validate QuantGod trading-agent workflows safely."

@@ -1,4 +1,0 @@
-interface:
-  display_name: "QuantGod MT5 Live Pilot"
-  short_description: "Operate and review the HFM MT5 live-pilot system"
-  default_prompt: "Use $quantgod-mt5-live-pilot to review, modify, validate, and monitor the HFM MT5 live-pilot system."
