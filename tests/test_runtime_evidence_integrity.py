@@ -141,6 +141,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertTrue(manifest["ok"])
             self.assertTrue(manifest["promotionGatePassed"])
             self.assertEqual(manifest["promotionGateStatus"], "PASS")
+            self.assertEqual(manifest["promotionRecoveryQueueCount"], 0)
+            self.assertEqual(manifest["promotionRecoveryQueue"], [])
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
             self.assertEqual(manifest["artifactCount"], 11)
@@ -229,6 +231,11 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionGateStatus"], "BLOCKED")
             self.assertIn("historyProductionStatus:history_status_not_pass", manifest["promotionBlockers"])
             self.assertIn("historyProductionStatus:M1:freshness_not_ok", manifest["promotionBlockers"])
+            self.assertEqual(manifest["promotionRecoveryQueueCount"], 1)
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["kind"], "history_freshness")
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["artifactId"], "historyProductionStatus")
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["timeframe"], "M1")
+            self.assertIn("ORDER_SEND", manifest["promotionRecoveryQueue"][0]["forbiddenSideEffects"])
             self.assertEqual(history_row["status"], "PASS")
             self.assertEqual(history_row["promotionGate"]["status"], "BLOCKED")
             self.assertIn("ga_promotion", history_row["promotionGate"]["requiredFor"])
@@ -295,6 +302,15 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("caseMemoryArtifactManifest:missing_category:BAD_ENTRY", manifest["promotionBlockers"])
             self.assertIn("caseMemoryArtifactManifest:missing_category:GA_OVERFIT", manifest["promotionBlockers"])
             self.assertGreater(case_memory_row["promotionGate"]["categoryCounts"]["SPREAD_DAMAGE"], 0)
+            recovery_rows = manifest["promotionRecoveryQueue"]
+            self.assertEqual(manifest["promotionRecoveryQueueCount"], 5)
+            self.assertIn("case_memory_category", {row["kind"] for row in recovery_rows})
+            self.assertIn("BAD_ENTRY", {row.get("category") for row in recovery_rows})
+            bad_entry_row = next(row for row in recovery_rows if row.get("category") == "BAD_ENTRY")
+            self.assertEqual(bad_entry_row["status"], "MISSING_CATEGORY")
+            self.assertEqual(bad_entry_row["priority"], "HIGH")
+            self.assertEqual(bad_entry_row["collectionEndpoint"], "/api/usdjpy-strategy-lab/evidence-os/execution-feedback")
+            self.assertIn("MT5_REQUEST_WRITE", bad_entry_row["forbiddenSideEffects"])
 
     def test_case_memory_missing_candidate_report_blocks_promotion_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -310,6 +326,9 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 "caseMemoryArtifactManifest:candidate_report_missing_or_unreadable",
                 manifest["promotionBlockers"],
             )
+            self.assertEqual(manifest["promotionRecoveryQueueCount"], 7)
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["kind"], "case_memory_category")
+            self.assertTrue(any(row["kind"] == "case_memory_report" for row in manifest["promotionRecoveryQueue"]))
 
 
 if __name__ == "__main__":

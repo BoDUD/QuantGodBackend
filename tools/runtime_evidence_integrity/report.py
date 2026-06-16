@@ -10,12 +10,14 @@ from typing import Any, Dict, Iterable, List
 
 try:
     from tools.case_memory.taxonomy import (
+        CATEGORY_GUIDANCE_ZH,
         REQUIRED_CASE_MEMORY_CATEGORIES,
         case_memory_category_counts,
         case_memory_tokens_from_report,
     )
 except ModuleNotFoundError:  # pragma: no cover
     from case_memory.taxonomy import (
+        CATEGORY_GUIDANCE_ZH,
         REQUIRED_CASE_MEMORY_CATEGORIES,
         case_memory_category_counts,
         case_memory_tokens_from_report,
@@ -26,6 +28,14 @@ from .schema import CORE_ARTIFACTS, REPORT_SCHEMA, SAFETY, SCHEMA_VERSION, manif
 
 LEGACY_ABSOLUTE_PATH_RE = re.compile(r"/Users/[^\n\r\t\"']*/Quard/QuantGod(?:/|\b)")
 REQUIRED_HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
+EVIDENCE_RECOVERY_ALLOWED_LANES = ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"]
+EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS = [
+    "ORDER_SEND",
+    "POSITION_CLOSE",
+    "LIVE_PRESET_MUTATION",
+    "MT5_REQUEST_WRITE",
+    "WALLET_AUTHORIZATION",
+]
 
 
 def utc_now_iso() -> str:
@@ -170,13 +180,7 @@ def _history_recovery_queue(rows: Dict[str, Dict[str, Any]]) -> List[Dict[str, A
                     "historyTargetSatisfied=true。"
                 ),
                 "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
-                "forbiddenSideEffects": [
-                    "ORDER_SEND",
-                    "POSITION_CLOSE",
-                    "LIVE_PRESET_MUTATION",
-                    "MT5_REQUEST_WRITE",
-                    "WALLET_AUTHORIZATION",
-                ],
+                "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
             }
         )
     return queue
@@ -390,6 +394,104 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    queue: List[Dict[str, Any]] = []
+    for row in rows:
+        artifact_id = str(row.get("artifactId") or "")
+        gate = row.get("promotionGate")
+        if not isinstance(gate, dict) or gate.get("passed") is True:
+            continue
+
+        if artifact_id == "historyProductionStatus":
+            for item in gate.get("freshnessRecoveryQueue") if isinstance(gate.get("freshnessRecoveryQueue"), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("passed") is True and str(item.get("status") or "").upper() == "PASS":
+                    continue
+                queue.append(
+                    {
+                        "kind": "history_freshness",
+                        "artifactId": artifact_id,
+                        "artifactPath": row.get("path"),
+                        "gateId": gate.get("gateId"),
+                        "timeframe": item.get("timeframe"),
+                        "status": item.get("status"),
+                        "priority": item.get("priority"),
+                        "latestLagHours": item.get("latestLagHours"),
+                        "maxLatestLagHours": item.get("maxLatestLagHours"),
+                        "excessLagHours": item.get("excessLagHours"),
+                        "refreshCommand": item.get("refreshCommand"),
+                        "verifyCommand": item.get("verifyCommand"),
+                        "nextActionZh": item.get("nextActionZh"),
+                        "acceptanceZh": item.get("acceptanceZh"),
+                        "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+                        "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+                    }
+                )
+            continue
+
+        if artifact_id == "caseMemoryArtifactManifest":
+            blockers = [str(blocker) for blocker in gate.get("blockers", [])]
+            if "candidate_report_missing_or_unreadable" in blockers:
+                queue.append(
+                    {
+                        "kind": "case_memory_report",
+                        "artifactId": artifact_id,
+                        "artifactPath": row.get("path"),
+                        "gateId": gate.get("gateId"),
+                        "status": "MISSING_REPORT",
+                        "priority": "HIGH",
+                        "candidateReportPath": gate.get("candidateReportPath"),
+                        "nextActionZh": (
+                            "生成或修复 Case Memory candidate report；只允许读取 shadow/tester/replay 证据，不放开真实执行。"
+                        ),
+                        "acceptanceZh": "candidateReport 可读，candidateCount>0、gaSeedCount>0，且必需样本类型覆盖晋级门。",
+                        "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+                        "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+                    }
+                )
+            for category in gate.get("missingCategories") if isinstance(gate.get("missingCategories"), list) else []:
+                category_key = str(category)
+                guidance = CATEGORY_GUIDANCE_ZH.get(category_key, {})
+                queue.append(
+                    {
+                        "kind": "case_memory_category",
+                        "artifactId": artifact_id,
+                        "artifactPath": row.get("path"),
+                        "gateId": gate.get("gateId"),
+                        "category": category_key,
+                        "status": "MISSING_CATEGORY",
+                        "priority": guidance.get("priority", "HIGH"),
+                        "observedCount": gate.get("categoryCounts", {}).get(category_key, 0)
+                        if isinstance(gate.get("categoryCounts"), dict)
+                        else 0,
+                        "targetCount": guidance.get("targetCount"),
+                        "source": guidance.get("source"),
+                        "sourceArtifacts": list(guidance.get("sourceArtifacts", [])),
+                        "collectionEndpoint": guidance.get("collectionEndpoint"),
+                        "nextActionZh": guidance.get(
+                            "nextActionZh",
+                            f"补齐 Case Memory {category_key} 样本；只允许 shadow/tester/read-only 证据。",
+                        ),
+                        "acceptanceZh": guidance.get(
+                            "acceptanceZh",
+                            f"{category_key} 至少有 1 条可审计样本，并通过 Case Memory taxonomy gate。",
+                        ),
+                        "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+                        "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+                    }
+                )
+    priority_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "OK": 3}
+    queue.sort(
+        key=lambda item: (
+            priority_order.get(str(item.get("priority") or "").upper(), 4),
+            str(item.get("kind") or ""),
+            str(item.get("timeframe") or item.get("category") or ""),
+        )
+    )
+    return queue
+
+
 def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     rows = [_artifact_row(runtime_dir, spec) for spec in CORE_ARTIFACTS]
@@ -405,6 +507,7 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
     ]
     status = "PASS" if not blockers else "FAIL"
     promotion_gate_passed = not promotion_blockers
+    promotion_recovery_queue = _promotion_recovery_queue(rows)
     payload: Dict[str, Any] = {
         "ok": status == "PASS",
         "schema": REPORT_SCHEMA,
@@ -422,6 +525,8 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
         "promotionGateStatus": "PASS" if promotion_gate_passed else "BLOCKED",
         "promotionBlockerCount": len(promotion_blockers),
         "promotionBlockers": promotion_blockers,
+        "promotionRecoveryQueueCount": len(promotion_recovery_queue),
+        "promotionRecoveryQueue": promotion_recovery_queue,
         "promotionScope": ["ga_promotion", "champion_promotion"],
         "artifacts": rows,
         "safety": dict(SAFETY),
@@ -429,7 +534,7 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
             "先修复缺失证据、schema 漂移、旧仓绝对路径或 artifact hash 缺口，再允许进入晋级评审。"
             if status != "PASS"
             else (
-                "核心证据文件完整，但 history freshness、Case Memory 样本类型或其他 promotion gate 仍阻断 GA/champion 晋级。"
+                "核心证据文件完整，但 history freshness、Case Memory 样本类型或其他 promotion gate 仍阻断 GA/champion 晋级；按 promotionRecoveryQueue 逐项修复。"
                 if not promotion_gate_passed
                 else "继续把 live-loop、production policy、GA、execution feedback 和 case memory 证据纳入晋级门。"
             )
