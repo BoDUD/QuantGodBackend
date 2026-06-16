@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .builder import build_case_memory_candidates
-from .io_utils import append_jsonl_unique, load_json, utc_now_iso, write_json
+from .io_utils import append_jsonl_unique, load_json, read_jsonl, utc_now_iso, write_json
 from .long_term_memory import build_long_term_trade_memory
 from .schema import (
     AGENT_VERSION,
@@ -86,6 +86,23 @@ def _artifact_manifest_summary(
     }
 
 
+def _candidate_ledger_summary(runtime_dir: Path) -> Dict[str, Any]:
+    rows = read_jsonl(candidate_ledger_path(runtime_dir))
+    case_type_counts: Dict[str, int] = {}
+    for row in rows:
+        case_type = str(row.get("caseType") or row.get("type") or "").strip()
+        if not case_type:
+            continue
+        case_type_counts[case_type] = case_type_counts.get(case_type, 0) + 1
+    return {
+        "schema": "quantgod.case_memory_candidate_ledger_summary.v1",
+        "path": _relative_artifact_path(runtime_dir, candidate_ledger_path(runtime_dir)),
+        "present": candidate_ledger_path(runtime_dir).exists(),
+        "rowCount": len(rows),
+        "caseTypeCounts": case_type_counts,
+    }
+
+
 def build_case_memory_report(
     runtime_dir: Path,
     *,
@@ -109,6 +126,7 @@ def build_case_memory_report(
         "gaSeedCount": len(ga_seeds),
         "candidates": candidates,
         "gaSeeds": ga_seeds,
+        "candidateLedgerSummary": _candidate_ledger_summary(runtime_dir),
         "longTermTradeMemory": long_term_memory,
         "parityGate": payload.get("parityGate") or {},
         "sources": CASE_MEMORY_SOURCES,
@@ -129,6 +147,7 @@ def build_case_memory_report(
 def status(runtime_dir: Path) -> Dict[str, Any]:
     payload = load_json(report_path(runtime_dir))
     if payload:
+        payload["candidateLedgerSummary"] = _candidate_ledger_summary(runtime_dir)
         payload["coveragePlan"] = build_case_memory_coverage_plan(payload)
         return {"ok": True, **payload}
     return {

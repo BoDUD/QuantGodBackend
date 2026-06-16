@@ -933,6 +933,45 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertIn("collectionEndpoint", coverage["nextCollectionQueue"][0])
             self.assertFalse(hydrated["safety"]["orderSendAllowed"])
 
+    def test_status_hydrates_taxonomy_from_candidate_ledger_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            case_memory_dir = runtime / "case_memory"
+            case_memory_dir.mkdir(parents=True, exist_ok=True)
+            report = {
+                "schema": "quantgod.case_memory_strategy_candidate_report.v1",
+                "candidateCount": 2,
+                "gaSeedCount": 2,
+                "caseSummary": {"caseTypeCounts": {"EXECUTION_SLIPPAGE": 2}},
+                "candidates": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                "gaSeeds": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                "safety": {"orderSendAllowed": False},
+            }
+            (case_memory_dir / "QuantGod_CaseMemoryStrategyCandidates.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (case_memory_dir / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.case_memory_strategy_candidate.v1",
+                        "candidateId": "CM-GA-001",
+                        "caseType": "GA_OVERFIT",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            hydrated = case_memory_status(runtime)
+
+            self.assertEqual(hydrated["candidateLedgerSummary"]["caseTypeCounts"]["GA_OVERFIT"], 1)
+            counts = hydrated["coveragePlan"]["categoryCounts"]
+            self.assertGreater(counts["GA_OVERFIT"], 0)
+            self.assertNotIn("GA_OVERFIT", hydrated["coveragePlan"]["missingCategories"])
+            self.assertFalse(hydrated["safety"]["orderSendAllowed"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -148,6 +148,19 @@ def case_memory_tokens_from_report(report: Dict[str, Any]) -> List[str]:
             for _ in range(max(0, min(count, 50))):
                 add(key)
 
+    ledger_summary = (
+        report.get("candidateLedgerSummary") if isinstance(report.get("candidateLedgerSummary"), dict) else {}
+    )
+    ledger_counts = ledger_summary.get("caseTypeCounts")
+    if isinstance(ledger_counts, dict):
+        for key, value in ledger_counts.items():
+            try:
+                count = int(value or 0)
+            except (TypeError, ValueError):
+                count = 0
+            for _ in range(max(0, min(count, 50))):
+                add(key)
+
     for row in summary.get("cases") if isinstance(summary.get("cases"), list) else []:
         if isinstance(row, dict):
             add(row.get("type") or row.get("caseType"))

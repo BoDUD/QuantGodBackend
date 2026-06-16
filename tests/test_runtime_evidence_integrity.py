@@ -333,6 +333,42 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(bad_entry_row["collectionEndpoint"], "/api/usdjpy-strategy-lab/evidence-os/execution-feedback")
             self.assertIn("MT5_REQUEST_WRITE", bad_entry_row["forbiddenSideEffects"])
 
+    def test_case_memory_ledger_summary_counts_historical_ga_overfit_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json",
+                {
+                    "schema": "quantgod.case_memory_strategy_candidate_report.v1",
+                    "candidateCount": 2,
+                    "gaSeedCount": 2,
+                    "caseSummary": {"caseTypeCounts": {"EXECUTION_SLIPPAGE": 2}},
+                    "candidates": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                    "gaSeeds": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                },
+            )
+            write_text(
+                runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl",
+                json.dumps(
+                    {
+                        "schema": "quantgod.case_memory_strategy_candidate.v1",
+                        "candidateId": "CM-GA-001",
+                        "caseType": "GA_OVERFIT",
+                    }
+                )
+                + "\n",
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+            case_memory_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "caseMemoryArtifactManifest")
+
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertNotIn("caseMemoryArtifactManifest:missing_category:GA_OVERFIT", manifest["promotionBlockers"])
+            self.assertGreater(case_memory_row["promotionGate"]["categoryCounts"]["GA_OVERFIT"], 0)
+            self.assertNotIn("GA_OVERFIT", case_memory_row["promotionGate"]["missingCategories"])
+            self.assertIn("caseMemoryArtifactManifest:missing_category:BAD_ENTRY", manifest["promotionBlockers"])
+
     def test_case_memory_missing_candidate_report_blocks_promotion_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)

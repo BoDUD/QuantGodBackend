@@ -287,6 +287,48 @@ def _candidate_report_path(runtime_dir: Path, manifest: Dict[str, Any]) -> Path:
     return runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"
 
 
+def _candidate_ledger_path(runtime_dir: Path, manifest: Dict[str, Any]) -> Path:
+    artifacts = manifest.get("artifacts")
+    if isinstance(artifacts, list):
+        for row in artifacts:
+            if not isinstance(row, dict):
+                continue
+            if row.get("artifactId") == "candidateLedger" and row.get("path"):
+                return runtime_dir / str(row["path"])
+    return runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl"
+
+
+def _candidate_ledger_summary(path: Path) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    except OSError:
+        rows = []
+    case_type_counts: Dict[str, int] = {}
+    for row in rows:
+        case_type = str(row.get("caseType") or row.get("type") or "").strip()
+        if not case_type:
+            continue
+        case_type_counts[case_type] = case_type_counts.get(case_type, 0) + 1
+    return {
+        "schema": "quantgod.case_memory_candidate_ledger_summary.v1",
+        "path": path.name,
+        "present": path.exists(),
+        "rowCount": len(rows),
+        "caseTypeCounts": case_type_counts,
+    }
+
+
 def _safe_int(value: Any, fallback: int = 0) -> int:
     try:
         return int(value)
@@ -300,6 +342,10 @@ def _case_memory_promotion_gate(runtime_dir: Path, manifest: Dict[str, Any]) -> 
     report = _read_json(report_path)
     if not report:
         blockers.append("candidate_report_missing_or_unreadable")
+    else:
+        report["candidateLedgerSummary"] = _candidate_ledger_summary(
+            _candidate_ledger_path(runtime_dir, manifest)
+        )
 
     tokens = case_memory_tokens_from_report(report)
     counts = case_memory_category_counts(tokens)
