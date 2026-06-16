@@ -83,7 +83,9 @@ def build_gateway_ops_status(runtime_dir: Path) -> Dict[str, Any]:
         "lastTopic": base_status.get("lastTopic") or stored_status.get("lastTopic"),
         "lastDelivery": base_status.get("lastDelivery") or stored_status.get("lastDelivery"),
         "pushAllowed": bool(base_status.get("pushAllowed")),
-        "commandsAllowed": bool(base_status.get("commandsAllowed")),
+        "commandsAllowed": False,
+        "commandsEnvRequested": bool(base_status.get("commandsEnvRequested")),
+        "commandsBlockedReason": base_status.get("commandsBlockedReason"),
         "gatewayFiles": {
             "status": str(gateway_status_path(runtime_dir)),
             "ledger": str(gateway_ledger_path(runtime_dir)),
@@ -167,8 +169,8 @@ def _delivery_time(row: Dict[str, Any], delivery: Dict[str, Any]) -> str | None:
 
 
 def _ops_status(base_status: Dict[str, Any], pending: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
-    if base_status.get("commandsAllowed"):
-        return "COMMANDS_ENABLED_WARN"
+    if base_status.get("commandsEnvRequested"):
+        return "COMMAND_ENV_BLOCKED_WARN"
     if failed:
         return "DELIVERY_WARN"
     if pending:
@@ -177,8 +179,8 @@ def _ops_status(base_status: Dict[str, Any], pending: List[Dict[str, Any]], fail
 
 
 def _ops_status_zh(base_status: Dict[str, Any], pending: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
-    if base_status.get("commandsAllowed"):
-        return "Telegram 命令必须关闭"
+    if base_status.get("commandsEnvRequested"):
+        return "Telegram 命令开关被误设，但执行入口已硬阻断"
     if failed:
         return "有投递失败需要复核"
     if pending:

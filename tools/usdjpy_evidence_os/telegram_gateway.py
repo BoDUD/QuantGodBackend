@@ -218,6 +218,7 @@ def gateway_status(runtime_dir: Path) -> Dict[str, Any]:
     pending = [row for row in queue if row.get("eventId") not in delivered_ids]
     last = ledger[-1] if ledger else {}
     observability = _delivery_observability(queue, ledger, pending)
+    commands_env_requested = os.environ.get("QG_TELEGRAM_COMMANDS_ALLOWED", "0").strip() == "1"
     return {
         "ok": True,
         "schema": "quantgod.telegram_gateway_status.v1",
@@ -231,7 +232,9 @@ def gateway_status(runtime_dir: Path) -> Dict[str, Any]:
         "lastDelivery": last.get("delivery"),
         **observability,
         "pushAllowed": os.environ.get("QG_TELEGRAM_PUSH_ALLOWED", "0").strip() == "1",
-        "commandsAllowed": os.environ.get("QG_TELEGRAM_COMMANDS_ALLOWED", "0").strip() == "1",
+        "commandsAllowed": False,
+        "commandsEnvRequested": commands_env_requested,
+        "commandsBlockedReason": "telegram_command_execution_disabled" if commands_env_requested else None,
         "reasonZh": "独立 Telegram Gateway 当前可审计；负责去重、限频、投递 ledger，不接收命令。",
         "safety": dict(SAFETY_BOUNDARY),
     }

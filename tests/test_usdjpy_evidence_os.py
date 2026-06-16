@@ -1245,6 +1245,18 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
             self.assertFalse(status["commandsAllowed"])
             self.assertTrue((runtime_dir / "notifications" / "QuantGod_TelegramGatewayLedger.jsonl").exists())
 
+    def test_telegram_gateway_status_blocks_command_env_request(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {"QG_TELEGRAM_COMMANDS_ALLOWED": "1"},
+            clear=False,
+        ):
+            status = gateway_status(Path(tmp))
+            self.assertFalse(status["commandsAllowed"])
+            self.assertTrue(status["commandsEnvRequested"])
+            self.assertEqual(status["commandsBlockedReason"], "telegram_command_execution_disabled")
+            self.assertFalse(status["safety"]["telegramCommandExecutionAllowed"])
+
     def test_telegram_gateway_reports_delivery_observability(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)

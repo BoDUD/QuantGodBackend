@@ -22,6 +22,7 @@ test('Telegram Gateway Ops exposes push-only observability routes', () => {
   const server = read('Dashboard/dashboard_server.js');
   const routes = read('Dashboard/telegram_gateway_ops_api_routes.js');
   const runner = read('tools/run_telegram_gateway_ops.py');
+  const status = read('tools/telegram_gateway_ops/status.py');
   for (const marker of [
     "require('./telegram_gateway_ops_api_routes')",
     'isTelegramGatewayOpsPath',
@@ -42,6 +43,9 @@ test('Telegram Gateway Ops exposes push-only observability routes', () => {
     /OrderSend|OrderSendAsync|PositionClose|TRADE_ACTION_DEAL|CTrade/,
   );
   assert.doesNotMatch(routes + runner, /telegramCommandExecutionAllowed["']?\s*:\s*true/);
+  assert.match(status, /commandsAllowed["']?\s*:\s*False|commandsAllowed["']?\s*:\s*false/);
+  assert.doesNotMatch(routes, /setWebhook|getUpdates|answerCallbackQuery|callback_query|bot\.onText/);
+  assert.doesNotMatch(routes, /\/api\/telegram-gateway\/(?:webhook|inbound|command|callback)/);
 });
 
 test('Telegram Gateway Ops Python sources stay readable', () => {

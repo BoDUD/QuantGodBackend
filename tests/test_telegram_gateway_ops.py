@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.telegram_gateway_ops.status import (
     build_gateway_ops_status,
@@ -50,6 +51,20 @@ class TelegramGatewayOpsTests(unittest.TestCase):
             self.assertGreaterEqual(status["pendingCount"], 3)
             self.assertFalse(status["safety"]["gatewayReceivesCommands"])
             self.assertFalse(status["commandsAllowed"])
+
+    def test_ops_status_keeps_commands_blocked_when_env_is_misset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ",
+            {"QG_TELEGRAM_COMMANDS_ALLOWED": "1"},
+            clear=False,
+        ):
+            status = build_gateway_ops_status(Path(tmp))
+            self.assertEqual(status["status"], "COMMAND_ENV_BLOCKED_WARN")
+            self.assertIn("已硬阻断", status["statusZh"])
+            self.assertFalse(status["commandsAllowed"])
+            self.assertTrue(status["commandsEnvRequested"])
+            self.assertEqual(status["commandsBlockedReason"], "telegram_command_execution_disabled")
+            self.assertFalse(status["safety"]["telegramCommandExecutionAllowed"])
 
 
 if __name__ == "__main__":
