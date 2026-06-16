@@ -145,6 +145,87 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             self.assertIn("M1 最新 K 线延迟超阈值", history["blockersZh"])
             self.assertIn("USDJPY 历史数据覆盖或 freshness 未通过", report["blockersZh"])
 
+    def test_case_memory_coverage_blocks_production_evidence_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case_memory_dir = root / "case_memory"
+            case_memory_dir.mkdir(parents=True, exist_ok=True)
+            (case_memory_dir / "QuantGod_CaseMemoryStrategyCandidates.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.case_memory_strategy_candidate_report.v1",
+                        "status": "READY",
+                        "candidateCount": 2,
+                        "gaSeedCount": 2,
+                        "caseSummary": {
+                            "caseTypeCounts": {
+                                "EXECUTION_SLIPPAGE": 2,
+                            }
+                        },
+                        "coveragePlan": {
+                            "schema": "quantgod.case_memory_coverage_plan.v1",
+                            "status": "BLOCKED",
+                            "statusZh": "Case Memory 样本类型不足，继续只读补证",
+                            "requiredCategories": [
+                                "BAD_ENTRY",
+                                "MISSED_OPPORTUNITY",
+                                "EARLY_EXIT",
+                                "SPREAD_DAMAGE",
+                                "NEWS_DAMAGE",
+                                "GA_OVERFIT",
+                            ],
+                            "categoryCounts": {
+                                "BAD_ENTRY": 0,
+                                "MISSED_OPPORTUNITY": 0,
+                                "EARLY_EXIT": 0,
+                                "SPREAD_DAMAGE": 2,
+                                "NEWS_DAMAGE": 0,
+                                "GA_OVERFIT": 0,
+                            },
+                            "missingCategories": [
+                                "BAD_ENTRY",
+                                "MISSED_OPPORTUNITY",
+                                "EARLY_EXIT",
+                                "NEWS_DAMAGE",
+                                "GA_OVERFIT",
+                            ],
+                            "coveredCategoryCount": 1,
+                            "requiredCategoryCount": 6,
+                            "coverageRatio": 0.1667,
+                            "promotionAllowed": False,
+                            "rows": [
+                                {
+                                    "category": "BAD_ENTRY",
+                                    "status": "MISSING",
+                                    "observedCount": 0,
+                                    "source": "entry-context feedback / bar replay adverse-entry audit",
+                                    "nextActionZh": "收集入场后快速进入 MAE 的影子/执行反馈样本。",
+                                    "allowedLanes": ["SHADOW", "TESTER_ONLY", "PAPER_LIVE_SIM"],
+                                    "forbiddenSideEffects": ["ORDER_SEND", "LIVE_PRESET_MUTATION"],
+                                }
+                            ],
+                            "nextActionZh": "按缺失分类补充 shadow/tester 证据，不放开真实执行。",
+                        },
+                        "safety": {
+                            "orderSendAllowed": False,
+                            "livePresetMutationAllowed": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = build_report(root)
+
+            case_memory = report["caseMemoryCoverage"]
+            self.assertEqual(case_memory["schema"], "quantgod.production_evidence_case_memory_coverage.v1")
+            self.assertEqual(case_memory["status"], "BLOCKED")
+            self.assertEqual(case_memory["candidateCount"], 2)
+            self.assertIn("BAD_ENTRY", case_memory["missingCategories"])
+            self.assertIn("Case Memory 缺少 BAD_ENTRY 样本", case_memory["blockersZh"])
+            self.assertIn("Case Memory 样本类型覆盖不足", report["blockersZh"])
+            self.assertIn("按缺失分类补充 shadow/tester 证据", "；".join(report["nextActionsZh"]))
+
     def test_strategy_family_parity_uses_backtest_coverage_matrix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
