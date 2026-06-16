@@ -69,11 +69,56 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         json.dumps({"schema": "quantgod.execution_feedback.v1", "feedbackId": "F-001"}) + "\n",
     )
     write_json(
+        runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json",
+        {
+            "schema": "quantgod.case_memory_strategy_candidate_report.v1",
+            "candidateCount": 6,
+            "gaSeedCount": 6,
+            "caseSummary": {
+                "caseTypeCounts": {
+                    "BAD_ENTRY": 1,
+                    "MISSED_OPPORTUNITY": 1,
+                    "EARLY_EXIT": 1,
+                    "SPREAD_DAMAGE": 1,
+                    "NEWS_DAMAGE": 1,
+                    "GA_OVERFIT": 1,
+                },
+                "cases": [
+                    {"type": "BAD_ENTRY"},
+                    {"type": "MISSED_OPPORTUNITY"},
+                    {"type": "EARLY_EXIT"},
+                    {"type": "SPREAD_DAMAGE"},
+                    {"type": "NEWS_DAMAGE"},
+                    {"type": "GA_OVERFIT"},
+                ],
+            },
+            "candidates": [{"caseType": "BAD_ENTRY"}],
+            "gaSeeds": [{"caseType": "GA_OVERFIT"}],
+        },
+    )
+    write_text(
+        runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl",
+        json.dumps({"schema": "quantgod.case_memory_strategy_candidate_ledger.v1", "candidateId": "CM-001"}) + "\n",
+    )
+    write_json(
         runtime_dir / "case_memory" / "QuantGod_CaseMemoryArtifactManifest.json",
         {
             "schema": "quantgod.case_memory_artifact_manifest.v1",
             "schemaVersion": 1,
-            "artifacts": [{"artifactId": "candidateReport", "exists": True, "sha256": "def"}],
+            "artifacts": [
+                {
+                    "artifactId": "candidateReport",
+                    "path": "case_memory/QuantGod_CaseMemoryStrategyCandidates.json",
+                    "exists": True,
+                    "sha256": "def",
+                },
+                {
+                    "artifactId": "candidateLedger",
+                    "path": "case_memory/QuantGod_CaseMemoryStrategyCandidateLedger.jsonl",
+                    "exists": True,
+                    "sha256": "ghi",
+                },
+            ],
         },
     )
     write_json(
@@ -100,6 +145,9 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
             self.assertEqual(manifest["artifactCount"], 11)
             self.assertIn("historyProductionStatus", {row["artifactId"] for row in manifest["artifacts"]})
+            case_memory_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "caseMemoryArtifactManifest")
+            self.assertEqual(case_memory_row["promotionGate"]["status"], "PASS")
+            self.assertEqual(case_memory_row["promotionGate"]["missingCategories"], [])
             for row in manifest["artifacts"]:
                 self.assertEqual(row["status"], "PASS", row)
                 self.assertEqual(row["hashAlgorithm"], "sha256")
@@ -210,6 +258,49 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("historyProductionStatus:H1:span_not_ok", manifest["promotionBlockers"])
             self.assertIn("historyProductionStatus:H1:density_not_ok", manifest["promotionBlockers"])
             self.assertIn("historyProductionStatus:H1:freshness_not_ok", manifest["promotionBlockers"])
+
+    def test_case_memory_missing_taxonomy_blocks_promotion_gate_without_failing_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json",
+                {
+                    "schema": "quantgod.case_memory_strategy_candidate_report.v1",
+                    "candidateCount": 2,
+                    "gaSeedCount": 2,
+                    "caseSummary": {"caseTypeCounts": {"EXECUTION_SLIPPAGE": 2}},
+                    "candidates": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                    "gaSeeds": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                },
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+            case_memory_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "caseMemoryArtifactManifest")
+
+            self.assertEqual(manifest["status"], "PASS")
+            self.assertTrue(manifest["ok"])
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertEqual(case_memory_row["status"], "PASS")
+            self.assertEqual(case_memory_row["promotionGate"]["status"], "BLOCKED")
+            self.assertIn("caseMemoryArtifactManifest:missing_category:BAD_ENTRY", manifest["promotionBlockers"])
+            self.assertIn("caseMemoryArtifactManifest:missing_category:GA_OVERFIT", manifest["promotionBlockers"])
+            self.assertGreater(case_memory_row["promotionGate"]["categoryCounts"]["SPREAD_DAMAGE"], 0)
+
+    def test_case_memory_missing_candidate_report_blocks_promotion_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            (runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json").unlink()
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+
+            self.assertEqual(manifest["status"], "PASS")
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertIn(
+                "caseMemoryArtifactManifest:candidate_report_missing_or_unreadable",
+                manifest["promotionBlockers"],
+            )
 
 
 if __name__ == "__main__":

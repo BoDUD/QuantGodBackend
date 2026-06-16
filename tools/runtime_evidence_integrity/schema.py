@@ -113,6 +113,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "expectedSchemas": ["quantgod.case_memory_artifact_manifest.v1"],
         "required": True,
         "requiresArtifactHashes": True,
+        "requiresCaseMemoryPromotionGate": True,
     },
     {
         "artifactId": "productionEvidenceValidationReport",

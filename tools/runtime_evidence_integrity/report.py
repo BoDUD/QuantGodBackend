@@ -13,6 +13,22 @@ from .schema import CORE_ARTIFACTS, REPORT_SCHEMA, SAFETY, SCHEMA_VERSION, manif
 
 LEGACY_ABSOLUTE_PATH_RE = re.compile(r"/Users/[^\n\r\t\"']*/Quard/QuantGod(?:/|\b)")
 REQUIRED_HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
+REQUIRED_CASE_MEMORY_CATEGORIES = (
+    "BAD_ENTRY",
+    "MISSED_OPPORTUNITY",
+    "EARLY_EXIT",
+    "SPREAD_DAMAGE",
+    "NEWS_DAMAGE",
+    "GA_OVERFIT",
+)
+CASE_MEMORY_CATEGORY_ALIASES = {
+    "BAD_ENTRY": ("BAD_ENTRY", "POOR_ENTRY", "ENTRY_QUALITY", "ADVERSE_ENTRY"),
+    "MISSED_OPPORTUNITY": ("MISSED_OPPORTUNITY", "MISSEDOPPORTUNITY"),
+    "EARLY_EXIT": ("EARLY_EXIT", "EARLYEXIT"),
+    "SPREAD_DAMAGE": ("SPREAD_DAMAGE", "WIDE_SPREAD", "SPREAD", "SLIPPAGE", "EXECUTION_SLIPPAGE"),
+    "NEWS_DAMAGE": ("NEWS_DAMAGE", "NEWS_BLOCK", "NEWS"),
+    "GA_OVERFIT": ("GA_OVERFIT", "OVERFIT", "WALK_FORWARD_OVERFIT"),
+}
 
 
 def utc_now_iso() -> str:
@@ -151,6 +167,126 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _candidate_report_path(runtime_dir: Path, manifest: Dict[str, Any]) -> Path:
+    artifacts = manifest.get("artifacts")
+    if isinstance(artifacts, list):
+        for row in artifacts:
+            if not isinstance(row, dict):
+                continue
+            if row.get("artifactId") == "candidateReport" and row.get("path"):
+                return runtime_dir / str(row["path"])
+    return runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"
+
+
+def _case_type_tokens(report: Dict[str, Any]) -> List[str]:
+    tokens: List[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text:
+            tokens.append(text.upper())
+
+    summary = report.get("caseSummary") if isinstance(report.get("caseSummary"), dict) else {}
+    counts = summary.get("caseTypeCounts")
+    if isinstance(counts, dict):
+        for key, value in counts.items():
+            try:
+                count = int(value or 0)
+            except (TypeError, ValueError):
+                count = 0
+            if count > 0:
+                add(key)
+
+    for row in summary.get("cases") if isinstance(summary.get("cases"), list) else []:
+        if isinstance(row, dict):
+            add(row.get("type") or row.get("caseType"))
+            add(row.get("rootCause"))
+            add(row.get("reasonZh"))
+
+    for row in report.get("candidates") if isinstance(report.get("candidates"), list) else []:
+        if isinstance(row, dict):
+            add(row.get("caseType"))
+            add(row.get("rootCause"))
+            add(row.get("proposedMutation"))
+
+    for row in report.get("gaSeeds") if isinstance(report.get("gaSeeds"), list) else []:
+        if isinstance(row, dict):
+            add(row.get("caseType"))
+            add(row.get("mutationHint"))
+
+    long_term = report.get("longTermTradeMemory")
+    if isinstance(long_term, dict):
+        for key in ("entryMemory", "exitMemory", "caseMemory", "lossLessons"):
+            for row in long_term.get(key) if isinstance(long_term.get(key), list) else []:
+                if isinstance(row, dict):
+                    add(row.get("caseType") or row.get("memoryType") or row.get("lossTag"))
+                    add(row.get("factorAttributionSummary"))
+
+    return tokens
+
+
+def _case_memory_category_counts(tokens: List[str]) -> Dict[str, int]:
+    counts = {category: 0 for category in REQUIRED_CASE_MEMORY_CATEGORIES}
+    for token in tokens:
+        normalized = token.replace("-", "_").replace(" ", "_")
+        for category, aliases in CASE_MEMORY_CATEGORY_ALIASES.items():
+            if any(alias in normalized for alias in aliases):
+                counts[category] += 1
+    return counts
+
+
+def _safe_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _case_memory_promotion_gate(runtime_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
+    blockers: List[str] = []
+    report_path = _candidate_report_path(runtime_dir, manifest)
+    report = _read_json(report_path)
+    if not report:
+        blockers.append("candidate_report_missing_or_unreadable")
+
+    tokens = _case_type_tokens(report)
+    counts = _case_memory_category_counts(tokens)
+    missing = [category for category, count in counts.items() if count <= 0]
+    for category in missing:
+        blockers.append(f"missing_category:{category}")
+
+    candidate_count = _safe_int(report.get("candidateCount"), len(report.get("candidates") or []))
+    ga_seed_count = _safe_int(report.get("gaSeedCount"), len(report.get("gaSeeds") or []))
+    if candidate_count <= 0:
+        blockers.append("candidate_count_zero")
+    if ga_seed_count <= 0:
+        blockers.append("ga_seed_count_zero")
+
+    passed = not blockers
+    return {
+        "gateId": "case_memory_taxonomy_promotion_gate",
+        "requiredFor": ["ga_promotion", "champion_promotion"],
+        "requiredCategories": list(REQUIRED_CASE_MEMORY_CATEGORIES),
+        "passed": passed,
+        "status": "PASS" if passed else "BLOCKED",
+        "statusZh": "Case Memory 样本类型覆盖可用于晋级评审" if passed else "Case Memory 样本类型不足，禁止晋级",
+        "candidateReportPath": _relative_path(runtime_dir, report_path),
+        "candidateCount": candidate_count,
+        "gaSeedCount": ga_seed_count,
+        "observedTokenCount": len(tokens),
+        "categoryCounts": counts,
+        "missingCategories": missing,
+        "blockers": blockers,
+    }
+
+
+def _relative_path(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
 def _row_status(blockers: Iterable[str]) -> str:
     return "PASS" if not list(blockers) else "FAIL"
 
@@ -214,6 +350,8 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
         if spec.get("requiresHistoryPromotionGate") and content_type == "json"
         else None
     )
+    if spec.get("requiresCaseMemoryPromotionGate") and content_type == "json":
+        promotion_gate = _case_memory_promotion_gate(runtime_dir, payload)
 
     row = {
         "artifactId": spec["artifactId"],
@@ -276,7 +414,7 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
             "先修复缺失证据、schema 漂移、旧仓绝对路径或 artifact hash 缺口，再允许进入晋级评审。"
             if status != "PASS"
             else (
-                "核心证据文件完整，但 history freshness/覆盖仍阻断 GA/champion 晋级。"
+                "核心证据文件完整，但 history freshness、Case Memory 样本类型或其他 promotion gate 仍阻断 GA/champion 晋级。"
                 if not promotion_gate_passed
                 else "继续把 live-loop、production policy、GA、execution feedback 和 case memory 证据纳入晋级门。"
             )
