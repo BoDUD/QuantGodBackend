@@ -117,6 +117,71 @@ def _history_timeframe_passed(row: Dict[str, Any]) -> bool:
     )
 
 
+def _history_recovery_queue(rows: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    refresh_command = (
+        "python3 tools/run_usdjpy_strategy_backtest.py --runtime-dir ./runtime "
+        "sync-klines --months 12 --timeframes M1,M5,M15,H1"
+    )
+    verify_command = (
+        "python3 tools/run_usdjpy_strategy_backtest.py --runtime-dir ./runtime production-status "
+        "--months 12 --max-latest-lag-hours 96"
+    )
+    queue: List[Dict[str, Any]] = []
+    for timeframe in REQUIRED_HISTORY_TIMEFRAMES:
+        row = rows.get(timeframe, {})
+        latest_lag = row.get("latestLagHours")
+        max_lag = row.get("maxLatestLagHours") or 96.0
+        excess_lag = None
+        if isinstance(latest_lag, (int, float)) and isinstance(max_lag, (int, float)):
+            excess_lag = round(max(0.0, float(latest_lag) - float(max_lag)), 3)
+        if row.get("passed"):
+            status = "PASS"
+            priority = "OK"
+            next_action = "该周期历史 freshness 已通过；保持后台增量同步。"
+        elif row.get("spanOk") and row.get("densityOk") and not row.get("freshnessOk"):
+            status = "FRESHNESS_STALE"
+            priority = "HIGH"
+            next_action = (
+                f"{timeframe} 覆盖和密度已满足，但 latestLagHours 超过阈值；恢复 MT5/MQL5 "
+                "CopyRates 数据源后运行 sync-klines，再刷新 production-status。"
+            )
+        else:
+            status = "COVERAGE_OR_DENSITY_BLOCKED"
+            priority = "MEDIUM"
+            next_action = f"{timeframe} 覆盖或密度未通过；运行更长 lookback 的 sync-klines 并复核表内 bar count。"
+        queue.append(
+            {
+                "timeframe": timeframe,
+                "status": status,
+                "priority": priority,
+                "spanDays": row.get("spanDays"),
+                "latestLagHours": latest_lag,
+                "maxLatestLagHours": max_lag,
+                "excessLagHours": excess_lag,
+                "spanOk": bool(row.get("spanOk")),
+                "densityOk": bool(row.get("densityOk")),
+                "freshnessOk": bool(row.get("freshnessOk")),
+                "passed": bool(row.get("passed")),
+                "refreshCommand": refresh_command,
+                "verifyCommand": verify_command,
+                "nextActionZh": next_action,
+                "acceptanceZh": (
+                    f"{timeframe} spanOk=true、densityOk=true、freshnessOk=true、passed=true，且 "
+                    "historyTargetSatisfied=true。"
+                ),
+                "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
+                "forbiddenSideEffects": [
+                    "ORDER_SEND",
+                    "POSITION_CLOSE",
+                    "LIVE_PRESET_MUTATION",
+                    "MT5_REQUEST_WRITE",
+                    "WALLET_AUTHORIZATION",
+                ],
+            }
+        )
+    return queue
+
+
 def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
     timeframes = payload.get("timeframes")
     blockers: List[str] = []
@@ -140,6 +205,7 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
             "passed": _history_timeframe_passed(raw),
             "spanDays": raw.get("spanDays"),
             "latestLagHours": raw.get("latestLagHours"),
+            "maxLatestLagHours": raw.get("maxLatestLagHours") or payload.get("maxLatestLagHours"),
         }
         rows[timeframe] = row
         if not row["spanOk"]:
@@ -152,6 +218,8 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
             blockers.append(f"{timeframe}:not_passed")
 
     passed = not blockers
+    recovery_queue = _history_recovery_queue(rows)
+    stale_timeframes = [timeframe for timeframe, row in rows.items() if not row.get("freshnessOk")]
     return {
         "gateId": "history_freshness_promotion_gate",
         "requiredFor": ["ga_promotion", "champion_promotion"],
@@ -161,6 +229,13 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
         "statusZh": "历史数据可作为晋级前置证据" if passed else "历史数据 freshness/覆盖未通过，禁止晋级",
         "blockers": blockers,
         "timeframes": rows,
+        "staleTimeframes": stale_timeframes,
+        "freshnessRecoveryQueue": recovery_queue,
+        "nextActionZh": (
+            "历史数据 freshness 已通过；保持后台增量同步。"
+            if passed
+            else "按 freshnessRecoveryQueue 刷新 M1/M5/M15/H1；通过 production-status 前禁止 GA/champion 晋级。"
+        ),
     }
 
 

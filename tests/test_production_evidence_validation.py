@@ -143,6 +143,19 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             self.assertEqual(history["status"], "WARN")
             self.assertFalse(history["freshnessGatePassed"])
             self.assertIn("M1 最新 K 线延迟超阈值", history["blockersZh"])
+            self.assertEqual(history["staleTimeframes"], ["M1", "M5", "M15", "H1"])
+            self.assertEqual(len(history["freshnessRecoveryQueue"]), 4)
+            queue_row = history["freshnessRecoveryQueue"][0]
+            self.assertEqual(queue_row["timeframe"], "M1")
+            self.assertEqual(queue_row["status"], "FRESHNESS_STALE")
+            self.assertEqual(queue_row["priority"], "HIGH")
+            self.assertEqual(queue_row["excessLagHours"], 144.0)
+            self.assertIn("sync-klines", queue_row["refreshCommand"])
+            self.assertIn("production-status", queue_row["verifyCommand"])
+            self.assertIn("backtest/usdjpy.sqlite", queue_row["sourceArtifacts"])
+            self.assertIn("freshnessOk=true", queue_row["acceptanceZh"])
+            self.assertIn("ORDER_SEND", queue_row["forbiddenSideEffects"])
+            self.assertIn("按 freshnessRecoveryQueue", history["nextRecoveryActionZh"])
             self.assertIn("USDJPY 历史数据覆盖或 freshness 未通过", report["blockersZh"])
 
     def test_case_memory_coverage_blocks_production_evidence_promotion(self) -> None:

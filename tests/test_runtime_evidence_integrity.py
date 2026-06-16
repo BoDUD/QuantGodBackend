@@ -232,6 +232,15 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(history_row["status"], "PASS")
             self.assertEqual(history_row["promotionGate"]["status"], "BLOCKED")
             self.assertIn("ga_promotion", history_row["promotionGate"]["requiredFor"])
+            self.assertEqual(history_row["promotionGate"]["staleTimeframes"], ["M1"])
+            recovery_row = history_row["promotionGate"]["freshnessRecoveryQueue"][0]
+            self.assertEqual(recovery_row["timeframe"], "M1")
+            self.assertEqual(recovery_row["status"], "FRESHNESS_STALE")
+            self.assertEqual(recovery_row["priority"], "HIGH")
+            self.assertIn("sync-klines", recovery_row["refreshCommand"])
+            self.assertIn("production-status", recovery_row["verifyCommand"])
+            self.assertIn("freshnessOk=true", recovery_row["acceptanceZh"])
+            self.assertIn("ORDER_SEND", recovery_row["forbiddenSideEffects"])
 
     def test_missing_required_history_timeframe_blocks_promotion_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
