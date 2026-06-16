@@ -972,6 +972,97 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertNotIn("GA_OVERFIT", hydrated["coveragePlan"]["missingCategories"])
             self.assertFalse(hydrated["safety"]["orderSendAllowed"])
 
+    def test_status_explains_source_gaps_for_missing_case_memory_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            case_memory_dir = runtime / "case_memory"
+            replay_dir = runtime / "replay" / "usdjpy"
+            case_memory_dir.mkdir(parents=True, exist_ok=True)
+            replay_dir.mkdir(parents=True, exist_ok=True)
+            (case_memory_dir / "QuantGod_CaseMemoryStrategyCandidates.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.case_memory_strategy_candidate_report.v1",
+                        "candidateCount": 2,
+                        "gaSeedCount": 2,
+                        "caseSummary": {"caseTypeCounts": {"EXECUTION_SLIPPAGE": 2}},
+                        "candidates": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                        "gaSeeds": [{"caseType": "EXECUTION_SLIPPAGE"}],
+                        "safety": {"orderSendAllowed": False},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (replay_dir / "QuantGod_USDJPYEntryVariantComparison.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_entry_variant_comparison.v1",
+                        "variants": [
+                            {
+                                "name": "relaxed_entry_v1",
+                                "metrics": {
+                                    "sampleCount": 32,
+                                    "scoredSampleCount": 0,
+                                    "unresolvedSampleCount": 32,
+                                    "entryCountDelta": 0,
+                                    "netRDelta": 0,
+                                    "evidenceQuality": "NEEDS_BAR_REPLAY",
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (replay_dir / "QuantGod_USDJPYExitVariantComparison.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_exit_variant_comparison.v1",
+                        "variants": [{"name": "let_profit_run_v1", "metrics": {"sampleCount": 0}}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (replay_dir / "QuantGod_USDJPYNewsGateReplayReport.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_news_gate_replay.v2_5_1",
+                        "variants": [
+                            {
+                                "variant": "soft_news_gate_v1",
+                                "entryCountDelta": 0,
+                                "netRDelta": 0,
+                                "softNewsOpportunityR": 0,
+                                "maxAdverseRDelta": 0,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            hydrated = case_memory_status(runtime)
+
+            gaps = hydrated["sourceEvidenceGaps"]
+            self.assertEqual(gaps["MISSED_OPPORTUNITY"]["status"], "BLOCKED_BY_REPLAY_SCORING_GAP")
+            self.assertIn("缺少 scored posterior R", gaps["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertEqual(gaps["EARLY_EXIT"]["status"], "WAITING_EXIT_REPLAY_SAMPLES")
+            self.assertIn("0 样本", gaps["EARLY_EXIT"]["evidenceGapZh"])
+            self.assertEqual(gaps["NEWS_DAMAGE"]["status"], "WAITING_NEWS_DAMAGE_DELTA")
+            self.assertIn("未发现普通新闻", gaps["NEWS_DAMAGE"]["evidenceGapZh"])
+            queue = {row["category"]: row for row in hydrated["coveragePlan"]["nextCollectionQueue"]}
+            self.assertEqual(
+                queue["MISSED_OPPORTUNITY"]["sourceGap"]["status"],
+                "BLOCKED_BY_REPLAY_SCORING_GAP",
+            )
+            self.assertIn("scored posterior", queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertFalse(hydrated["safety"]["orderSendAllowed"])
+
 
 if __name__ == "__main__":
     unittest.main()

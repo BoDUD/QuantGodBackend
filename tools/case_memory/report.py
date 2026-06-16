@@ -103,6 +103,118 @@ def _candidate_ledger_summary(runtime_dir: Path) -> Dict[str, Any]:
     }
 
 
+def _replay_variant_metrics(path: Path) -> list[Dict[str, Any]]:
+    payload = load_json(path)
+    variants = payload.get("variants") if isinstance(payload.get("variants"), list) else []
+    rows: list[Dict[str, Any]] = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        metrics = variant.get("metrics") if isinstance(variant.get("metrics"), dict) else variant
+        rows.append(
+            {
+                "name": variant.get("name") or variant.get("variant") or "",
+                "sampleCount": metrics.get("sampleCount"),
+                "scoredSampleCount": metrics.get("scoredSampleCount"),
+                "unresolvedSampleCount": metrics.get("unresolvedSampleCount"),
+                "entryCountDelta": metrics.get("entryCountDelta"),
+                "netRDelta": metrics.get("netRDelta"),
+                "profitCaptureRatio": metrics.get("profitCaptureRatio"),
+                "evidenceQuality": metrics.get("evidenceQuality"),
+                "recommendation": metrics.get("recommendation"),
+                "softNewsOpportunityR": metrics.get("softNewsOpportunityR"),
+                "hardNewsAvoidedLossR": metrics.get("hardNewsAvoidedLossR"),
+                "maxAdverseRDelta": metrics.get("maxAdverseRDelta"),
+            }
+        )
+    return rows
+
+
+def _num(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _case_memory_source_gaps(runtime_dir: Path) -> Dict[str, Any]:
+    entry_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYEntryVariantComparison.json"
+    exit_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYExitVariantComparison.json"
+    news_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYNewsGateReplayReport.json"
+    entry_variants = _replay_variant_metrics(entry_path)
+    exit_variants = _replay_variant_metrics(exit_path)
+    news_variants = _replay_variant_metrics(news_path)
+
+    entry_sample_count = max((_num(row.get("sampleCount")) for row in entry_variants), default=0.0)
+    entry_scored_count = max((_num(row.get("scoredSampleCount")) for row in entry_variants), default=0.0)
+    entry_unresolved_count = max((_num(row.get("unresolvedSampleCount")) for row in entry_variants), default=0.0)
+    entry_delta = max((_num(row.get("entryCountDelta")) for row in entry_variants), default=0.0)
+    entry_net_delta = max((_num(row.get("netRDelta")) for row in entry_variants), default=0.0)
+
+    exit_sample_count = max((_num(row.get("sampleCount")) for row in exit_variants), default=0.0)
+    exit_scored_count = max((_num(row.get("scoredSampleCount")) for row in exit_variants), default=0.0)
+    exit_capture = max((_num(row.get("profitCaptureRatio")) for row in exit_variants), default=0.0)
+    exit_net_delta = max((_num(row.get("netRDelta")) for row in exit_variants), default=0.0)
+
+    news_entry_delta = max((_num(row.get("entryCountDelta")) for row in news_variants), default=0.0)
+    news_net_delta = max((_num(row.get("netRDelta")) for row in news_variants), default=0.0)
+    news_soft_r = max((_num(row.get("softNewsOpportunityR")) for row in news_variants), default=0.0)
+    news_adverse = min((_num(row.get("maxAdverseRDelta")) for row in news_variants), default=0.0)
+
+    entry_gap = (
+        "entry replay 有样本但缺少 scored posterior R，不能证明错失机会。"
+        if entry_sample_count > 0 and entry_scored_count <= 0 and entry_unresolved_count > 0
+        else "entry replay 暂无新增机会 delta。"
+    )
+    if entry_delta > 0 or entry_net_delta > 0:
+        entry_gap = "entry replay 已出现机会 delta，可转写 missed-opportunity 样本。"
+
+    exit_gap = (
+        "exit replay 0 样本，不能证明早出场或盈利捕获不足。"
+        if exit_sample_count <= 0
+        else "exit replay 尚未显示 let-profit-run 改善。"
+    )
+    if exit_capture > 0.35 or exit_net_delta > 0:
+        exit_gap = "exit replay 已出现盈利捕获改善，可转写 early-exit 样本。"
+
+    news_gap = "news gate replay 未发现普通新闻导致的损伤或错失机会。"
+    if news_entry_delta > 0 or news_net_delta > 0 or news_soft_r > 0 or news_adverse < 0:
+        news_gap = "news replay 已出现新闻门禁损伤/机会 delta，可转写 news-damage 样本。"
+
+    return {
+        "schema": "quantgod.case_memory_source_evidence_gaps.v1",
+        "MISSED_OPPORTUNITY": {
+            "sourceArtifact": _relative_artifact_path(runtime_dir, entry_path),
+            "sampleCount": int(entry_sample_count),
+            "scoredSampleCount": int(entry_scored_count),
+            "unresolvedSampleCount": int(entry_unresolved_count),
+            "entryCountDelta": entry_delta,
+            "netRDelta": entry_net_delta,
+            "status": "BLOCKED_BY_REPLAY_SCORING_GAP" if entry_scored_count <= 0 and entry_sample_count > 0 else "WAITING_SIGNAL_DELTA",
+            "evidenceGapZh": entry_gap,
+        },
+        "EARLY_EXIT": {
+            "sourceArtifact": _relative_artifact_path(runtime_dir, exit_path),
+            "sampleCount": int(exit_sample_count),
+            "scoredSampleCount": int(exit_scored_count),
+            "profitCaptureRatio": exit_capture,
+            "netRDelta": exit_net_delta,
+            "status": "WAITING_EXIT_REPLAY_SAMPLES" if exit_sample_count <= 0 else "WAITING_EXIT_IMPROVEMENT",
+            "evidenceGapZh": exit_gap,
+        },
+        "NEWS_DAMAGE": {
+            "sourceArtifact": _relative_artifact_path(runtime_dir, news_path),
+            "variantCount": len(news_variants),
+            "entryCountDelta": news_entry_delta,
+            "netRDelta": news_net_delta,
+            "softNewsOpportunityR": news_soft_r,
+            "maxAdverseRDelta": news_adverse,
+            "status": "WAITING_NEWS_DAMAGE_DELTA",
+            "evidenceGapZh": news_gap,
+        },
+    }
+
+
 def build_case_memory_report(
     runtime_dir: Path,
     *,
@@ -127,6 +239,7 @@ def build_case_memory_report(
         "candidates": candidates,
         "gaSeeds": ga_seeds,
         "candidateLedgerSummary": _candidate_ledger_summary(runtime_dir),
+        "sourceEvidenceGaps": _case_memory_source_gaps(runtime_dir),
         "longTermTradeMemory": long_term_memory,
         "parityGate": payload.get("parityGate") or {},
         "sources": CASE_MEMORY_SOURCES,
@@ -148,6 +261,7 @@ def status(runtime_dir: Path) -> Dict[str, Any]:
     payload = load_json(report_path(runtime_dir))
     if payload:
         payload["candidateLedgerSummary"] = _candidate_ledger_summary(runtime_dir)
+        payload["sourceEvidenceGaps"] = _case_memory_source_gaps(runtime_dir)
         payload["coveragePlan"] = build_case_memory_coverage_plan(payload)
         return {"ok": True, **payload}
     return {

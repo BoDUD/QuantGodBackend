@@ -220,11 +220,13 @@ def case_memory_category_counts(tokens: List[str]) -> Dict[str, int]:
 def build_case_memory_coverage_plan(report: Dict[str, Any]) -> Dict[str, Any]:
     tokens = case_memory_tokens_from_report(report)
     counts = case_memory_category_counts(tokens)
+    source_gaps = report.get("sourceEvidenceGaps") if isinstance(report.get("sourceEvidenceGaps"), dict) else {}
     missing = [category for category, count in counts.items() if count <= 0]
     rows = []
     for category in REQUIRED_CASE_MEMORY_CATEGORIES:
         count = counts.get(category, 0)
         guidance = CATEGORY_GUIDANCE_ZH[category]
+        source_gap = source_gaps.get(category) if isinstance(source_gaps.get(category), dict) else {}
         rows.append(
             {
                 "category": category,
@@ -236,6 +238,8 @@ def build_case_memory_coverage_plan(report: Dict[str, Any]) -> Dict[str, Any]:
                 "source": guidance["source"],
                 "sourceArtifacts": list(guidance["sourceArtifacts"]),
                 "collectionEndpoint": guidance["collectionEndpoint"],
+                "sourceGap": source_gap,
+                "evidenceGapZh": source_gap.get("evidenceGapZh") or "",
                 "nextActionZh": guidance["nextActionZh"],
                 "acceptanceZh": guidance["acceptanceZh"],
                 "allowedLanes": ["SHADOW", "TESTER_ONLY", "PAPER_LIVE_SIM"],
@@ -265,6 +269,8 @@ def build_case_memory_coverage_plan(report: Dict[str, Any]) -> Dict[str, Any]:
                 "source": row["source"],
                 "sourceArtifacts": row["sourceArtifacts"],
                 "collectionEndpoint": row["collectionEndpoint"],
+                "sourceGap": row["sourceGap"],
+                "evidenceGapZh": row["evidenceGapZh"],
                 "nextActionZh": row["nextActionZh"],
                 "acceptanceZh": row["acceptanceZh"],
             }
