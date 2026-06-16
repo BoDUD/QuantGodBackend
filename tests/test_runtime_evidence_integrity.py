@@ -49,6 +49,18 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         },
     )
     write_json(
+        runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
+        {
+            "schema": "quantgod.usdjpy_history_production_status.v1",
+            "status": "PASS",
+            "historyTargetSatisfied": True,
+            "timeframes": {
+                timeframe: {"passed": True, "freshnessOk": True}
+                for timeframe in ("M1", "M5", "M15", "H1")
+            },
+        },
+    )
+    write_json(
         runtime_dir / "execution" / "QuantGod_LiveExecutionQualityReport.json",
         {"schema": "quantgod.live_execution_quality_report.v1", "sampleCount": 1},
     )
@@ -84,7 +96,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertTrue(manifest["ok"])
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
-            self.assertEqual(manifest["artifactCount"], 10)
+            self.assertEqual(manifest["artifactCount"], 11)
+            self.assertIn("historyProductionStatus", {row["artifactId"] for row in manifest["artifacts"]})
             for row in manifest["artifacts"]:
                 self.assertEqual(row["status"], "PASS", row)
                 self.assertEqual(row["hashAlgorithm"], "sha256")
@@ -126,6 +139,17 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
 
             self.assertEqual(manifest["status"], "FAIL")
             self.assertIn("executionFeedbackLedger:missing_required_artifact", manifest["blockers"])
+
+    def test_missing_history_production_status_blocks_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            (runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").unlink()
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+
+            self.assertEqual(manifest["status"], "FAIL")
+            self.assertIn("historyProductionStatus:missing_required_artifact", manifest["blockers"])
 
 
 if __name__ == "__main__":

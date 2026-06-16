@@ -81,6 +81,14 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "requiresArtifactHashes": True,
     },
     {
+        "artifactId": "historyProductionStatus",
+        "category": "history-production",
+        "path": "backtest/QuantGod_USDJPYHistoryProductionStatus.json",
+        "contentType": "json",
+        "expectedSchemas": ["quantgod.usdjpy_history_production_status.v1"],
+        "required": True,
+    },
+    {
         "artifactId": "executionFeedbackQualityReport",
         "category": "execution-feedback",
         "path": "execution/QuantGod_LiveExecutionQualityReport.json",
@@ -118,4 +126,3 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
 
 def manifest_path(runtime_dir: Path) -> Path:
     return Path(runtime_dir) / REPORT_DIR / REPORT_FILE
-
