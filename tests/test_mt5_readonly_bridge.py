@@ -516,6 +516,41 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         self.assertIn("MT5 terminal/EA dashboard writer process", snapshot["_freshness"]["nextAction"])
         self.assertFalse(snapshot["_freshness"]["orderSendAllowed"])
 
+    def test_missing_ea_snapshot_returns_structured_recovery_diagnostics(self):
+        old_detector = bridge.detect_mt5_host_process
+        old_candidates = bridge.runtime_dir_candidates
+        bridge.detect_mt5_host_process = lambda file_path: {
+            "status": "MISSING",
+            "terminalProcessDetected": False,
+            "targetProcessDetected": False,
+            "matchingProcessCount": 0,
+            "targetHint": "",
+        }
+        bridge.runtime_dir_candidates = lambda: []
+        try:
+            snapshot = bridge.build_missing_ea_snapshot_payload(
+                self.fallback_args("snapshot"),
+                python_bridge_error=bridge.public_error("MetaTrader5 unavailable", detail="missing package"),
+            )
+        finally:
+            bridge.detect_mt5_host_process = old_detector
+            bridge.runtime_dir_candidates = old_candidates
+
+        self.assertFalse(snapshot["ok"])
+        self.assertEqual(snapshot["status"], "MISSING_EA_SNAPSHOT")
+        self.assertEqual(snapshot["statusZh"], "MT5 dashboard 快照缺失")
+        self.assertEqual(snapshot["_freshness"]["status"], "MISSING_EA_SNAPSHOT")
+        self.assertEqual(snapshot["_freshness"]["statusZh"], "MT5 dashboard 快照缺失")
+        self.assertTrue(snapshot["_freshness"]["stale"])
+        self.assertIn("missing_ea_dashboard_snapshot", snapshot["_freshness"]["blockers"])
+        self.assertIn("mt5_terminal_process_missing", snapshot["_freshness"]["blockers"])
+        self.assertIn("QuantGod_Dashboard.json", snapshot["_freshness"]["nextActionZh"])
+        self.assertEqual(snapshot["positions"]["items"], [])
+        self.assertEqual(snapshot["orders"]["items"], [])
+        self.assertTrue(snapshot["positions"]["missing"])
+        self.assertFalse(snapshot["safety"]["orderSendAllowed"])
+        self.assertFalse(snapshot["safety"]["livePresetMutationAllowed"])
+
     def test_fresh_ea_snapshot_keeps_positions(self):
         old_runtime = os.environ.get("QG_RUNTIME_DIR")
         old_max_age = os.environ.get("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS")

@@ -202,10 +202,17 @@ def ea_snapshot_freshness(file_path: Path | None, stat: os.stat_result | None) -
     max_age = ea_snapshot_max_age_seconds()
     fresh = age is not None and age <= max_age
     source_file = str(file_path) if file_path else ""
+    status_zh = "MT5 dashboard 快照新鲜" if fresh else "MT5 dashboard 快照已过期"
+    next_action_zh = (
+        "继续读取最新 EA dashboard 快照。"
+        if fresh
+        else "恢复 MT5 终端和 EA dashboard writer，让 QuantGod_Dashboard.json 重新写入；恢复前不要把账户、持仓或执行状态当成当前实盘。"
+    )
     return {
         "mode": "MT5_READONLY_EA_SNAPSHOT_MTIME_WATCH",
         "status": "FRESH_EA_SNAPSHOT" if fresh else "STALE_EA_SNAPSHOT",
         "statusLabel": "EA snapshot fresh" if fresh else "EA snapshot stale",
+        "statusZh": status_zh,
         "fresh": fresh,
         "stale": not fresh,
         "ageSeconds": round(age, 3) if age is not None else None,
@@ -217,6 +224,49 @@ def ea_snapshot_freshness(file_path: Path | None, stat: os.stat_result | None) -
             if fresh
             else "Restore the MT5/EA dashboard writer so QuantGod_Dashboard.json is refreshed before using live account state."
         ),
+        "nextActionZh": next_action_zh,
+        "recoveryStepsZh": (
+            []
+            if fresh
+            else [
+                "确认对应 HFM/MT5 终端正在运行。",
+                "确认 EA 已加载并持续写出 QuantGod_Dashboard.json。",
+                "刷新 /api/mt5-readonly/snapshot，直到 freshness 重新变为 fresh。",
+            ]
+        ),
+        "orderSendAllowed": False,
+        "mt5OrderSendAllowed": False,
+        "brokerCallsMade": False,
+        "mutatesMt5": False,
+    }
+
+
+def ea_snapshot_missing_freshness(host_process: dict[str, Any] | None = None) -> dict[str, Any]:
+    host_process = host_process or {}
+    blockers = ["missing_ea_dashboard_snapshot"]
+    if host_process.get("terminalProcessDetected") is False:
+        blockers.append("mt5_terminal_process_missing")
+    return {
+        "mode": "MT5_READONLY_EA_SNAPSHOT_MTIME_WATCH",
+        "status": "MISSING_EA_SNAPSHOT",
+        "statusLabel": "EA snapshot missing",
+        "statusZh": "MT5 dashboard 快照缺失",
+        "fresh": False,
+        "stale": True,
+        "ageSeconds": None,
+        "maxAgeSeconds": ea_snapshot_max_age_seconds(),
+        "sourceFile": "",
+        "blockers": blockers,
+        "nextAction": "Restore the MT5 terminal/EA dashboard writer so QuantGod_Dashboard.json is created before using live account state.",
+        "nextActionZh": "未找到 QuantGod_Dashboard.json；先恢复 MT5 终端和 EA dashboard writer，让快照文件重新生成，恢复前不要把账号数据当成当前实盘。",
+        "recoveryStepsZh": [
+            "确认对应 HFM/MT5 终端正在运行。",
+            "确认 QuantGod EA 已加载并允许写入 dashboard 只读快照。",
+            "确认 QG_RUNTIME_DIR / QG_MT5_FILES_DIR 指向当前 MT5 MQL5/Files 目录。",
+            "刷新 /api/mt5-readonly/snapshot，直到找到 QuantGod_Dashboard.json 且 freshness 为 fresh。",
+        ],
+        "hostProcessStatus": host_process.get("status"),
+        "terminalProcessDetected": host_process.get("terminalProcessDetected"),
         "orderSendAllowed": False,
         "mt5OrderSendAllowed": False,
         "brokerCallsMade": False,
@@ -340,6 +390,21 @@ def stale_collection_payload(kind: str, symbol: str, stat: os.stat_result | None
         "ageSeconds": round(age, 3) if age is not None else None,
         "maxAgeSeconds": max_age,
         "reason": "EA snapshot is stale; suppressing openTrades/pendingOrders so old positions are not shown as live.",
+    }
+
+
+def missing_collection_payload(kind: str, symbol: str) -> dict[str, Any]:
+    return {
+        "count": 0,
+        "symbol": normalize_symbol_filter(symbol),
+        "items": [],
+        "stale": True,
+        "missing": True,
+        "staleSuppressed": True,
+        "kind": kind,
+        "ageSeconds": None,
+        "maxAgeSeconds": ea_snapshot_max_age_seconds(),
+        "reason": "EA dashboard snapshot is missing; suppressing openTrades/pendingOrders so absent evidence is not shown as live.",
     }
 
 
@@ -726,6 +791,99 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
     return payload
 
 
+def build_missing_ea_snapshot_payload(
+    args: argparse.Namespace,
+    *,
+    python_bridge_error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    endpoint = args.endpoint
+    host_process = detect_mt5_host_process(None)
+    freshness = ea_snapshot_missing_freshness(host_process)
+    payload = base_payload(endpoint)
+    payload.update(
+        {
+            "ok": False,
+            "mode": "MT5_READONLY_BRIDGE_V1_EA_SNAPSHOT_MISSING",
+            "status": "MISSING_EA_SNAPSHOT",
+            "statusZh": "MT5 dashboard 快照缺失",
+            "bridgeStatus": "MT5_PYTHON_UNAVAILABLE_EA_SNAPSHOT_MISSING",
+            "error": "EA dashboard snapshot is missing",
+            "terminal": {
+                "connected": False,
+                "tradeAllowed": False,
+                "dllsAllowed": False,
+                "name": "HFM MetaTrader 5 EA Snapshot",
+                "company": "HF Markets",
+                "path": "",
+                "dataPath": "",
+                "commonDataPath": "",
+                "codepage": 0,
+                "maxBars": 0,
+                "hostProcessStatus": host_process.get("status"),
+                "hostProcessDetected": bool(host_process.get("terminalProcessDetected")),
+                "targetHostProcessDetected": bool(host_process.get("targetProcessDetected")),
+            },
+            "hostProcess": host_process,
+            "account": None,
+            "runtime": {},
+            "watchlist": "",
+            "market": {},
+            "snapshotFresh": False,
+            "source": {
+                "type": "hfm_ea_dashboard_snapshot",
+                "file": "",
+                "mtimeIso": "",
+                "ageSeconds": None,
+                "maxAgeSeconds": ea_snapshot_max_age_seconds(),
+                "fresh": False,
+                "missing": True,
+                "searchedDirs": [str(path) for path in runtime_dir_candidates()],
+            },
+            "_freshness": freshness,
+            "warning": "ea_snapshot_missing_positions_and_orders_suppressed",
+        }
+    )
+    if python_bridge_error:
+        payload["pythonBridgeError"] = python_bridge_error.get("error", "")
+        payload["pythonBridgeDetail"] = python_bridge_error.get("detail", "")
+
+    if endpoint == "positions":
+        payload["positions"] = missing_collection_payload("positions", args.symbol)
+    elif endpoint == "orders":
+        payload["orders"] = missing_collection_payload("orders", args.symbol)
+    elif endpoint == "symbols":
+        payload["symbols"] = {
+            "group": args.group,
+            "query": args.query,
+            "count": 0,
+            "returned": 0,
+            "truncated": False,
+            "items": [],
+            "missing": True,
+        }
+    elif endpoint == "quote":
+        payload["quote"] = {
+            "ok": False,
+            "symbol": normalize_symbol_filter(args.symbol),
+            "error": "EA dashboard snapshot is missing",
+            "missing": True,
+        }
+    elif endpoint == "snapshot":
+        payload["positions"] = missing_collection_payload("positions", args.symbol)
+        payload["orders"] = missing_collection_payload("orders", args.symbol)
+        payload["symbols"] = {
+            "group": args.group,
+            "query": args.query,
+            "count": 0,
+            "returned": 0,
+            "truncated": False,
+            "items": [],
+            "missing": True,
+        }
+        payload["quote"] = None
+    return payload
+
+
 def maybe_asdict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
@@ -1034,14 +1192,23 @@ def main(argv: list[str]) -> int:
             fallback["pythonBridgeDetail"] = error.get("detail", "")
             print(json.dumps(fallback, ensure_ascii=False, indent=2))
             return 0
-        error["endpoint"] = args.endpoint
-        print(json.dumps(error, ensure_ascii=False, indent=2))
+        missing = build_missing_ea_snapshot_payload(args, python_bridge_error=error)
+        print(json.dumps(missing, ensure_ascii=False, indent=2))
         return 0
 
     initialized, init_error = initialize_mt5(mt5, args.terminal_path)
     if not initialized:
-        payload = public_error("MT5 initialize failed", detail=init_error)
-        payload["endpoint"] = args.endpoint
+        fallback = build_ea_snapshot_fallback(args)
+        if fallback:
+            fallback["pythonBridgeError"] = "MT5 initialize failed"
+            fallback["pythonBridgeDetail"] = init_error
+            print(json.dumps(fallback, ensure_ascii=False, indent=2))
+            return 0
+        payload = build_missing_ea_snapshot_payload(
+            args,
+            python_bridge_error=public_error("MT5 initialize failed", detail=init_error),
+        )
+        payload["bridgeStatus"] = "MT5_INITIALIZE_FAILED_EA_SNAPSHOT_MISSING"
         payload["terminalPath"] = args.terminal_path
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
