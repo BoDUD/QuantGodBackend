@@ -9,6 +9,9 @@
 __pycache__/
 *.pyc
 node_modules/
+exports/
+cache/
+.cache/
 Dashboard/vue-dist/
 Dashboard/quantgod_cloud_sync.json
 Dashboard/QuantGod_*.json
