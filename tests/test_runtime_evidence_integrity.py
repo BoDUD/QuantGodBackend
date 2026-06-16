@@ -311,6 +311,47 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                     "gaSeeds": [{"caseType": "EXECUTION_SLIPPAGE"}],
                 },
             )
+            write_json(
+                runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYEntryVariantComparison.json",
+                {
+                    "schema": "quantgod.usdjpy_entry_variant_comparison.v1",
+                    "variants": [
+                        {
+                            "name": "relaxed_entry_v1",
+                            "metrics": {
+                                "sampleCount": 32,
+                                "scoredSampleCount": 0,
+                                "unresolvedSampleCount": 32,
+                                "entryCountDelta": 0,
+                                "netRDelta": 0,
+                                "evidenceQuality": "NEEDS_BAR_REPLAY",
+                            },
+                        }
+                    ],
+                },
+            )
+            write_json(
+                runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYExitVariantComparison.json",
+                {
+                    "schema": "quantgod.usdjpy_exit_variant_comparison.v1",
+                    "variants": [{"name": "let_profit_run_v1", "metrics": {"sampleCount": 0}}],
+                },
+            )
+            write_json(
+                runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYNewsGateReplayReport.json",
+                {
+                    "schema": "quantgod.usdjpy_news_gate_replay.v2_5_1",
+                    "variants": [
+                        {
+                            "variant": "soft_news_gate_v1",
+                            "entryCountDelta": 0,
+                            "netRDelta": 0,
+                            "softNewsOpportunityR": 0,
+                            "maxAdverseRDelta": 0,
+                        }
+                    ],
+                },
+            )
 
             manifest = build_core_evidence_manifest(runtime_dir)
             case_memory_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "caseMemoryArtifactManifest")
@@ -332,6 +373,25 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(bad_entry_row["priority"], "HIGH")
             self.assertEqual(bad_entry_row["collectionEndpoint"], "/api/usdjpy-strategy-lab/evidence-os/execution-feedback")
             self.assertIn("MT5_REQUEST_WRITE", bad_entry_row["forbiddenSideEffects"])
+            rows_by_category = {row.get("category"): row for row in recovery_rows}
+            self.assertEqual(
+                rows_by_category["MISSED_OPPORTUNITY"]["sourceGapStatus"],
+                "BLOCKED_BY_REPLAY_SCORING_GAP",
+            )
+            self.assertIn("scored posterior R", rows_by_category["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertEqual(
+                rows_by_category["MISSED_OPPORTUNITY"]["sourceGapArtifact"],
+                "replay/usdjpy/QuantGod_USDJPYEntryVariantComparison.json",
+            )
+            self.assertEqual(rows_by_category["EARLY_EXIT"]["sourceGapStatus"], "WAITING_EXIT_REPLAY_SAMPLES")
+            self.assertIn("0 样本", rows_by_category["EARLY_EXIT"]["evidenceGapZh"])
+            self.assertEqual(rows_by_category["NEWS_DAMAGE"]["sourceGapStatus"], "WAITING_NEWS_DAMAGE_DELTA")
+            self.assertIn("未发现普通新闻", rows_by_category["NEWS_DAMAGE"]["evidenceGapZh"])
+            coverage_queue = {
+                row["category"]: row
+                for row in case_memory_row["promotionGate"]["coveragePlan"]["nextCollectionQueue"]
+            }
+            self.assertIn("scored posterior", coverage_queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
 
     def test_case_memory_ledger_summary_counts_historical_ga_overfit_samples(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

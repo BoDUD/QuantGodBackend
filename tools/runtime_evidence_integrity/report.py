@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 try:
+    from tools.case_memory.report import status as case_memory_status
     from tools.case_memory.taxonomy import (
         CATEGORY_GUIDANCE_ZH,
         REQUIRED_CASE_MEMORY_CATEGORIES,
@@ -16,6 +17,7 @@ try:
         case_memory_tokens_from_report,
     )
 except ModuleNotFoundError:  # pragma: no cover
+    from case_memory.report import status as case_memory_status
     from case_memory.taxonomy import (
         CATEGORY_GUIDANCE_ZH,
         REQUIRED_CASE_MEMORY_CATEGORIES,
@@ -336,16 +338,31 @@ def _safe_int(value: Any, fallback: int = 0) -> int:
         return fallback
 
 
+def _case_memory_status_payload(runtime_dir: Path) -> Dict[str, Any]:
+    try:
+        payload = case_memory_status(runtime_dir)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _case_memory_promotion_gate(runtime_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     blockers: List[str] = []
     report_path = _candidate_report_path(runtime_dir, manifest)
     report = _read_json(report_path)
+    hydrated_report = _case_memory_status_payload(runtime_dir)
     if not report:
         blockers.append("candidate_report_missing_or_unreadable")
+        report = hydrated_report
     else:
-        report["candidateLedgerSummary"] = _candidate_ledger_summary(
-            _candidate_ledger_path(runtime_dir, manifest)
-        )
+        if hydrated_report.get("schema") == report.get("schema"):
+            for key in ("candidateLedgerSummary", "sourceEvidenceGaps", "coveragePlan"):
+                if key in hydrated_report:
+                    report[key] = hydrated_report[key]
+        else:
+            report["candidateLedgerSummary"] = _candidate_ledger_summary(
+                _candidate_ledger_path(runtime_dir, manifest)
+            )
 
     tokens = case_memory_tokens_from_report(report)
     counts = case_memory_category_counts(tokens)
@@ -374,6 +391,14 @@ def _case_memory_promotion_gate(runtime_dir: Path, manifest: Dict[str, Any]) -> 
         "observedTokenCount": len(tokens),
         "categoryCounts": counts,
         "missingCategories": missing,
+        "sourceEvidenceGaps": (
+            report.get("sourceEvidenceGaps")
+            if isinstance(report.get("sourceEvidenceGaps"), dict)
+            else {}
+        ),
+        "coveragePlan": (
+            report.get("coveragePlan") if isinstance(report.get("coveragePlan"), dict) else {}
+        ),
         "blockers": blockers,
     }
 
@@ -518,6 +543,18 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
         if artifact_id == "caseMemoryArtifactManifest":
             blockers = [str(blocker) for blocker in gate.get("blockers", [])]
+            coverage_plan = gate.get("coveragePlan") if isinstance(gate.get("coveragePlan"), dict) else {}
+            collection_rows: Dict[str, Dict[str, Any]] = {}
+            for item in (
+                coverage_plan.get("nextCollectionQueue")
+                if isinstance(coverage_plan.get("nextCollectionQueue"), list)
+                else []
+            ):
+                if not isinstance(item, dict):
+                    continue
+                category = str(item.get("category") or "")
+                if category:
+                    collection_rows[category] = item
             if "candidate_report_missing_or_unreadable" in blockers:
                 queue.append(
                     {
@@ -539,6 +576,17 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
             for category in gate.get("missingCategories") if isinstance(gate.get("missingCategories"), list) else []:
                 category_key = str(category)
                 guidance = CATEGORY_GUIDANCE_ZH.get(category_key, {})
+                collection_row = collection_rows.get(category_key, {})
+                source_gap = (
+                    collection_row.get("sourceGap")
+                    if isinstance(collection_row.get("sourceGap"), dict)
+                    else {}
+                )
+                evidence_gap = (
+                    collection_row.get("evidenceGapZh")
+                    or source_gap.get("evidenceGapZh")
+                    or ""
+                )
                 queue.append(
                     {
                         "kind": "case_memory_category",
@@ -555,6 +603,10 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "source": guidance.get("source"),
                         "sourceArtifacts": list(guidance.get("sourceArtifacts", [])),
                         "collectionEndpoint": guidance.get("collectionEndpoint"),
+                        "sourceGap": source_gap,
+                        "sourceGapStatus": source_gap.get("status") or "",
+                        "sourceGapArtifact": source_gap.get("sourceArtifact") or "",
+                        "evidenceGapZh": evidence_gap,
                         "nextActionZh": guidance.get(
                             "nextActionZh",
                             f"补齐 Case Memory {category_key} 样本；只允许 shadow/tester/read-only 证据。",
