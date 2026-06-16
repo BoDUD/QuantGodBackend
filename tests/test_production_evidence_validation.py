@@ -15,8 +15,14 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = build_report(Path(tmp))
             self.assertEqual(report["schema"], "quantgod.production_evidence_validation.v1")
-            self.assertIn(report["status"], {"WARN", "FAIL"})
+            self.assertEqual(report["status"], "FAIL")
             self.assertFalse(report["safety"]["orderSendAllowed"])
+            self.assertEqual(report["coreRuntimeEvidenceIntegrity"]["status"], "FAIL")
+            self.assertIn("核心运行证据 integrity 未通过", report["blockersZh"])
+            self.assertIn(
+                "先修复核心 runtime evidence integrity",
+                report["nextActionsZh"][0],
+            )
 
     def test_writes_reports_with_sqlite_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -33,8 +39,10 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             report = build_report(root)
             paths = write_reports(root, report)
             self.assertTrue(Path(paths["latest"]).exists())
+            self.assertTrue(Path(paths["coreRuntimeEvidenceManifest"]).exists())
             saved = json.loads(Path(paths["latest"]).read_text(encoding="utf-8"))
             self.assertIn("historyProduction", saved)
+            self.assertIn("coreRuntimeEvidenceIntegrity", saved)
             self.assertEqual(saved["historyProduction"]["status"], "WARN")
             self.assertIn("M15 历史覆盖不足", saved["historyProduction"]["blockersZh"])
 

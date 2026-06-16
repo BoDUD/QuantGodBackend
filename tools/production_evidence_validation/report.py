@@ -21,6 +21,13 @@ from .schema import (
     STRATEGY_FAMILY_PARITY,
 )
 
+try:
+    from runtime_evidence_integrity.report import build_core_evidence_manifest
+    from runtime_evidence_integrity.schema import manifest_path as core_evidence_manifest_path
+except ImportError:  # pragma: no cover - used when imported as tools.* in tests
+    from tools.runtime_evidence_integrity.report import build_core_evidence_manifest
+    from tools.runtime_evidence_integrity.schema import manifest_path as core_evidence_manifest_path
+
 
 def _overall_status(sections: list[dict[str, Any]]) -> str:
     states = {str(section.get("status") or "UNKNOWN").upper() for section in sections}
@@ -37,8 +44,11 @@ def _next_actions(
     execution_feedback: dict[str, Any],
     ga: dict[str, Any],
     rsi_lineage: dict[str, Any],
+    runtime_integrity: dict[str, Any],
 ) -> list[str]:
     actions: list[str] = []
+    if runtime_integrity.get("status") != "PASS":
+        actions.append("先修复核心 runtime evidence integrity：缺失文件、schema/hash 漂移或旧仓路径都会阻断晋级")
     if parity.get("failCount"):
         actions.append("优先修复 PARITY_FAIL，相关策略不得晋级")
     elif parity.get("missingCount"):
@@ -62,6 +72,7 @@ def _next_actions(
 
 
 def build_report(runtime_dir: Path) -> dict[str, Any]:
+    runtime_integrity = build_core_evidence_manifest(runtime_dir, write=False)
     history = audit_history(runtime_dir)
     parity = audit_parity(runtime_dir)
     execution_feedback = audit_execution_feedback(runtime_dir)
@@ -74,12 +85,15 @@ def build_report(runtime_dir: Path) -> dict[str, Any]:
             "parity": parity,
             "executionFeedback": execution_feedback,
             "ga": ga,
+            "runtimeIntegrity": runtime_integrity,
         },
         write=False,
     )
-    sections = [history, parity, execution_feedback, ga, rsi_lineage]
+    sections = [runtime_integrity, history, parity, execution_feedback, ga, rsi_lineage]
     status = _overall_status(sections)
     blockers = []
+    if runtime_integrity.get("status") != "PASS":
+        blockers.append("核心运行证据 integrity 未通过")
     if parity.get("failCount"):
         blockers.append("存在 PARITY_FAIL，相关策略不得晋级")
     thresholds = execution_feedback.get("thresholds") or {}
@@ -100,12 +114,20 @@ def build_report(runtime_dir: Path) -> dict[str, Any]:
         "summaryZh": "生产证据可用" if status == "PASS" else "生产证据仍需补强",
         "blockersZh": blockers,
         "historyProduction": history,
+        "coreRuntimeEvidenceIntegrity": runtime_integrity,
         "strategyFamilyParity": parity,
         "liveExecutionFeedbackCoverage": execution_feedback,
         "gaMultiGenerationStability": ga,
         "rsiStabilityLineageClosure": rsi_lineage,
         "safety": SAFETY,
-        "nextActionsZh": _next_actions(history, parity, execution_feedback, ga, rsi_lineage),
+        "nextActionsZh": _next_actions(
+            history,
+            parity,
+            execution_feedback,
+            ga,
+            rsi_lineage,
+            runtime_integrity,
+        ),
     }
 
 
@@ -117,8 +139,10 @@ def write_reports(runtime_dir: Path, report: dict[str, Any]) -> dict[str, str]:
         "executionFeedbackCoverage": str(out_dir / EXECUTION_FEEDBACK_COVERAGE),
         "gaStability": str(out_dir / GA_STABILITY_REPORT),
         "rsiLineageClosure": str(out_dir / RSI_LINEAGE_CLOSURE_REPORT),
+        "coreRuntimeEvidenceManifest": str(core_evidence_manifest_path(runtime_dir)),
     }
     write_json(Path(paths["latest"]), report)
+    write_json(Path(paths["coreRuntimeEvidenceManifest"]), report.get("coreRuntimeEvidenceIntegrity") or {})
     write_json(Path(paths["parityMatrix"]), report.get("strategyFamilyParity") or {})
     write_json(Path(paths["executionFeedbackCoverage"]), report.get("liveExecutionFeedbackCoverage") or {})
     write_json(Path(paths["gaStability"]), report.get("gaMultiGenerationStability") or {})
