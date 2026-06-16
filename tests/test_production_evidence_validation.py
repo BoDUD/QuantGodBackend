@@ -115,6 +115,21 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
                         "historyTargetSatisfied": False,
                         "requiredSpanDays": 316.2,
                         "maxLatestLagHours": 96.0,
+                        "copyRatesExportFreshness": {
+                            "schema": "quantgod.mql5_copyrates_export_freshness.v1",
+                            "status": "STALE",
+                            "stale": True,
+                            "generatedAtServer": "2026-06-05T11:56:59Z",
+                            "generatedLagHours": 263.4,
+                            "latestLagHoursByTimeframe": {
+                                "M1": 263.4,
+                                "M5": 263.5,
+                                "M15": 263.7,
+                                "H1": 264.4,
+                            },
+                            "staleTimeframes": ["M1", "M5", "M15", "H1"],
+                            "nextActionZh": "先刷新 MQL5 CopyRates exporter，再运行 sync-klines 与 production-status。",
+                        },
                         "timeframes": {
                             timeframe: {
                                 "timeframe": timeframe,
@@ -144,12 +159,20 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             self.assertFalse(history["freshnessGatePassed"])
             self.assertIn("M1 最新 K 线延迟超阈值", history["blockersZh"])
             self.assertEqual(history["staleTimeframes"], ["M1", "M5", "M15", "H1"])
+            self.assertEqual(history["copyRatesExportFreshness"]["status"], "STALE")
             self.assertEqual(len(history["freshnessRecoveryQueue"]), 4)
             queue_row = history["freshnessRecoveryQueue"][0]
             self.assertEqual(queue_row["timeframe"], "M1")
             self.assertEqual(queue_row["status"], "FRESHNESS_STALE")
             self.assertEqual(queue_row["priority"], "HIGH")
             self.assertEqual(queue_row["excessLagHours"], 144.0)
+            self.assertEqual(queue_row["copyRatesExportFreshnessStatus"], "STALE")
+            self.assertTrue(queue_row["copyRatesExportStale"])
+            self.assertEqual(queue_row["copyRatesExportGeneratedAtServer"], "2026-06-05T11:56:59Z")
+            self.assertEqual(queue_row["copyRatesExportGeneratedLagHours"], 263.4)
+            self.assertEqual(queue_row["copyRatesExportLatestLagHours"], 263.4)
+            self.assertEqual(queue_row["copyRatesExportStaleTimeframes"], ["M1", "M5", "M15", "H1"])
+            self.assertIn("CopyRates exporter", queue_row["copyRatesExportNextActionZh"])
             self.assertIn("sync-klines", queue_row["refreshCommand"])
             self.assertIn("production-status", queue_row["verifyCommand"])
             self.assertIn("backtest/usdjpy.sqlite", queue_row["sourceArtifacts"])

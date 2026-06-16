@@ -213,6 +213,16 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                     "schema": "quantgod.usdjpy_history_production_status.v1",
                     "status": "WARN",
                     "historyTargetSatisfied": False,
+                    "copyRatesExportFreshness": {
+                        "schema": "quantgod.mql5_copyrates_export_freshness.v1",
+                        "status": "STALE",
+                        "stale": True,
+                        "generatedAtServer": "2026-06-05T11:56:59Z",
+                        "generatedLagHours": 263.4,
+                        "latestLagHoursByTimeframe": {"M1": 263.4},
+                        "staleTimeframes": ["M1"],
+                        "nextActionZh": "先刷新 MQL5 CopyRates exporter，再运行 sync-klines 与 production-status。",
+                    },
                     "timeframes": {
                         "M1": {"passed": False, "spanOk": True, "densityOk": True, "freshnessOk": False},
                         "M5": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
@@ -235,15 +245,26 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["kind"], "history_freshness")
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["artifactId"], "historyProductionStatus")
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["timeframe"], "M1")
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["copyRatesExportFreshnessStatus"], "STALE")
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["copyRatesExportLatestLagHours"], 263.4)
+            self.assertIn("CopyRates exporter", manifest["promotionRecoveryQueue"][0]["copyRatesExportNextActionZh"])
             self.assertIn("ORDER_SEND", manifest["promotionRecoveryQueue"][0]["forbiddenSideEffects"])
             self.assertEqual(history_row["status"], "PASS")
             self.assertEqual(history_row["promotionGate"]["status"], "BLOCKED")
             self.assertIn("ga_promotion", history_row["promotionGate"]["requiredFor"])
             self.assertEqual(history_row["promotionGate"]["staleTimeframes"], ["M1"])
+            self.assertEqual(history_row["promotionGate"]["copyRatesExportFreshness"]["status"], "STALE")
             recovery_row = history_row["promotionGate"]["freshnessRecoveryQueue"][0]
             self.assertEqual(recovery_row["timeframe"], "M1")
             self.assertEqual(recovery_row["status"], "FRESHNESS_STALE")
             self.assertEqual(recovery_row["priority"], "HIGH")
+            self.assertEqual(recovery_row["copyRatesExportFreshnessStatus"], "STALE")
+            self.assertTrue(recovery_row["copyRatesExportStale"])
+            self.assertEqual(recovery_row["copyRatesExportGeneratedAtServer"], "2026-06-05T11:56:59Z")
+            self.assertEqual(recovery_row["copyRatesExportGeneratedLagHours"], 263.4)
+            self.assertEqual(recovery_row["copyRatesExportLatestLagHours"], 263.4)
+            self.assertEqual(recovery_row["copyRatesExportStaleTimeframes"], ["M1"])
+            self.assertIn("CopyRates exporter", recovery_row["copyRatesExportNextActionZh"])
             self.assertIn("sync-klines", recovery_row["refreshCommand"])
             self.assertIn("production-status", recovery_row["verifyCommand"])
             self.assertIn("freshnessOk=true", recovery_row["acceptanceZh"])

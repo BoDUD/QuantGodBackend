@@ -144,6 +144,7 @@ def _history_freshness_recovery_queue(
     *,
     database_found: bool,
     database_path: Path | None = None,
+    copyrates_freshness: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     db_rel = _relative_to_runtime(runtime_dir, database_path) if database_path else "backtest/usdjpy.sqlite"
     status_rel = _relative_to_runtime(runtime_dir, runtime_dir / "backtest" / PRODUCTION_STATUS_FILE)
@@ -182,40 +183,64 @@ def _history_freshness_recovery_queue(
             next_action = (
                 f"{timeframe} 覆盖或密度未通过；运行更长 lookback 的 sync-klines 并确认表内 bar count。"
             )
-        queue.append(
-            {
-                "timeframe": timeframe,
-                "status": status,
-                "priority": priority,
-                "barCount": int(row.get("barCount") or 0),
-                "spanDays": row.get("spanDays") or 0.0,
-                "requiredSpanDays": row.get("requiredSpanDays") or DEFAULT_REQUIRED_SPAN_DAYS,
-                "latestLagHours": latest_lag,
-                "maxLatestLagHours": max_lag or DEFAULT_MAX_LATEST_LAG_HOURS,
-                "excessLagHours": excess_lag,
-                "spanOk": bool(row.get("spanOk")),
-                "densityOk": bool(row.get("densityOk")),
-                "freshnessOk": bool(row.get("freshnessOk")),
-                "passed": bool(row.get("passed")),
-                "sourceArtifacts": [db_rel, status_rel, sync_rel],
-                "refreshCommand": refresh_command,
-                "verifyCommand": verify_command,
-                "nextActionZh": next_action,
-                "acceptanceZh": (
-                    f"{timeframe} spanOk=true、densityOk=true、freshnessOk=true、passed=true，且 "
-                    "historyTargetSatisfied=true。"
-                ),
-                "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
-                "forbiddenSideEffects": [
-                    "ORDER_SEND",
-                    "POSITION_CLOSE",
-                    "LIVE_PRESET_MUTATION",
-                    "MT5_REQUEST_WRITE",
-                    "WALLET_AUTHORIZATION",
-                ],
-            }
-        )
+        queue_row = {
+            "timeframe": timeframe,
+            "status": status,
+            "priority": priority,
+            "barCount": int(row.get("barCount") or 0),
+            "spanDays": row.get("spanDays") or 0.0,
+            "requiredSpanDays": row.get("requiredSpanDays") or DEFAULT_REQUIRED_SPAN_DAYS,
+            "latestLagHours": latest_lag,
+            "maxLatestLagHours": max_lag or DEFAULT_MAX_LATEST_LAG_HOURS,
+            "excessLagHours": excess_lag,
+            "spanOk": bool(row.get("spanOk")),
+            "densityOk": bool(row.get("densityOk")),
+            "freshnessOk": bool(row.get("freshnessOk")),
+            "passed": bool(row.get("passed")),
+            "sourceArtifacts": [db_rel, status_rel, sync_rel],
+            "refreshCommand": refresh_command,
+            "verifyCommand": verify_command,
+            "nextActionZh": next_action,
+            "acceptanceZh": (
+                f"{timeframe} spanOk=true、densityOk=true、freshnessOk=true、passed=true，且 "
+                "historyTargetSatisfied=true。"
+            ),
+            "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
+            "forbiddenSideEffects": [
+                "ORDER_SEND",
+                "POSITION_CLOSE",
+                "LIVE_PRESET_MUTATION",
+                "MT5_REQUEST_WRITE",
+                "WALLET_AUTHORIZATION",
+            ],
+        }
+        queue_row.update(_copyrates_queue_context(copyrates_freshness, timeframe))
+        queue.append(queue_row)
     return queue
+
+
+def _copyrates_queue_context(copyrates_freshness: dict[str, Any] | None, timeframe: str) -> dict[str, Any]:
+    if not isinstance(copyrates_freshness, dict) or not copyrates_freshness:
+        return {}
+    lag_by_timeframe = (
+        copyrates_freshness.get("latestLagHoursByTimeframe")
+        if isinstance(copyrates_freshness.get("latestLagHoursByTimeframe"), dict)
+        else {}
+    )
+    stale_timeframes = (
+        copyrates_freshness.get("staleTimeframes")
+        if isinstance(copyrates_freshness.get("staleTimeframes"), list)
+        else []
+    )
+    return {
+        "copyRatesExportFreshnessStatus": copyrates_freshness.get("status"),
+        "copyRatesExportStale": bool(copyrates_freshness.get("stale")),
+        "copyRatesExportGeneratedAtServer": copyrates_freshness.get("generatedAtServer") or "",
+        "copyRatesExportGeneratedLagHours": copyrates_freshness.get("generatedLagHours"),
+        "copyRatesExportLatestLagHours": lag_by_timeframe.get(timeframe),
+        "copyRatesExportStaleTimeframes": list(stale_timeframes),
+        "copyRatesExportNextActionZh": copyrates_freshness.get("nextActionZh") or "",
+    }
 
 
 def audit_history(runtime_dir: Path) -> dict[str, Any]:
@@ -229,6 +254,11 @@ def audit_history(runtime_dir: Path) -> dict[str, Any]:
     backtest_report = read_json(runtime_dir / "backtest" / "QuantGod_StrategyBacktestReport.json", {}) or {}
     production_status_path = runtime_dir / "backtest" / PRODUCTION_STATUS_FILE
     production_status = read_json(production_status_path, {}) or {}
+    copyrates_freshness = (
+        production_status.get("copyRatesExportFreshness")
+        if isinstance(production_status.get("copyRatesExportFreshness"), dict)
+        else {}
+    )
     if not existing:
         empty_rows = {
             timeframe: {
@@ -251,6 +281,7 @@ def audit_history(runtime_dir: Path) -> dict[str, Any]:
                 runtime_dir,
                 empty_rows,
                 database_found=False,
+                copyrates_freshness=copyrates_freshness,
             ),
             "staleTimeframes": REQUIRED_TIMEFRAMES,
             "recommendation": "Run USDJPY history sync and strategy backtest before trusting GA fitness.",
@@ -264,6 +295,7 @@ def audit_history(runtime_dir: Path) -> dict[str, Any]:
         timeframe_rows,
         database_found=True,
         database_path=existing,
+        copyrates_freshness=copyrates_freshness,
     )
     stale_timeframes = [
         timeframe for timeframe, row in timeframe_rows.items() if not row.get("freshnessOk")
@@ -281,6 +313,7 @@ def audit_history(runtime_dir: Path) -> dict[str, Any]:
         "historyTargetSatisfied": bool(production_status.get("historyTargetSatisfied")),
         "freshnessGatePassed": all(row.get("freshnessOk") for row in timeframe_rows.values()),
         "coverageGatePassed": all(row.get("spanOk") and row.get("densityOk") for row in timeframe_rows.values()),
+        "copyRatesExportFreshness": copyrates_freshness,
         "staleTimeframes": stale_timeframes,
         "freshnessRecoveryQueue": recovery_queue,
         "nextRecoveryActionZh": (

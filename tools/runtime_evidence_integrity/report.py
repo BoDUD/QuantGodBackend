@@ -127,7 +127,34 @@ def _history_timeframe_passed(row: Dict[str, Any]) -> bool:
     )
 
 
-def _history_recovery_queue(rows: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _copyrates_queue_context(copyrates_freshness: Dict[str, Any] | None, timeframe: str) -> Dict[str, Any]:
+    if not isinstance(copyrates_freshness, dict) or not copyrates_freshness:
+        return {}
+    lag_by_timeframe = (
+        copyrates_freshness.get("latestLagHoursByTimeframe")
+        if isinstance(copyrates_freshness.get("latestLagHoursByTimeframe"), dict)
+        else {}
+    )
+    stale_timeframes = (
+        copyrates_freshness.get("staleTimeframes")
+        if isinstance(copyrates_freshness.get("staleTimeframes"), list)
+        else []
+    )
+    return {
+        "copyRatesExportFreshnessStatus": copyrates_freshness.get("status"),
+        "copyRatesExportStale": bool(copyrates_freshness.get("stale")),
+        "copyRatesExportGeneratedAtServer": copyrates_freshness.get("generatedAtServer") or "",
+        "copyRatesExportGeneratedLagHours": copyrates_freshness.get("generatedLagHours"),
+        "copyRatesExportLatestLagHours": lag_by_timeframe.get(timeframe),
+        "copyRatesExportStaleTimeframes": list(stale_timeframes),
+        "copyRatesExportNextActionZh": copyrates_freshness.get("nextActionZh") or "",
+    }
+
+
+def _history_recovery_queue(
+    rows: Dict[str, Dict[str, Any]],
+    copyrates_freshness: Dict[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
     refresh_command = (
         "python3 tools/run_usdjpy_strategy_backtest.py --runtime-dir ./runtime "
         "sync-klines --months 12 --timeframes M1,M5,M15,H1"
@@ -159,30 +186,30 @@ def _history_recovery_queue(rows: Dict[str, Dict[str, Any]]) -> List[Dict[str, A
             status = "COVERAGE_OR_DENSITY_BLOCKED"
             priority = "MEDIUM"
             next_action = f"{timeframe} 覆盖或密度未通过；运行更长 lookback 的 sync-klines 并复核表内 bar count。"
-        queue.append(
-            {
-                "timeframe": timeframe,
-                "status": status,
-                "priority": priority,
-                "spanDays": row.get("spanDays"),
-                "latestLagHours": latest_lag,
-                "maxLatestLagHours": max_lag,
-                "excessLagHours": excess_lag,
-                "spanOk": bool(row.get("spanOk")),
-                "densityOk": bool(row.get("densityOk")),
-                "freshnessOk": bool(row.get("freshnessOk")),
-                "passed": bool(row.get("passed")),
-                "refreshCommand": refresh_command,
-                "verifyCommand": verify_command,
-                "nextActionZh": next_action,
-                "acceptanceZh": (
-                    f"{timeframe} spanOk=true、densityOk=true、freshnessOk=true、passed=true，且 "
-                    "historyTargetSatisfied=true。"
-                ),
-                "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
-                "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
-            }
-        )
+        queue_row = {
+            "timeframe": timeframe,
+            "status": status,
+            "priority": priority,
+            "spanDays": row.get("spanDays"),
+            "latestLagHours": latest_lag,
+            "maxLatestLagHours": max_lag,
+            "excessLagHours": excess_lag,
+            "spanOk": bool(row.get("spanOk")),
+            "densityOk": bool(row.get("densityOk")),
+            "freshnessOk": bool(row.get("freshnessOk")),
+            "passed": bool(row.get("passed")),
+            "refreshCommand": refresh_command,
+            "verifyCommand": verify_command,
+            "nextActionZh": next_action,
+            "acceptanceZh": (
+                f"{timeframe} spanOk=true、densityOk=true、freshnessOk=true、passed=true，且 "
+                "historyTargetSatisfied=true。"
+            ),
+            "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
+            "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+        }
+        queue_row.update(_copyrates_queue_context(copyrates_freshness, timeframe))
+        queue.append(queue_row)
     return queue
 
 
@@ -222,7 +249,12 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
             blockers.append(f"{timeframe}:not_passed")
 
     passed = not blockers
-    recovery_queue = _history_recovery_queue(rows)
+    copyrates_freshness = (
+        payload.get("copyRatesExportFreshness")
+        if isinstance(payload.get("copyRatesExportFreshness"), dict)
+        else {}
+    )
+    recovery_queue = _history_recovery_queue(rows, copyrates_freshness)
     stale_timeframes = [timeframe for timeframe, row in rows.items() if not row.get("freshnessOk")]
     return {
         "gateId": "history_freshness_promotion_gate",
@@ -234,6 +266,7 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
         "blockers": blockers,
         "timeframes": rows,
         "staleTimeframes": stale_timeframes,
+        "copyRatesExportFreshness": copyrates_freshness,
         "freshnessRecoveryQueue": recovery_queue,
         "nextActionZh": (
             "历史数据 freshness 已通过；保持后台增量同步。"
@@ -420,6 +453,13 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "latestLagHours": item.get("latestLagHours"),
                         "maxLatestLagHours": item.get("maxLatestLagHours"),
                         "excessLagHours": item.get("excessLagHours"),
+                        "copyRatesExportFreshnessStatus": item.get("copyRatesExportFreshnessStatus"),
+                        "copyRatesExportStale": item.get("copyRatesExportStale"),
+                        "copyRatesExportGeneratedAtServer": item.get("copyRatesExportGeneratedAtServer"),
+                        "copyRatesExportGeneratedLagHours": item.get("copyRatesExportGeneratedLagHours"),
+                        "copyRatesExportLatestLagHours": item.get("copyRatesExportLatestLagHours"),
+                        "copyRatesExportStaleTimeframes": item.get("copyRatesExportStaleTimeframes"),
+                        "copyRatesExportNextActionZh": item.get("copyRatesExportNextActionZh"),
                         "refreshCommand": item.get("refreshCommand"),
                         "verifyCommand": item.get("verifyCommand"),
                         "nextActionZh": item.get("nextActionZh"),
