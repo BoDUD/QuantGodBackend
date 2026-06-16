@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from tools.case_memory.report import build_case_memory_report, status as case_memory_status
-from tools.run_case_memory import write_sample_runtime
+from tools.run_case_memory import main as run_case_memory_main, write_sample_runtime
 from tools.strategy_ga.seed_generator import case_memory_seed_pool
 from tools.strategy_structure_lab.report import build_report as build_strategy_structure_report
 
@@ -335,6 +337,39 @@ def _write_bridged_history_context_sample(runtime: Path) -> None:
 class CaseMemoryCandidateTests(unittest.TestCase):
     def _sha256(self, path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_cli_build_respects_write_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            write_sample_runtime(runtime, overwrite=True)
+            report_path = runtime / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"
+            ledger_path = runtime / "case_memory" / "QuantGod_CaseMemoryStrategyCandidateLedger.jsonl"
+            manifest_path = runtime / "case_memory" / "QuantGod_CaseMemoryArtifactManifest.json"
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = run_case_memory_main(["--runtime-dir", str(runtime), "build", "--limit", "4"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(payload["ok"])
+            self.assertFalse(payload["safety"]["orderSendAllowed"])
+            self.assertFalse(report_path.exists())
+            self.assertFalse(ledger_path.exists())
+            self.assertFalse(manifest_path.exists())
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = run_case_memory_main(
+                    ["--runtime-dir", str(runtime), "build", "--write", "--limit", "4"]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["status"], "READY")
+            self.assertTrue(report_path.exists())
+            self.assertTrue(ledger_path.exists())
+            self.assertTrue(manifest_path.exists())
 
     def test_builds_shadow_strategy_json_candidates_from_case_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

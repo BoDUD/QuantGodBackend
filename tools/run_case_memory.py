@@ -44,7 +44,7 @@ def main(argv=None) -> int:
     if args.command == "sample":
         return emit(write_sample_runtime(runtime_dir, overwrite=args.overwrite))
     if args.command == "build":
-        return emit(build_case_memory_report(runtime_dir, write=True, limit=args.limit))
+        return emit(build_case_memory_report(runtime_dir, write=args.write, limit=args.limit))
     if args.command == "telegram-text":
         report = build_case_memory_report(runtime_dir, write=True) if args.refresh else status(runtime_dir)
         return emit({"ok": True, "text": case_memory_to_chinese_text(report), "report": report})
