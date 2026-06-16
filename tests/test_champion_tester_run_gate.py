@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.champion_tester_run_gate import build_champion_tester_run_gate
+from tools.champion_tester_run_gate import build_champion_tester_run_gate, _preferred_terminal_path_from_dashboard
 from tools.champion_tester_lock_draft import build_champion_tester_lock_draft
 
 
@@ -128,6 +128,16 @@ class ChampionTesterRunGateTests(unittest.TestCase):
             },
         )
         return runtime, live_runtime / "QuantGod_Dashboard.json"
+
+    def test_terminal_path_inference_only_uses_mt5_mql5_files_layout(self) -> None:
+        mt5_dashboard = Path("/tmp/MetaTrader 5/MQL5/Files/QuantGod_Dashboard.json")
+        short_dashboard = Path("runtime/QuantGod_Dashboard.json")
+
+        self.assertEqual(
+            _preferred_terminal_path_from_dashboard(mt5_dashboard),
+            Path("/tmp/MetaTrader 5/terminal64.exe"),
+        )
+        self.assertIsNone(_preferred_terminal_path_from_dashboard(short_dashboard))
 
     def test_ready_when_queue_live_session_lock_and_account_context_are_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

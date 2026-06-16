@@ -389,6 +389,144 @@ class ChampionPromotionGateTests(unittest.TestCase):
             self.assertIn("ace_candidate_selected", report["blockers"])
             self.assertFalse(report["safety"]["hfmCryptoExecutionAllowed"])
 
+    def test_stale_history_freshness_blocks_live_promotion_packaging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            (runtime / "agent").mkdir(parents=True)
+            (runtime / "backtest").mkdir(parents=True)
+            (runtime / "agent" / "QuantGod_AceStrategyScout.json").write_text(
+                json.dumps(
+                    {
+                        "topQualifiedForex": {
+                            "seedId": "GA-USDJPY-G0093-C0004",
+                            "strategyId": "USDJPY_RSI_REVERSAL_LONG_QUALITY_REPAIR",
+                            "strategyFamily": "RSI_Reversal",
+                            "direction": "LONG",
+                            "profitFactor": 2.6998,
+                            "sharpe": 2.0702,
+                            "tradeCount": 18,
+                            "walkForwardStability": 0.95,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runtime / "agent" / "QuantGod_ChampionRetestReport.json").write_text(
+                json.dumps(
+                    {
+                        "forexChampion": {
+                            "status": "FOREX_CHAMPION_RETEST_PASS",
+                            "seedId": "GA-USDJPY-G0093-C0004",
+                            "blockers": [],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runtime / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_history_production_status.v1",
+                        "status": "WARN",
+                        "historyTargetSatisfied": False,
+                        "maxLatestLagHours": 96,
+                        "timeframes": {
+                            "M1": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                            "M5": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                            "M15": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                            "H1": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fresh_run_gate = {
+                "schema": "quantgod.champion_tester_run_gate.v1",
+                "status": "CHAMPION_TESTER_RUN_GATE_READY",
+                "gate": {"canRunTerminal": True, "blockers": [], "liveSession": {"status": "ready"}},
+                "decision": {"canRunIsolatedTester": True},
+            }
+
+            with patch("tools.champion_promotion_gate.build_champion_tester_run_gate", return_value=fresh_run_gate):
+                report = build_champion_promotion_gate(runtime, write=False)
+
+            review = report["historyFreshnessPromotionReview"]
+            self.assertEqual(review["status"], "HISTORY_FRESHNESS_BLOCKED")
+            self.assertTrue(review["blocksLivePromotion"])
+            self.assertEqual(review["staleTimeframes"], ["M1", "M5", "M15", "H1"])
+            self.assertIn("history_freshness_promotion_guard", report["blockers"])
+            self.assertTrue(report["promotionDecision"]["historyFreshnessBlocksPromotion"])
+            self.assertFalse(report["promotionDecision"]["canPromoteToLiveNow"])
+            self.assertFalse(report["safety"]["writesMt5OrderRequest"])
+
+    def test_read_refreshes_legacy_report_without_history_freshness_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            (runtime / "agent").mkdir(parents=True)
+            (runtime / "backtest").mkdir(parents=True)
+            (runtime / "agent" / "QuantGod_ChampionPromotionGate.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.champion_promotion_gate.v1",
+                        "selectedChampion": {"seedId": "GA-USDJPY-G0093-C0004"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runtime / "agent" / "QuantGod_AceStrategyScout.json").write_text(
+                json.dumps(
+                    {
+                        "topQualifiedForex": {
+                            "seedId": "GA-USDJPY-G0093-C0004",
+                            "strategyId": "USDJPY_RSI_REVERSAL_LONG_QUALITY_REPAIR",
+                            "strategyFamily": "RSI_Reversal",
+                            "direction": "LONG",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runtime / "agent" / "QuantGod_ChampionRetestReport.json").write_text(
+                json.dumps(
+                    {
+                        "forexChampion": {
+                            "status": "FOREX_CHAMPION_RETEST_PASS",
+                            "seedId": "GA-USDJPY-G0093-C0004",
+                            "blockers": [],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (runtime / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_history_production_status.v1",
+                        "status": "PASS",
+                        "historyTargetSatisfied": True,
+                        "timeframes": {
+                            timeframe: {"passed": True, "freshnessOk": True}
+                            for timeframe in ("M1", "M5", "M15", "H1")
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fresh_run_gate = {
+                "schema": "quantgod.champion_tester_run_gate.v1",
+                "status": "CHAMPION_TESTER_RUN_GATE_READY",
+                "gate": {"canRunTerminal": True, "blockers": [], "liveSession": {"status": "ready"}},
+                "decision": {"canRunIsolatedTester": True},
+            }
+
+            with patch("tools.champion_promotion_gate.build_champion_tester_run_gate", return_value=fresh_run_gate):
+                report = read_champion_promotion_gate(runtime)
+
+            self.assertIn("historyFreshnessPromotionReview", report)
+            self.assertEqual(report["historyFreshnessPromotionReview"]["status"], "HISTORY_FRESHNESS_PASS")
+            saved = json.loads((runtime / "agent" / "QuantGod_ChampionPromotionGate.json").read_text(encoding="utf-8"))
+            self.assertIn("historyFreshnessPromotionReview", saved)
+
     def test_long_term_memory_blocks_live_promotion_packaging(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)

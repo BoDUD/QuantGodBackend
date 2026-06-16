@@ -24,6 +24,8 @@ TESTER_REQUEST_SCHEMA = "quantgod.champion_tester_forward_request.v1"
 TESTER_REQUEST_PATH = Path("agent") / "QuantGod_ChampionTesterForwardRequest.json"
 TESTER_RUN_GATE_PATH = Path("agent") / "QuantGod_ChampionTesterRunGate.json"
 TESTER_LOCK_DRAFT_PATH = Path("agent") / "QuantGod_ChampionTesterLockDraft.json"
+HISTORY_PRODUCTION_STATUS_PATH = Path("backtest") / "QuantGod_USDJPYHistoryProductionStatus.json"
+HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
 
 
 SAFETY = {
@@ -392,6 +394,62 @@ def _memory_promotion_review(runtime_dir: Path, candidate: dict[str, Any]) -> di
     }
 
 
+def _history_freshness_review(runtime_dir: Path) -> dict[str, Any]:
+    history = _read_json(runtime_dir / HISTORY_PRODUCTION_STATUS_PATH)
+    if not history:
+        return {
+            "schema": "quantgod.champion_history_freshness_review.v1",
+            "status": "HISTORY_PRODUCTION_STATUS_MISSING",
+            "historyTargetSatisfied": False,
+            "blocksLivePromotion": True,
+            "failedTimeframes": list(HISTORY_TIMEFRAMES),
+            "staleTimeframes": list(HISTORY_TIMEFRAMES),
+            "blockers": ["history_production_status_missing"],
+            "reasonZh": "缺少 USDJPY 历史生产状态；M1/M5/M15/H1 未被证明新鲜前，不能把冠军包装成实盘晋级。",
+            "sourceArtifact": str(runtime_dir / HISTORY_PRODUCTION_STATUS_PATH),
+            "safety": SAFETY,
+        }
+
+    timeframes = history.get("timeframes") if isinstance(history.get("timeframes"), dict) else {}
+    failed: list[str] = []
+    stale: list[str] = []
+    max_lag_by_timeframe: dict[str, Any] = {}
+    for timeframe in HISTORY_TIMEFRAMES:
+        row = timeframes.get(timeframe) if isinstance(timeframes.get(timeframe), dict) else {}
+        max_lag_by_timeframe[timeframe] = row.get("latestLagHours")
+        if row.get("passed") is not True:
+            failed.append(timeframe)
+        if row.get("freshnessOk") is not True:
+            stale.append(timeframe)
+    passed = bool(history.get("historyTargetSatisfied") is True and not failed)
+    blockers: list[str] = []
+    if failed:
+        blockers.append("history_timeframes_not_production_ready")
+    if stale:
+        blockers.append("history_freshness_lag_exceeded")
+    if not bool(history.get("historyTargetSatisfied")):
+        blockers.append("history_target_not_satisfied")
+    return {
+        "schema": "quantgod.champion_history_freshness_review.v1",
+        "status": "HISTORY_FRESHNESS_PASS" if passed else "HISTORY_FRESHNESS_BLOCKED",
+        "historyTargetSatisfied": bool(history.get("historyTargetSatisfied")),
+        "blocksLivePromotion": not passed,
+        "failedTimeframes": failed,
+        "staleTimeframes": stale,
+        "latestLagHoursByTimeframe": max_lag_by_timeframe,
+        "maxLatestLagHours": history.get("maxLatestLagHours"),
+        "generatedAt": history.get("generatedAt"),
+        "blockers": blockers,
+        "reasonZh": (
+            "USDJPY M1/M5/M15/H1 历史覆盖、密度和 freshness 均通过，可作为冠军晋级前置证据。"
+            if passed
+            else "USDJPY 历史生产状态未通过；覆盖/密度/最新延迟未全部达标前，只允许 tester-only/forward 或 shadow 观察。"
+        ),
+        "sourceArtifact": str(runtime_dir / HISTORY_PRODUCTION_STATUS_PATH),
+        "safety": SAFETY,
+    }
+
+
 def _matching_adaptive_route(adaptive: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     routes = adaptive.get("routes") if isinstance(adaptive.get("routes"), list) else []
     symbol = str(candidate.get("symbol") or ("USDJPYc" if candidate.get("lane") == "usdjpy_ga_elite" else "")).upper()
@@ -442,6 +500,7 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
     side_effect_paths = _order_side_effect_paths(runtime_dir)
     candidate = _candidate_from_ace(ace)
     memory_promotion_review = _memory_promotion_review(evidence_runtime_dir, candidate)
+    history_freshness_review = _history_freshness_review(evidence_runtime_dir)
     observed_crypto_candidate = _observed_crypto_candidate_from_evidence(ace, retest)
     forex_contender_review = (
         retest.get("forexContenderReview")
@@ -542,6 +601,15 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
             memoryPenalty=(memory_promotion_review.get("matchedRoute") or {}).get("memoryPenalty"),
         ),
         _check(
+            "history_freshness_promotion_guard",
+            "历史数据 freshness 晋级闸",
+            not history_freshness_review.get("blocksLivePromotion"),
+            "USDJPY M1/M5/M15/H1 历史生产状态必须通过覆盖、密度和最新延迟检查，才能包装成晋级证据。",
+            value=history_freshness_review.get("status"),
+            failedTimeframes=history_freshness_review.get("failedTimeframes"),
+            staleTimeframes=history_freshness_review.get("staleTimeframes"),
+        ),
+        _check(
             "separate_execution_lane_review",
             "单独执行通道评审",
             pipeline_ready_for_review,
@@ -606,6 +674,7 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
         "statusZh": status_zh,
         "selectedChampion": candidate,
         "longTermMemoryPromotionReview": memory_promotion_review,
+        "historyFreshnessPromotionReview": history_freshness_review,
         "forexContenderReview": forex_contender_review,
         "observedCryptoChampion": observed_crypto_candidate,
         "championRetest": {
@@ -644,6 +713,7 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
             "testerLockDraftReady": bool(tester_lock_draft_ready),
             "canPromoteToLiveNow": False,
             "memoryBlocksLivePromotion": bool(memory_promotion_review.get("blocksLivePromotion")),
+            "historyFreshnessBlocksPromotion": bool(history_freshness_review.get("blocksLivePromotion")),
             "executionReady": False,
             "autoPromotionToLiveAllowed": False,
             "strategyReadyButEnvironmentBlocked": bool(readiness_diagnosis["strategyReadyForTester"] and readiness_diagnosis["environmentBlocked"]),
@@ -680,6 +750,7 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
             "championTesterForwardRequest": str(evidence_runtime_dir / TESTER_REQUEST_PATH),
             "championTesterRunGate": str(evidence_runtime_dir / TESTER_RUN_GATE_PATH),
             "championTesterLockDraft": str(evidence_runtime_dir / TESTER_LOCK_DRAFT_PATH),
+            "historyProductionStatus": str(evidence_runtime_dir / HISTORY_PRODUCTION_STATUS_PATH),
         },
         "safety": SAFETY,
         "reportPath": str(runtime_dir / REPORT_PATH),
@@ -695,6 +766,8 @@ def read_champion_promotion_gate(runtime_dir: Path) -> dict[str, Any]:
         selected = report.get("selectedChampion") if isinstance(report.get("selectedChampion"), dict) else {}
         fallback = _evidence_runtime_dir(runtime_dir)
         if not selected and fallback != runtime_dir:
+            return build_champion_promotion_gate(runtime_dir, write=True)
+        if "historyFreshnessPromotionReview" not in report:
             return build_champion_promotion_gate(runtime_dir, write=True)
         return report
     return build_champion_promotion_gate(runtime_dir, write=False)

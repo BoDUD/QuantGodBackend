@@ -136,6 +136,18 @@ def _primary_dashboard_path(runtime_dir: Path, explicit_dashboard_json: str = ""
     )
 
 
+def _preferred_terminal_path_from_dashboard(dashboard_path: Path) -> Path | None:
+    path = Path(dashboard_path)
+    files_dir = path.parent
+    mql5_dir = files_dir.parent
+    if files_dir.name.lower() != "files" or mql5_dir.name.lower() != "mql5":
+        return None
+    mt5_root = mql5_dir.parent
+    if mt5_root == mql5_dir:
+        return None
+    return mt5_root / "terminal64.exe"
+
+
 def _account_from_dashboard(path: Path) -> dict[str, str]:
     dashboard = _read_json(path)
     account = _safe_dict(dashboard.get("account"))
@@ -442,7 +454,7 @@ def build_champion_tester_run_gate(
     isolated_runtime_dir = Path(str(isolation.get("isolatedRuntimeDir") or isolated_tester_root / "MQL5" / "Files"))
     live_dashboard_path = _primary_dashboard_path(runtime, primary_dashboard_json)
     live_runtime_dir = live_dashboard_path.parent
-    preferred_terminal_path = live_dashboard_path.parents[2] / "terminal64.exe"
+    preferred_terminal_path = _preferred_terminal_path_from_dashboard(live_dashboard_path)
     account = _account_from_dashboard(live_dashboard_path)
     scheduler = _scheduler_from_request(request)
     queue_count = max(1, len(_safe_list(scheduler.get("selectedTasks"))))

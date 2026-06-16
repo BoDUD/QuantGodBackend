@@ -32,6 +32,9 @@ except ModuleNotFoundError:  # pragma: no cover - CLI entrypoint runs from tools
 
 from .schema import FOCUS_SYMBOL, READ_ONLY_SAFETY, SCHEMA_DATASET, utc_now_iso
 
+HISTORY_PRODUCTION_STATUS_FILE = "QuantGod_USDJPYHistoryProductionStatus.json"
+HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
+
 
 def _pick(row: Dict[str, Any], *keys: str, default: Any = "") -> Any:
     lower = {str(k).lower(): v for k, v in row.items()}
@@ -158,6 +161,66 @@ def _blocker_counter(samples: Iterable[Dict[str, Any]]) -> Counter:
     return counter
 
 
+def _read_history_production_status(runtime_dir: Path) -> Dict[str, Any]:
+    candidates = [
+        runtime_dir / "backtest" / HISTORY_PRODUCTION_STATUS_FILE,
+        runtime_dir / "quality" / HISTORY_PRODUCTION_STATUS_FILE,
+        runtime_dir / HISTORY_PRODUCTION_STATUS_FILE,
+    ]
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                payload.setdefault("_filePath", str(path))
+                return payload
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+    return {}
+
+
+def _history_freshness_gate(history_status: Dict[str, Any]) -> Dict[str, Any]:
+    if not history_status:
+        return {
+            "status": "MISSING",
+            "passed": False,
+            "blockers": ["history_production_status_missing"],
+            "failedTimeframes": list(HISTORY_TIMEFRAMES),
+            "reasonZh": "缺少 USDJPY M1/M5/M15/H1 历史生产状态，不能把研究结果包装成晋级证据。",
+        }
+
+    timeframes = history_status.get("timeframes") if isinstance(history_status.get("timeframes"), dict) else {}
+    failed: list[str] = []
+    stale: list[str] = []
+    for timeframe in HISTORY_TIMEFRAMES:
+        row = timeframes.get(timeframe) if isinstance(timeframes.get(timeframe), dict) else {}
+        if row.get("passed") is not True:
+            failed.append(timeframe)
+        if row.get("freshnessOk") is not True:
+            stale.append(timeframe)
+    passed = bool(history_status.get("historyTargetSatisfied") is True and not failed)
+    blockers: list[str] = []
+    if failed:
+        blockers.append("history_timeframes_not_production_ready")
+    if stale:
+        blockers.append("history_freshness_lag_exceeded")
+    if not bool(history_status.get("historyTargetSatisfied")):
+        blockers.append("history_target_not_satisfied")
+    return {
+        "status": "PASS" if passed else "BLOCKED",
+        "passed": passed,
+        "blockers": blockers,
+        "failedTimeframes": failed,
+        "staleTimeframes": stale,
+        "generatedAt": history_status.get("generatedAt"),
+        "maxLatestLagHours": history_status.get("maxLatestLagHours"),
+        "reasonZh": (
+            "USDJPY M1/M5/M15/H1 历史覆盖、密度和 freshness 均通过，可作为晋级前置证据。"
+            if passed
+            else "USDJPY 历史生产状态未通过；覆盖/密度/最新延迟未全部达标前，只允许研究、shadow 或 tester-only。"
+        ),
+    }
+
+
 def build_runtime_dataset(runtime_dir: Path, write: bool = False) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     samples = _collect_samples(runtime_dir)
@@ -170,6 +233,8 @@ def build_runtime_dataset(runtime_dir: Path, write: bool = False) -> Dict[str, A
     live_loop = first_json(runtime_dir, "QuantGod_USDJPYLiveLoopStatus.json") or {}
     policy = first_json(runtime_dir, "QuantGod_USDJPYAutoExecutionPolicy.json") or {}
     fastlane = fastlane_quality(runtime_dir)
+    history_status = _read_history_production_status(runtime_dir)
+    history_gate = _history_freshness_gate(history_status)
     dataset_dir = runtime_dir / "datasets" / "usdjpy"
     payload = {
         "ok": True,
@@ -189,6 +254,10 @@ def build_runtime_dataset(runtime_dir: Path, write: bool = False) -> Dict[str, A
             "netUSC": net_usc,
             "blockerCounts": dict(blockers.most_common()),
             "fastlaneQuality": fastlane.get("quality"),
+            "historyFreshnessStatus": history_gate.get("status"),
+            "historyFreshnessPass": history_gate.get("passed"),
+            "historyFailedTimeframes": history_gate.get("failedTimeframes", []),
+            "historyStaleTimeframes": history_gate.get("staleTimeframes", []),
             "liveLoopState": live_loop.get("state"),
             "topLiveEligiblePolicy": (policy.get("topLiveEligiblePolicy") or {}).get("strategy"),
             "topShadowPolicy": (policy.get("topShadowPolicy") or {}).get("strategy"),
@@ -198,6 +267,8 @@ def build_runtime_dataset(runtime_dir: Path, write: bool = False) -> Dict[str, A
             "fastlane": fastlane,
             "liveLoop": live_loop,
             "policy": policy,
+            "historyProductionStatus": history_status,
+            "historyFreshnessGate": history_gate,
         },
         "samples": samples[:500],
     }

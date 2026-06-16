@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,6 +58,28 @@ class USDJPYRuntimeDatasetTests(unittest.TestCase):
                     "maeR": "-0.25",
                     "exitReason": "breakeven_or_trailing",
                 })
+            (runtime / "backtest").mkdir()
+            (runtime / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_history_production_status.v1",
+                        "status": "PASS",
+                        "historyTargetSatisfied": True,
+                        "maxLatestLagHours": 96,
+                        "timeframes": {
+                            timeframe: {
+                                "timeframe": timeframe,
+                                "passed": True,
+                                "freshnessOk": True,
+                                "spanOk": True,
+                                "densityOk": True,
+                            }
+                            for timeframe in ("M1", "M5", "M15", "H1")
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             dataset = build_runtime_dataset(runtime, write=True)
             replay = build_replay_report(runtime, write=True)
@@ -65,6 +88,9 @@ class USDJPYRuntimeDatasetTests(unittest.TestCase):
 
             self.assertEqual(dataset["summary"]["sampleCount"], 2)
             self.assertNotIn("EURUSDc", str(dataset["samples"]))
+            self.assertEqual(dataset["summary"]["historyFreshnessStatus"], "PASS")
+            self.assertTrue(dataset["summary"]["historyFreshnessPass"])
+            self.assertEqual(dataset["latest"]["historyFreshnessGate"]["failedTimeframes"], [])
             self.assertEqual(replay["summary"]["missedOpportunityCount"], 1)
             self.assertEqual(replay["summary"]["earlyExitCount"], 1)
             self.assertEqual(replay["unitPolicy"]["primary"], "R")
@@ -110,6 +136,35 @@ class USDJPYRuntimeDatasetTests(unittest.TestCase):
             self.assertEqual(dataset["summary"]["sampleCount"], 1)
             self.assertEqual(replay["summary"]["earlyExitCount"], 0)
             self.assertEqual(replay["summary"]["missingExitRCount"], 1)
+
+    def test_history_freshness_gate_blocks_stale_history_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            (runtime / "backtest").mkdir()
+            (runtime / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.usdjpy_history_production_status.v1",
+                        "status": "WARN",
+                        "historyTargetSatisfied": False,
+                        "maxLatestLagHours": 96,
+                        "timeframes": {
+                            "M1": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                            "M5": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                            "M15": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                            "H1": {"passed": False, "freshnessOk": False, "latestLagHours": 260},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            dataset = build_runtime_dataset(runtime, write=False)
+
+            self.assertEqual(dataset["summary"]["historyFreshnessStatus"], "BLOCKED")
+            self.assertFalse(dataset["summary"]["historyFreshnessPass"])
+            self.assertEqual(dataset["summary"]["historyStaleTimeframes"], ["M1", "M5", "M15", "H1"])
+            self.assertIn("history_freshness_lag_exceeded", dataset["latest"]["historyFreshnessGate"]["blockers"])
 
 
 if __name__ == "__main__":
