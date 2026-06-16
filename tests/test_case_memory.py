@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.case_memory.report import build_case_memory_report
+from tools.case_memory.report import build_case_memory_report, status as case_memory_status
 from tools.run_case_memory import write_sample_runtime
 from tools.strategy_ga.seed_generator import case_memory_seed_pool
 from tools.strategy_structure_lab.report import build_report as build_strategy_structure_report
@@ -845,6 +845,30 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertEqual(memory["reviewWindowTrades"], 0)
             self.assertEqual(memory["entryMemory"], [])
             self.assertFalse(memory["safety"]["orderSendAllowed"])
+
+    def test_status_hydrates_legacy_coverage_plan_with_collection_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            write_sample_runtime(runtime, overwrite=True)
+            report = build_case_memory_report(runtime, write=True)
+            report["coveragePlan"] = {
+                "schema": "quantgod.case_memory_coverage_plan.v1",
+                "status": "BLOCKED",
+                "missingCategories": ["BAD_ENTRY"],
+                "rows": [{"category": "BAD_ENTRY", "status": "MISSING", "observedCount": 0}],
+            }
+            report_path = runtime / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"
+            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            hydrated = case_memory_status(runtime)
+
+            coverage = hydrated["coveragePlan"]
+            self.assertIn("nextCollectionQueue", coverage)
+            self.assertIn("targetSampleCount", coverage)
+            self.assertEqual(coverage["nextCollectionQueue"][0]["category"], "BAD_ENTRY")
+            self.assertEqual(coverage["nextCollectionQueue"][0]["priority"], "HIGH")
+            self.assertIn("collectionEndpoint", coverage["nextCollectionQueue"][0])
+            self.assertFalse(hydrated["safety"]["orderSendAllowed"])
 
 
 if __name__ == "__main__":

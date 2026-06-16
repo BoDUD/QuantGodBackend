@@ -23,28 +23,81 @@ CASE_MEMORY_CATEGORY_ALIASES = {
 
 CATEGORY_GUIDANCE_ZH = {
     "BAD_ENTRY": {
+        "priority": "HIGH",
+        "targetCount": 3,
         "source": "entry-context feedback / bar replay adverse-entry audit",
+        "sourceArtifacts": [
+            "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+            "execution/QuantGod_LiveExecutionFeedback.jsonl",
+            "evidence_os/QuantGod_LiveExecutionFeedback.jsonl",
+        ],
+        "collectionEndpoint": "/api/usdjpy-strategy-lab/evidence-os/execution-feedback",
         "nextActionZh": "收集入场后快速进入 MAE、低 MFE 或反向信号确认的影子/执行反馈样本。",
+        "acceptanceZh": "至少 3 条含 entryContext、MAE/MFE、入场原因和后续走势的 shadow/tester 样本。",
     },
     "MISSED_OPPORTUNITY": {
+        "priority": "HIGH",
+        "targetCount": 3,
         "source": "shadow signal ledger / no-entry diagnostics / bar replay",
+        "sourceArtifacts": [
+            "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+            "QuantGod_USDJPYRsiEntryDiagnostics.json",
+            "QuantGod_ShadowSignalLedger.csv",
+        ],
+        "collectionEndpoint": "/api/usdjpy-strategy-lab/bar-replay/entry",
         "nextActionZh": "收集高分影子机会被点差、session、新闻或冷却门挡住后继续走盈利方向的样本。",
+        "acceptanceZh": "至少 3 条有 shadow signal、阻断原因和后续盈利方向 replay 的 missed-entry 样本。",
     },
     "EARLY_EXIT": {
+        "priority": "MEDIUM",
+        "targetCount": 3,
         "source": "close-history + MFE/MAE replay / exit feedback",
+        "sourceArtifacts": [
+            "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+            "QuantGod_CloseHistory.csv",
+            "execution/QuantGod_LiveExecutionFeedback.jsonl",
+        ],
+        "collectionEndpoint": "/api/usdjpy-strategy-lab/bar-replay/exit",
         "nextActionZh": "收集平仓后仍显著顺向延续、profit-capture 偏低或 trailing 过紧的样本。",
+        "acceptanceZh": "至少 3 条含 exit reason、MFE giveback、profit-capture ratio 的早出场 replay 样本。",
     },
     "SPREAD_DAMAGE": {
+        "priority": "MEDIUM",
+        "targetCount": 3,
         "source": "live execution feedback / spread gate audit",
+        "sourceArtifacts": [
+            "execution/QuantGod_LiveExecutionFeedback.jsonl",
+            "evidence_os/QuantGod_LiveExecutionQualityReport.json",
+            "QuantGod_USDJPYRsiEntryDiagnostics.json",
+        ],
+        "collectionEndpoint": "/api/usdjpy-strategy-lab/evidence-os/execution-feedback",
         "nextActionZh": "继续保留滑点、宽点差和成交质量样本，用于收紧执行过滤。",
+        "acceptanceZh": "至少 3 条含 spread/slippage、成交质量和结果影响的执行反馈样本。",
     },
     "NEWS_DAMAGE": {
+        "priority": "MEDIUM",
+        "targetCount": 2,
         "source": "news gate replay / event impact audit",
+        "sourceArtifacts": [
+            "replay/usdjpy/QuantGod_USDJPYNewsGateReplayReport.json",
+            "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+        ],
+        "collectionEndpoint": "/api/usdjpy-strategy-lab/bar-replay/status",
         "nextActionZh": "收集新闻窗口内亏损、软挡失效或错过机会的回放样本。",
+        "acceptanceZh": "至少 2 条带 news window、gate decision、后续影响的新闻损伤 replay 样本。",
     },
     "GA_OVERFIT": {
+        "priority": "HIGH",
+        "targetCount": 2,
         "source": "GA walk-forward / champion retest / generation stability",
+        "sourceArtifacts": [
+            "ga/QuantGod_GABlockerSummary.json",
+            "ga/QuantGod_GAStatus.json",
+            "ga_factory/QuantGod_GAFactoryArtifactManifest.json",
+        ],
+        "collectionEndpoint": "/api/usdjpy-strategy-lab/ga/blockers",
         "nextActionZh": "收集训练段优秀但 forward、walk-forward 或 champion retest 失效的候选样本。",
+        "acceptanceZh": "至少 2 条带 generation、seed、train/forward 差异和 blockerCode 的过拟合样本。",
     },
 }
 
@@ -119,8 +172,14 @@ def build_case_memory_coverage_plan(report: Dict[str, Any]) -> Dict[str, Any]:
                 "category": category,
                 "status": "COVERED" if count > 0 else "MISSING",
                 "observedCount": count,
+                "targetCount": guidance["targetCount"],
+                "remainingCount": max(0, int(guidance["targetCount"]) - count),
+                "priority": guidance["priority"],
                 "source": guidance["source"],
+                "sourceArtifacts": list(guidance["sourceArtifacts"]),
+                "collectionEndpoint": guidance["collectionEndpoint"],
                 "nextActionZh": guidance["nextActionZh"],
+                "acceptanceZh": guidance["acceptanceZh"],
                 "allowedLanes": ["SHADOW", "TESTER_ONLY", "PAPER_LIVE_SIM"],
                 "forbiddenSideEffects": [
                     "ORDER_SEND",
@@ -132,14 +191,33 @@ def build_case_memory_coverage_plan(report: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
     passed = not missing
+    missing_rows = [row for row in rows if row["status"] == "MISSING"]
+    missing_rows.sort(key=lambda row: ({"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(str(row["priority"]).upper(), 3), row["category"]))
     return {
         "schema": "quantgod.case_memory_coverage_plan.v1",
         "requiredCategories": list(REQUIRED_CASE_MEMORY_CATEGORIES),
         "categoryCounts": counts,
         "missingCategories": missing,
+        "missingRows": missing_rows,
+        "nextCollectionQueue": [
+            {
+                "category": row["category"],
+                "priority": row["priority"],
+                "remainingCount": row["remainingCount"],
+                "source": row["source"],
+                "sourceArtifacts": row["sourceArtifacts"],
+                "collectionEndpoint": row["collectionEndpoint"],
+                "nextActionZh": row["nextActionZh"],
+                "acceptanceZh": row["acceptanceZh"],
+            }
+            for row in missing_rows
+        ],
         "coveredCategoryCount": len(REQUIRED_CASE_MEMORY_CATEGORIES) - len(missing),
         "requiredCategoryCount": len(REQUIRED_CASE_MEMORY_CATEGORIES),
         "coverageRatio": round((len(REQUIRED_CASE_MEMORY_CATEGORIES) - len(missing)) / len(REQUIRED_CASE_MEMORY_CATEGORIES), 4),
+        "targetSampleCount": sum(int(CATEGORY_GUIDANCE_ZH[category]["targetCount"]) for category in REQUIRED_CASE_MEMORY_CATEGORIES),
+        "observedSampleCount": sum(counts.values()),
+        "remainingTargetSampleCount": sum(max(0, int(CATEGORY_GUIDANCE_ZH[row["category"]]["targetCount"]) - row["observedCount"]) for row in rows),
         "status": "PASS" if passed else "BLOCKED",
         "statusZh": "Case Memory 样本类型已覆盖晋级门" if passed else "Case Memory 样本类型不足，继续只读补证",
         "promotionAllowed": passed,

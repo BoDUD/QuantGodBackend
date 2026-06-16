@@ -129,7 +129,8 @@ def build_case_memory_report(
 def status(runtime_dir: Path) -> Dict[str, Any]:
     payload = load_json(report_path(runtime_dir))
     if payload:
-        if not isinstance(payload.get("coveragePlan"), dict):
+        coverage_plan = payload.get("coveragePlan") if isinstance(payload.get("coveragePlan"), dict) else {}
+        if not coverage_plan or "nextCollectionQueue" not in coverage_plan or "targetSampleCount" not in coverage_plan:
             payload["coveragePlan"] = build_case_memory_coverage_plan(payload)
         return {"ok": True, **payload}
     return {

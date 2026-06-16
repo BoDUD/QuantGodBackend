@@ -198,12 +198,57 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
                                     "category": "BAD_ENTRY",
                                     "status": "MISSING",
                                     "observedCount": 0,
+                                    "targetCount": 3,
+                                    "remainingCount": 3,
+                                    "priority": "HIGH",
                                     "source": "entry-context feedback / bar replay adverse-entry audit",
+                                    "sourceArtifacts": [
+                                        "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+                                        "execution/QuantGod_LiveExecutionFeedback.jsonl",
+                                    ],
+                                    "collectionEndpoint": "/api/usdjpy-strategy-lab/evidence-os/execution-feedback",
                                     "nextActionZh": "收集入场后快速进入 MAE 的影子/执行反馈样本。",
+                                    "acceptanceZh": "至少 3 条含 entryContext、MAE/MFE、入场原因和后续走势的 shadow/tester 样本。",
                                     "allowedLanes": ["SHADOW", "TESTER_ONLY", "PAPER_LIVE_SIM"],
                                     "forbiddenSideEffects": ["ORDER_SEND", "LIVE_PRESET_MUTATION"],
                                 }
                             ],
+                            "missingRows": [
+                                {
+                                    "category": "BAD_ENTRY",
+                                    "status": "MISSING",
+                                    "observedCount": 0,
+                                    "targetCount": 3,
+                                    "remainingCount": 3,
+                                    "priority": "HIGH",
+                                    "source": "entry-context feedback / bar replay adverse-entry audit",
+                                    "sourceArtifacts": [
+                                        "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+                                        "execution/QuantGod_LiveExecutionFeedback.jsonl",
+                                    ],
+                                    "collectionEndpoint": "/api/usdjpy-strategy-lab/evidence-os/execution-feedback",
+                                    "nextActionZh": "收集入场后快速进入 MAE 的影子/执行反馈样本。",
+                                    "acceptanceZh": "至少 3 条含 entryContext、MAE/MFE、入场原因和后续走势的 shadow/tester 样本。",
+                                }
+                            ],
+                            "nextCollectionQueue": [
+                                {
+                                    "category": "BAD_ENTRY",
+                                    "priority": "HIGH",
+                                    "remainingCount": 3,
+                                    "source": "entry-context feedback / bar replay adverse-entry audit",
+                                    "sourceArtifacts": [
+                                        "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+                                        "execution/QuantGod_LiveExecutionFeedback.jsonl",
+                                    ],
+                                    "collectionEndpoint": "/api/usdjpy-strategy-lab/evidence-os/execution-feedback",
+                                    "nextActionZh": "收集入场后快速进入 MAE 的影子/执行反馈样本。",
+                                    "acceptanceZh": "至少 3 条含 entryContext、MAE/MFE、入场原因和后续走势的 shadow/tester 样本。",
+                                }
+                            ],
+                            "targetSampleCount": 16,
+                            "observedSampleCount": 2,
+                            "remainingTargetSampleCount": 14,
                             "nextActionZh": "按缺失分类补充 shadow/tester 证据，不放开真实执行。",
                         },
                         "safety": {
@@ -223,6 +268,16 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             self.assertEqual(case_memory["candidateCount"], 2)
             self.assertIn("BAD_ENTRY", case_memory["missingCategories"])
             self.assertIn("Case Memory 缺少 BAD_ENTRY 样本", case_memory["blockersZh"])
+            self.assertEqual(case_memory["targetSampleCount"], 16)
+            self.assertEqual(case_memory["observedSampleCount"], 2)
+            self.assertEqual(case_memory["remainingTargetSampleCount"], 14)
+            self.assertEqual(case_memory["nextCollectionQueue"][0]["category"], "BAD_ENTRY")
+            self.assertEqual(case_memory["nextCollectionQueue"][0]["priority"], "HIGH")
+            self.assertEqual(
+                case_memory["nextCollectionQueue"][0]["collectionEndpoint"],
+                "/api/usdjpy-strategy-lab/evidence-os/execution-feedback",
+            )
+            self.assertIn("QuantGod_USDJPYBarReplayReport.json", " ".join(case_memory["nextCollectionQueue"][0]["sourceArtifacts"]))
             self.assertIn("Case Memory 样本类型覆盖不足", report["blockersZh"])
             self.assertIn("按缺失分类补充 shadow/tester 证据", "；".join(report["nextActionsZh"]))
 
