@@ -346,6 +346,15 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertEqual(report["status"], "READY")
             self.assertGreaterEqual(report["candidateCount"], 1)
             self.assertGreaterEqual(report["gaSeedCount"], 1)
+            self.assertEqual(report["coveragePlan"]["schema"], "quantgod.case_memory_coverage_plan.v1")
+            self.assertEqual(report["coveragePlan"]["status"], "BLOCKED")
+            self.assertFalse(report["coveragePlan"]["promotionAllowed"])
+            self.assertIn("BAD_ENTRY", report["coveragePlan"]["missingCategories"])
+            self.assertIn("SPREAD_DAMAGE", report["coveragePlan"]["categoryCounts"])
+            self.assertTrue(
+                all("ORDER_SEND" in row["forbiddenSideEffects"] for row in report["coveragePlan"]["rows"])
+            )
+            self.assertIn("只允许 shadow/tester", report["nextActionZh"])
             candidate = report["candidates"][0]
             self.assertEqual(candidate["status"], "SHADOW_STRATEGY_JSON_CANDIDATE")
             self.assertTrue(candidate["validation"]["valid"])

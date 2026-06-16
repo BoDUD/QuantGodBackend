@@ -18,6 +18,7 @@ from .schema import (
     candidate_ledger_path,
     report_path,
 )
+from .taxonomy import build_case_memory_coverage_plan
 
 
 def _relative_artifact_path(runtime_dir: Path, path: Path) -> str:
@@ -112,10 +113,11 @@ def build_case_memory_report(
         "parityGate": payload.get("parityGate") or {},
         "sources": CASE_MEMORY_SOURCES,
         "artifactManifest": _artifact_manifest_summary(runtime_dir, present=write),
-        "nextActionZh": _next_action(payload),
         "reasonZh": payload.get("reasonZh") or "",
         "safety": dict(SAFETY),
     }
+    report["coveragePlan"] = build_case_memory_coverage_plan(report)
+    report["nextActionZh"] = _next_action(payload, report["coveragePlan"])
     if write:
         write_json(report_path(runtime_dir), report)
         if candidates:
@@ -127,6 +129,8 @@ def build_case_memory_report(
 def status(runtime_dir: Path) -> Dict[str, Any]:
     payload = load_json(report_path(runtime_dir))
     if payload:
+        if not isinstance(payload.get("coveragePlan"), dict):
+            payload["coveragePlan"] = build_case_memory_coverage_plan(payload)
         return {"ok": True, **payload}
     return {
         "ok": True,
@@ -136,15 +140,20 @@ def status(runtime_dir: Path) -> Dict[str, Any]:
         "status": "WAITING_FIRST_RUN",
         "candidateCount": 0,
         "gaSeedCount": 0,
+        "coveragePlan": build_case_memory_coverage_plan({}),
         "artifactManifest": _artifact_manifest_summary(runtime_dir),
         "reasonZh": "等待 Case Memory 生成 Strategy JSON candidate。",
         "safety": dict(SAFETY),
     }
 
 
-def _next_action(payload: Dict[str, Any]) -> str:
+def _next_action(payload: Dict[str, Any], coverage_plan: Dict[str, Any] | None = None) -> str:
     if payload.get("status") == "BLOCKED_BY_PARITY":
         return "先修复 Strategy / Replay / EA parity，再生成 Strategy JSON candidate。"
+    if isinstance(coverage_plan, dict) and coverage_plan.get("status") == "BLOCKED":
+        missing = coverage_plan.get("missingCategories") if isinstance(coverage_plan.get("missingCategories"), list) else []
+        if missing:
+            return f"继续补齐 Case Memory 样本类型：{' / '.join(str(item) for item in missing)}；只允许 shadow/tester 证据。"
     if payload.get("gaSeeds"):
         return "下一轮 GA population 应纳入这些 CASE_MEMORY shadow seeds。"
     return "等待 replay、执行反馈或 GA blocker 产生可转写的 Case Memory。"

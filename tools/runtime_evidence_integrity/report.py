@@ -8,27 +8,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+try:
+    from tools.case_memory.taxonomy import (
+        REQUIRED_CASE_MEMORY_CATEGORIES,
+        case_memory_category_counts,
+        case_memory_tokens_from_report,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    from case_memory.taxonomy import (
+        REQUIRED_CASE_MEMORY_CATEGORIES,
+        case_memory_category_counts,
+        case_memory_tokens_from_report,
+    )
+
 from .schema import CORE_ARTIFACTS, REPORT_SCHEMA, SAFETY, SCHEMA_VERSION, manifest_path
 
 
 LEGACY_ABSOLUTE_PATH_RE = re.compile(r"/Users/[^\n\r\t\"']*/Quard/QuantGod(?:/|\b)")
 REQUIRED_HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
-REQUIRED_CASE_MEMORY_CATEGORIES = (
-    "BAD_ENTRY",
-    "MISSED_OPPORTUNITY",
-    "EARLY_EXIT",
-    "SPREAD_DAMAGE",
-    "NEWS_DAMAGE",
-    "GA_OVERFIT",
-)
-CASE_MEMORY_CATEGORY_ALIASES = {
-    "BAD_ENTRY": ("BAD_ENTRY", "POOR_ENTRY", "ENTRY_QUALITY", "ADVERSE_ENTRY"),
-    "MISSED_OPPORTUNITY": ("MISSED_OPPORTUNITY", "MISSEDOPPORTUNITY"),
-    "EARLY_EXIT": ("EARLY_EXIT", "EARLYEXIT"),
-    "SPREAD_DAMAGE": ("SPREAD_DAMAGE", "WIDE_SPREAD", "SPREAD", "SLIPPAGE", "EXECUTION_SLIPPAGE"),
-    "NEWS_DAMAGE": ("NEWS_DAMAGE", "NEWS_BLOCK", "NEWS"),
-    "GA_OVERFIT": ("GA_OVERFIT", "OVERFIT", "WALK_FORWARD_OVERFIT"),
-}
 
 
 def utc_now_iso() -> str:
@@ -178,63 +175,6 @@ def _candidate_report_path(runtime_dir: Path, manifest: Dict[str, Any]) -> Path:
     return runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"
 
 
-def _case_type_tokens(report: Dict[str, Any]) -> List[str]:
-    tokens: List[str] = []
-
-    def add(value: Any) -> None:
-        text = str(value or "").strip()
-        if text:
-            tokens.append(text.upper())
-
-    summary = report.get("caseSummary") if isinstance(report.get("caseSummary"), dict) else {}
-    counts = summary.get("caseTypeCounts")
-    if isinstance(counts, dict):
-        for key, value in counts.items():
-            try:
-                count = int(value or 0)
-            except (TypeError, ValueError):
-                count = 0
-            if count > 0:
-                add(key)
-
-    for row in summary.get("cases") if isinstance(summary.get("cases"), list) else []:
-        if isinstance(row, dict):
-            add(row.get("type") or row.get("caseType"))
-            add(row.get("rootCause"))
-            add(row.get("reasonZh"))
-
-    for row in report.get("candidates") if isinstance(report.get("candidates"), list) else []:
-        if isinstance(row, dict):
-            add(row.get("caseType"))
-            add(row.get("rootCause"))
-            add(row.get("proposedMutation"))
-
-    for row in report.get("gaSeeds") if isinstance(report.get("gaSeeds"), list) else []:
-        if isinstance(row, dict):
-            add(row.get("caseType"))
-            add(row.get("mutationHint"))
-
-    long_term = report.get("longTermTradeMemory")
-    if isinstance(long_term, dict):
-        for key in ("entryMemory", "exitMemory", "caseMemory", "lossLessons"):
-            for row in long_term.get(key) if isinstance(long_term.get(key), list) else []:
-                if isinstance(row, dict):
-                    add(row.get("caseType") or row.get("memoryType") or row.get("lossTag"))
-                    add(row.get("factorAttributionSummary"))
-
-    return tokens
-
-
-def _case_memory_category_counts(tokens: List[str]) -> Dict[str, int]:
-    counts = {category: 0 for category in REQUIRED_CASE_MEMORY_CATEGORIES}
-    for token in tokens:
-        normalized = token.replace("-", "_").replace(" ", "_")
-        for category, aliases in CASE_MEMORY_CATEGORY_ALIASES.items():
-            if any(alias in normalized for alias in aliases):
-                counts[category] += 1
-    return counts
-
-
 def _safe_int(value: Any, fallback: int = 0) -> int:
     try:
         return int(value)
@@ -249,8 +189,8 @@ def _case_memory_promotion_gate(runtime_dir: Path, manifest: Dict[str, Any]) -> 
     if not report:
         blockers.append("candidate_report_missing_or_unreadable")
 
-    tokens = _case_type_tokens(report)
-    counts = _case_memory_category_counts(tokens)
+    tokens = case_memory_tokens_from_report(report)
+    counts = case_memory_category_counts(tokens)
     missing = [category for category, count in counts.items() if count <= 0]
     for category in missing:
         blockers.append(f"missing_category:{category}")
