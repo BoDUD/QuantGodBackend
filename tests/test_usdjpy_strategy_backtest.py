@@ -17,7 +17,7 @@ from tools.strategy_json.fingerprint import strategy_fingerprint
 from tools.strategy_json.schema import base_strategy_seed
 from tools.strategy_json.validator import validate_strategy_json
 from tools.usdjpy_strategy_backtest.cost_model import BacktestCostModel
-from tools.usdjpy_strategy_backtest.history_sync import build_history_production_status, sync_historical_klines
+from tools.usdjpy_strategy_backtest.history_sync import _reason, build_history_production_status, sync_historical_klines
 from tools.usdjpy_strategy_backtest.historical_news import classify_historical_news, load_historical_news_events
 from tools.usdjpy_strategy_backtest.report import build_sample, run_backtest, status
 from tools.usdjpy_strategy_backtest.strategy_runner import _event_filter_blocks, _rsi_regime_decision, _simulate_exit
@@ -1478,6 +1478,26 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
             self.assertEqual(current["historyProductionStatus"]["status"], "PASS")
             with connect(runtime_dir) as conn:
                 self.assertGreaterEqual(count_bars(conn, "M1"), 3 * 24 * 60)
+
+    def test_history_sync_reason_flags_stale_copyrates_even_when_span_and_density_pass(self):
+        report = {
+            "source": "MQL5_COPYRATES_EXPORT_FALLBACK",
+            "historyTargetSatisfied": True,
+            "productionStatus": {
+                "status": "WARN",
+                "timeframes": {
+                    "M1": {"freshnessOk": False},
+                    "M5": {"freshnessOk": False},
+                    "M15": {"freshnessOk": False},
+                    "H1": {"freshnessOk": False},
+                },
+            },
+        }
+
+        reason = _reason(report)
+
+        self.assertIn("M1/M5/M15/H1 最新 K 线延迟仍超阈值", reason)
+        self.assertIn("MQL5 CopyRates exporter", reason)
 
     def test_history_production_allows_small_mt5_server_time_skew(self):
         with tempfile.TemporaryDirectory() as tmp:

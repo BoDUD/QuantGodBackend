@@ -672,6 +672,21 @@ def _timeframe_production_reason(
 
 
 def _reason(report: Dict[str, Any]) -> str:
+    production = report.get("productionStatus") if isinstance(report.get("productionStatus"), dict) else {}
+    if production and production.get("status") != "PASS":
+        failed = production.get("timeframes") if isinstance(production.get("timeframes"), dict) else {}
+        freshness_failed = [
+            timeframe
+            for timeframe, row in failed.items()
+            if isinstance(row, dict) and row.get("freshnessOk") is not True
+        ]
+        if report.get("historyTargetSatisfied") and freshness_failed:
+            source = "MQL5 CopyRates exporter" if report.get("source") == MQL5_EXPORT_SOURCE else "MT5 Python CopyRates 数据源"
+            return (
+                f"USDJPY 历史覆盖和密度已满足，但 {'/'.join(freshness_failed)} 最新 K 线延迟仍超阈值；"
+                f"请先刷新 {source}，再运行 sync-klines 与 production-status。"
+            )
+        return production.get("reasonZh") or "USDJPY 历史数据仍未达到生产验收。"
     if report.get("historyTargetSatisfied"):
         return "USDJPY M1/M5/M15/H1 历史 K 线已完成 6-12 个月级别增量同步，可用于更可信 GA 回测。"
     if report.get("ok"):
