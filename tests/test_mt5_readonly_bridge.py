@@ -202,6 +202,22 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.normalize_symbol_filter("  EURUSDc  "), "EURUSDc")
         self.assertEqual(bridge.normalize_symbol_filter(None), "")
 
+    def test_mt5_process_scan_ignores_dashboard_path_mentions(self):
+        maintenance_row = (
+            "13094 /Library/Framewo /Library/Frameworks/Python.framework/Versions/3.10/"
+            "Resources/Python.app/Contents/MacOS/Python tools/run_mac_agent_v25_maintenance.py "
+            "--runtime-dir /Users/bowen/Desktop/Quard/QuantGodBackend/runtime "
+            "--hfm-crypto-runtime-dir /Users/bowen/Library/Application Support/"
+            "net.metaquotes.wine.metatrader5-live16/drive_c/Program Files/MetaTrader 5/MQL5/Files"
+        )
+        live_terminal_row = (
+            "17202 wine64-preloade /fake/wine64-preloader terminal64.exe /portable "
+            "/config:C:\\qg\\QuantGod_MT5_HFM_LivePilot_mac.ini"
+        )
+
+        self.assertFalse(bridge.is_mt5_host_process_row(maintenance_row))
+        self.assertTrue(bridge.is_mt5_host_process_row(live_terminal_row))
+
     def test_snapshot_contract_with_fake_mt5(self):
         fake = FakeMt5()
         args = bridge.parse_args(["--endpoint", "snapshot", "--symbol", "EURUSDc", "--symbols-limit", "20"])

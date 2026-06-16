@@ -262,11 +262,7 @@ def detect_mt5_host_process(file_path: Path | None) -> dict[str, Any]:
             "error": str(exc),
         }
     rows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    terminal_rows = [
-        row
-        for row in rows
-        if re.search(r"\b(terminal64(?:\.exe)?|metatrader|wine64(?:-preloader)?|wine-preloader)\b", row, re.I)
-    ]
+    terminal_rows = [row for row in rows if is_mt5_host_process_row(row)]
     hint_matches = []
     for row in terminal_rows:
         normalized_row = row.replace("\\", "/")
@@ -285,6 +281,30 @@ def detect_mt5_host_process(file_path: Path | None) -> dict[str, Any]:
         "matchedTargetProcessCount": len(hint_matches),
         "scanner": "tasklist" if os.name == "nt" else "ps",
     }
+
+
+def is_mt5_host_process_row(row: str) -> bool:
+    """Return true only for actual MT5/Wine terminal processes, not path mentions.
+
+    Background maintenance commands can contain paths such as
+    ``.../Program Files/MetaTrader 5/MQL5/Files`` in their arguments. Matching the
+    whole ps row for "metatrader" makes those Python helpers look like running MT5
+    terminals, which hides the real stale-dashboard root cause.
+    """
+    text = str(row or "").strip()
+    if not text:
+        return False
+    if os.name == "nt":
+        return bool(re.search(r"\bterminal64\.exe\b", text, re.I))
+
+    match = re.match(r"\s*(?P<pid>\d+)\s+(?P<comm>\S+)\s+(?P<args>.*)$", text)
+    if not match:
+        return False
+    comm = Path(match.group("comm")).name.lower()
+    args = match.group("args")
+    if re.search(r"\b(terminal64(?:\.exe)?|metatrader|wine64(?:-preloader)?|wine-preloader)\b", comm, re.I):
+        return True
+    return bool(re.search(r"(^|\s)(?:\S*/)?terminal64\.exe(\s|$)", args, re.I))
 
 
 def attach_host_process_freshness(freshness: dict[str, Any], host_process: dict[str, Any]) -> dict[str, Any]:
