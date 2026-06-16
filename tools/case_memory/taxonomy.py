@@ -13,12 +13,21 @@ REQUIRED_CASE_MEMORY_CATEGORIES = (
 )
 
 CASE_MEMORY_CATEGORY_ALIASES = {
-    "BAD_ENTRY": ("BAD_ENTRY", "POOR_ENTRY", "ENTRY_QUALITY", "ADVERSE_ENTRY"),
-    "MISSED_OPPORTUNITY": ("MISSED_OPPORTUNITY", "MISSEDOPPORTUNITY"),
-    "EARLY_EXIT": ("EARLY_EXIT", "EARLYEXIT"),
+    "BAD_ENTRY": (
+        "BAD_ENTRY",
+        "POOR_ENTRY",
+        "ENTRY_QUALITY",
+        "ADVERSE_ENTRY",
+        "CHASE_PULLBACK",
+        "FAKE_BREAKOUT",
+        "FAST_LOSS",
+        "ULTRA_FAST_LOSS",
+    ),
+    "MISSED_OPPORTUNITY": ("MISSED_OPPORTUNITY", "MISSEDOPPORTUNITY", "MISSED_BIG_MOVE"),
+    "EARLY_EXIT": ("EARLY_EXIT", "EARLYEXIT", "PROFIT_GIVEBACK", "LOW_MFE_CAPTURE", "RECOVERED_TO_SMALL_WIN"),
     "SPREAD_DAMAGE": ("SPREAD_DAMAGE", "WIDE_SPREAD", "SPREAD", "SLIPPAGE", "EXECUTION_SLIPPAGE"),
-    "NEWS_DAMAGE": ("NEWS_DAMAGE", "NEWS_BLOCK", "NEWS"),
-    "GA_OVERFIT": ("GA_OVERFIT", "OVERFIT", "WALK_FORWARD_OVERFIT"),
+    "NEWS_DAMAGE": ("NEWS_DAMAGE", "NEWS_BLOCK", "NEWS_ADVERSE", "HIGH_IMPACT_NEWS"),
+    "GA_OVERFIT": ("GA_OVERFIT", "OVERFIT", "OVERFIT_RISK", "WALK_FORWARD_OVERFIT", "WALK_FORWARD_UNSTABLE"),
 }
 
 CATEGORY_GUIDANCE_ZH = {
@@ -110,6 +119,24 @@ def case_memory_tokens_from_report(report: Dict[str, Any]) -> List[str]:
         if text:
             tokens.append(text.upper())
 
+    def add_list(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                add(item)
+        elif isinstance(value, str):
+            for separator in ("|", ";", "；", ","):
+                value = value.replace(separator, "\n")
+            for item in value.splitlines():
+                add(item)
+
+    def add_counted_row(row: Dict[str, Any], key: str) -> None:
+        try:
+            count = int(row.get("count") or 1)
+        except (TypeError, ValueError):
+            count = 1
+        for _ in range(max(1, min(count, 50))):
+            add(row.get(key))
+
     summary = report.get("caseSummary") if isinstance(report.get("caseSummary"), dict) else {}
     counts = summary.get("caseTypeCounts")
     if isinstance(counts, dict):
@@ -118,7 +145,7 @@ def case_memory_tokens_from_report(report: Dict[str, Any]) -> List[str]:
                 count = int(value or 0)
             except (TypeError, ValueError):
                 count = 0
-            if count > 0:
+            for _ in range(max(0, min(count, 50))):
                 add(key)
 
     for row in summary.get("cases") if isinstance(summary.get("cases"), list) else []:
@@ -140,11 +167,29 @@ def case_memory_tokens_from_report(report: Dict[str, Any]) -> List[str]:
 
     long_term = report.get("longTermTradeMemory")
     if isinstance(long_term, dict):
-        for key in ("entryMemory", "exitMemory", "caseMemory", "lossLessons"):
+        for key in ("entryMemory", "exitMemory", "reviewExitMemory", "caseMemory", "lossLessons"):
             for row in long_term.get(key) if isinstance(long_term.get(key), list) else []:
                 if isinstance(row, dict):
                     add(row.get("caseType") or row.get("memoryType") or row.get("lossTag"))
+                    add(row.get("exitType"))
+                    add(row.get("exitReason"))
                     add(row.get("factorAttributionSummary"))
+                    add_list(row.get("lossTags"))
+                    add_list(row.get("exitQualityTags"))
+                    add_list(row.get("entryReasons"))
+        rolling = long_term.get("rollingReview") if isinstance(long_term.get("rollingReview"), dict) else {}
+        for key in ("commonLossPatterns", "commonDataGaps", "failureExitTypes"):
+            for row in rolling.get(key) if isinstance(rolling.get(key), list) else []:
+                if isinstance(row, dict):
+                    add_counted_row(row, "name")
+        for key in ("suggestions", "tpSlOptimizationHints"):
+            for row in rolling.get(key) if isinstance(rolling.get(key), list) else []:
+                if isinstance(row, dict):
+                    add(row.get("trigger"))
+        exit_efficiency = rolling.get("exitEfficiency") if isinstance(rolling.get("exitEfficiency"), dict) else {}
+        for row in exit_efficiency.get("qualityTags") if isinstance(exit_efficiency.get("qualityTags"), list) else []:
+            if isinstance(row, dict):
+                add_counted_row(row, "name")
 
     return tokens
 

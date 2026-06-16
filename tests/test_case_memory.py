@@ -604,6 +604,34 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertEqual(cooldown["status"], "COOLDOWN_ACTIVE")
             self.assertFalse(cooldown["eligibleToAdjust"])
 
+    def test_taxonomy_counts_long_term_loss_and_exit_quality_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            write_sample_runtime(runtime, overwrite=True)
+            _write_long_term_memory_sample(runtime)
+
+            report = build_case_memory_report(runtime, write=True)
+            counts = report["coveragePlan"]["categoryCounts"]
+
+            self.assertGreater(counts["BAD_ENTRY"], 0)
+            self.assertGreater(counts["EARLY_EXIT"], 0)
+            self.assertGreater(counts["NEWS_DAMAGE"], 0)
+            self.assertFalse(report["safety"]["orderSendAllowed"])
+
+            report["coveragePlan"] = {
+                "schema": "quantgod.case_memory_coverage_plan.v1",
+                "categoryCounts": {category: 0 for category in report["coveragePlan"]["requiredCategories"]},
+                "missingCategories": list(report["coveragePlan"]["requiredCategories"]),
+            }
+            report_path = runtime / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json"
+            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            hydrated = case_memory_status(runtime)
+            hydrated_counts = hydrated["coveragePlan"]["categoryCounts"]
+            self.assertGreater(hydrated_counts["BAD_ENTRY"], 0)
+            self.assertGreater(hydrated_counts["EARLY_EXIT"], 0)
+            self.assertGreater(hydrated_counts["NEWS_DAMAGE"], 0)
+
     def test_fine_factor_health_marks_bridged_context_as_not_raw(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             runtime = Path(temp)
