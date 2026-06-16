@@ -17,7 +17,12 @@ from tools.strategy_json.fingerprint import strategy_fingerprint
 from tools.strategy_json.schema import base_strategy_seed
 from tools.strategy_json.validator import validate_strategy_json
 from tools.usdjpy_strategy_backtest.cost_model import BacktestCostModel
-from tools.usdjpy_strategy_backtest.history_sync import _reason, build_history_production_status, sync_historical_klines
+from tools.usdjpy_strategy_backtest.history_sync import (
+    _copyrates_export_freshness,
+    _reason,
+    build_history_production_status,
+    sync_historical_klines,
+)
 from tools.usdjpy_strategy_backtest.historical_news import classify_historical_news, load_historical_news_events
 from tools.usdjpy_strategy_backtest.report import build_sample, run_backtest, status
 from tools.usdjpy_strategy_backtest.strategy_runner import _event_filter_blocks, _rsi_regime_decision, _simulate_exit
@@ -1474,6 +1479,9 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
             self.assertTrue(production["historyTargetSatisfied"], production)
             self.assertEqual(production["status"], "PASS")
             self.assertEqual(production["source"]["mql5ExportDir"], str(export_dir.resolve()))
+            self.assertEqual(production["source"]["copyRatesExportFreshnessStatus"], "PASS")
+            self.assertEqual(production["copyRatesExportFreshness"]["status"], "PASS")
+            self.assertEqual(production["copyRatesExportFreshness"]["staleTimeframes"], [])
             current = status(runtime_dir)
             self.assertEqual(current["historyProductionStatus"]["status"], "PASS")
             with connect(runtime_dir) as conn:
@@ -1498,6 +1506,37 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
 
         self.assertIn("M1/M5/M15/H1 最新 K 线延迟仍超阈值", reason)
         self.assertIn("MQL5 CopyRates exporter", reason)
+
+    def test_copyrates_export_freshness_exposes_stale_timeframes_for_frontend(self):
+        checked_at = datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc)
+        export_report = {
+            "ok": True,
+            "exportDir": "/tmp/exported_klines",
+            "manifest": {
+                "generatedAtServer": "2026.06.05 11:56:59",
+                "generatedAtLocal": "2026.06.05 17:57:00",
+            },
+            "timeframes": {
+                "M1": {"latestBar": "2026-06-05T11:56:00Z"},
+                "M5": {"latestBar": "2026-06-05T11:55:00Z"},
+                "M15": {"latestBar": "2026-06-05T11:45:00Z"},
+                "H1": {"latestBar": "2026-06-05T11:00:00Z"},
+            },
+        }
+
+        freshness = _copyrates_export_freshness(
+            export_report,
+            checked_at=checked_at,
+            max_latest_lag_hours=96,
+        )
+
+        self.assertEqual(freshness["schema"], "quantgod.mql5_copyrates_export_freshness.v1")
+        self.assertEqual(freshness["status"], "STALE")
+        self.assertTrue(freshness["stale"])
+        self.assertEqual(freshness["staleTimeframes"], ["M1", "M5", "M15", "H1"])
+        self.assertGreater(freshness["latestLagHoursByTimeframe"]["H1"], 96)
+        self.assertIn("刷新 MQL5 CopyRates exporter", freshness["nextActionZh"])
+        self.assertFalse(freshness["safety"]["orderSendAllowed"])
 
     def test_history_production_allows_small_mt5_server_time_skew(self):
         with tempfile.TemporaryDirectory() as tmp:

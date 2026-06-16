@@ -281,6 +281,11 @@ def build_history_production_status(
     fallback = sync_report.get("fallback") if isinstance(sync_report.get("fallback"), dict) else {}
     if isinstance(fallback.get("mql5Export"), dict):
         mql5_export = fallback["mql5Export"]
+    copyrates_freshness = _copyrates_export_freshness(
+        mql5_export,
+        checked_at=checked_at,
+        max_latest_lag_hours=max_latest_lag_hours,
+    )
     status = "PASS" if not failed and bool(sync_report.get("ok", True)) else "WARN"
     return {
         "ok": status == "PASS",
@@ -302,7 +307,9 @@ def build_history_production_status(
             "mql5ExportDir": mql5_export.get("exportDir") or "",
             "mt5PythonStatus": (sync_report.get("mt5") if isinstance(sync_report.get("mt5"), dict) else {}).get("status"),
             "mql5ExportOk": bool(mql5_export.get("ok")),
+            "copyRatesExportFreshnessStatus": copyrates_freshness.get("status"),
         },
+        "copyRatesExportFreshness": copyrates_freshness,
         "continuousSync": {
             "expected": True,
             "intervalSeconds": int(float(os.environ.get("QG_USDJPY_HISTORY_INTERVAL_SECONDS", "3600"))),
@@ -314,6 +321,70 @@ def build_history_production_status(
             "USDJPY SQLite 历史数据生产状态通过：M1/M5/M15/H1 覆盖、密度和最新延迟均满足目标。"
             if status == "PASS"
             else "USDJPY SQLite 历史数据仍未达到生产验收；请继续运行 MQL5 CopyRates exporter 与后台 sync-klines。"
+        ),
+        "safety": dict(SAFETY_BOUNDARY),
+    }
+
+
+def _copyrates_export_freshness(
+    export_report: Dict[str, Any],
+    *,
+    checked_at: datetime,
+    max_latest_lag_hours: float,
+) -> Dict[str, Any]:
+    manifest = export_report.get("manifest") if isinstance(export_report.get("manifest"), dict) else {}
+    timeframe_rows = export_report.get("timeframes") if isinstance(export_report.get("timeframes"), dict) else {}
+    generated_server = _parse_export_time(manifest.get("generatedAtServer"))
+    generated_local = _parse_export_time(manifest.get("generatedAtLocal"))
+    latest_by_timeframe: Dict[str, str] = {}
+    lag_by_timeframe: Dict[str, float | None] = {}
+    stale_timeframes: List[str] = []
+    for timeframe in DEFAULT_HISTORY_TIMEFRAMES:
+        row = timeframe_rows.get(timeframe) if isinstance(timeframe_rows.get(timeframe), dict) else {}
+        latest = _parse_iso(row.get("latestBar"))
+        if latest is None:
+            for manifest_row in manifest.get("timeframes", []) if isinstance(manifest.get("timeframes"), list) else []:
+                if isinstance(manifest_row, dict) and str(manifest_row.get("timeframe") or "").upper() == timeframe:
+                    latest = _parse_export_time(manifest_row.get("latestServer"))
+                    break
+        latest_by_timeframe[timeframe] = _iso(latest) if latest is not None else ""
+        lag_hours, _future_skew = _latest_lag_and_future_skew(checked_at, latest)
+        lag_by_timeframe[timeframe] = lag_hours
+        if lag_hours is None or lag_hours > float(max_latest_lag_hours):
+            stale_timeframes.append(timeframe)
+    generated_lag_hours = None
+    if generated_server is not None:
+        generated_lag_hours, _future_skew = _latest_lag_and_future_skew(checked_at, generated_server)
+    elif generated_local is not None:
+        generated_lag_hours, _future_skew = _latest_lag_and_future_skew(checked_at, generated_local)
+    if not export_report:
+        status = "NOT_USED"
+    elif not export_report.get("ok"):
+        status = "EXPORT_UNAVAILABLE"
+    elif stale_timeframes:
+        status = "STALE"
+    else:
+        status = "PASS"
+    return {
+        "schema": "quantgod.mql5_copyrates_export_freshness.v1",
+        "status": status,
+        "stale": status == "STALE",
+        "exportDir": export_report.get("exportDir") or "",
+        "generatedAtServer": _iso(generated_server) if generated_server is not None else "",
+        "generatedAtLocal": _iso(generated_local) if generated_local is not None else "",
+        "generatedLagHours": generated_lag_hours,
+        "latestBarByTimeframe": latest_by_timeframe,
+        "latestLagHoursByTimeframe": lag_by_timeframe,
+        "staleTimeframes": stale_timeframes,
+        "maxLatestLagHours": float(max_latest_lag_hours),
+        "nextActionZh": (
+            "MQL5 CopyRates exporter 新鲜度通过。"
+            if status == "PASS"
+            else (
+                f"刷新 MQL5 CopyRates exporter 后重新运行 sync-klines；当前 stale 周期：{'/'.join(stale_timeframes)}。"
+                if status == "STALE"
+                else "等待可读取的 MQL5 CopyRates export。"
+            )
         ),
         "safety": dict(SAFETY_BOUNDARY),
     }
@@ -603,6 +674,21 @@ def _parse_iso(value: str | None) -> datetime | None:
         return parsed.astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _parse_export_time(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    parsed = _parse_iso(raw)
+    if parsed is not None:
+        return parsed
+    for fmt in ("%Y.%m.%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+    return None
 
 
 def _latest_lag_and_future_skew(
