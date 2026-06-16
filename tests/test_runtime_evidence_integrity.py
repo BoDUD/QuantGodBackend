@@ -55,7 +55,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
             "status": "PASS",
             "historyTargetSatisfied": True,
             "timeframes": {
-                timeframe: {"passed": True, "freshnessOk": True}
+                timeframe: {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True}
                 for timeframe in ("M1", "M5", "M15", "H1")
             },
         },
@@ -94,6 +94,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["schemaVersion"], 1)
             self.assertEqual(manifest["status"], "PASS")
             self.assertTrue(manifest["ok"])
+            self.assertTrue(manifest["promotionGatePassed"])
+            self.assertEqual(manifest["promotionGateStatus"], "PASS")
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
             self.assertEqual(manifest["artifactCount"], 11)
@@ -150,6 +152,64 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
 
             self.assertEqual(manifest["status"], "FAIL")
             self.assertIn("historyProductionStatus:missing_required_artifact", manifest["blockers"])
+
+    def test_stale_history_blocks_promotion_gate_without_failing_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
+                {
+                    "schema": "quantgod.usdjpy_history_production_status.v1",
+                    "status": "WARN",
+                    "historyTargetSatisfied": False,
+                    "timeframes": {
+                        "M1": {"passed": False, "spanOk": True, "densityOk": True, "freshnessOk": False},
+                        "M5": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                        "M15": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                        "H1": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                    },
+                },
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+            history_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "historyProductionStatus")
+
+            self.assertEqual(manifest["status"], "PASS")
+            self.assertTrue(manifest["ok"])
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertEqual(manifest["promotionGateStatus"], "BLOCKED")
+            self.assertIn("historyProductionStatus:history_status_not_pass", manifest["promotionBlockers"])
+            self.assertIn("historyProductionStatus:M1:freshness_not_ok", manifest["promotionBlockers"])
+            self.assertEqual(history_row["status"], "PASS")
+            self.assertEqual(history_row["promotionGate"]["status"], "BLOCKED")
+            self.assertIn("ga_promotion", history_row["promotionGate"]["requiredFor"])
+
+    def test_missing_required_history_timeframe_blocks_promotion_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
+                {
+                    "schema": "quantgod.usdjpy_history_production_status.v1",
+                    "status": "PASS",
+                    "historyTargetSatisfied": True,
+                    "timeframes": {
+                        "M1": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                        "M5": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                        "M15": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                    },
+                },
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+
+            self.assertEqual(manifest["status"], "PASS")
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertIn("historyProductionStatus:H1:span_not_ok", manifest["promotionBlockers"])
+            self.assertIn("historyProductionStatus:H1:density_not_ok", manifest["promotionBlockers"])
+            self.assertIn("historyProductionStatus:H1:freshness_not_ok", manifest["promotionBlockers"])
 
 
 if __name__ == "__main__":

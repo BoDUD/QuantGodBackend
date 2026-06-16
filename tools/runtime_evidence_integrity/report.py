@@ -12,6 +12,7 @@ from .schema import CORE_ARTIFACTS, REPORT_SCHEMA, SAFETY, SCHEMA_VERSION, manif
 
 
 LEGACY_ABSOLUTE_PATH_RE = re.compile(r"/Users/[^\n\r\t\"']*/Quard/QuantGod(?:/|\b)")
+REQUIRED_HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
 
 
 def utc_now_iso() -> str:
@@ -96,6 +97,60 @@ def _manifest_hash_rows_ok(payload: Dict[str, Any]) -> bool:
     return True
 
 
+def _history_timeframe_passed(row: Dict[str, Any]) -> bool:
+    return bool(
+        row.get("passed")
+        or (row.get("spanOk") and row.get("densityOk") and row.get("freshnessOk"))
+    )
+
+
+def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
+    timeframes = payload.get("timeframes")
+    blockers: List[str] = []
+    rows: Dict[str, Dict[str, Any]] = {}
+
+    if str(payload.get("status") or "").upper() != "PASS":
+        blockers.append("history_status_not_pass")
+    if payload.get("historyTargetSatisfied") is not True:
+        blockers.append("history_target_not_satisfied")
+    if not isinstance(timeframes, dict):
+        blockers.append("history_timeframes_missing")
+        timeframes = {}
+
+    for timeframe in REQUIRED_HISTORY_TIMEFRAMES:
+        raw = timeframes.get(timeframe) if isinstance(timeframes.get(timeframe), dict) else {}
+        row = {
+            "timeframe": timeframe,
+            "spanOk": bool(raw.get("spanOk")),
+            "densityOk": bool(raw.get("densityOk")),
+            "freshnessOk": bool(raw.get("freshnessOk")),
+            "passed": _history_timeframe_passed(raw),
+            "spanDays": raw.get("spanDays"),
+            "latestLagHours": raw.get("latestLagHours"),
+        }
+        rows[timeframe] = row
+        if not row["spanOk"]:
+            blockers.append(f"{timeframe}:span_not_ok")
+        if not row["densityOk"]:
+            blockers.append(f"{timeframe}:density_not_ok")
+        if not row["freshnessOk"]:
+            blockers.append(f"{timeframe}:freshness_not_ok")
+        if not row["passed"]:
+            blockers.append(f"{timeframe}:not_passed")
+
+    passed = not blockers
+    return {
+        "gateId": "history_freshness_promotion_gate",
+        "requiredFor": ["ga_promotion", "champion_promotion"],
+        "requiredTimeframes": list(REQUIRED_HISTORY_TIMEFRAMES),
+        "passed": passed,
+        "status": "PASS" if passed else "BLOCKED",
+        "statusZh": "历史数据可作为晋级前置证据" if passed else "历史数据 freshness/覆盖未通过，禁止晋级",
+        "blockers": blockers,
+        "timeframes": rows,
+    }
+
+
 def _row_status(blockers: Iterable[str]) -> str:
     return "PASS" if not list(blockers) else "FAIL"
 
@@ -154,7 +209,13 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
     if spec.get("requiresArtifactHashes") and not _manifest_hash_rows_ok(payload):
         blockers.append("manifest_missing_artifact_hashes")
 
-    return {
+    promotion_gate = (
+        _history_promotion_gate(payload)
+        if spec.get("requiresHistoryPromotionGate") and content_type == "json"
+        else None
+    )
+
+    row = {
         "artifactId": spec["artifactId"],
         "category": spec.get("category", "runtime"),
         "required": bool(spec.get("required")),
@@ -171,6 +232,9 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
         "status": _row_status(blockers),
         "blockers": blockers,
     }
+    if promotion_gate:
+        row["promotionGate"] = promotion_gate
+    return row
 
 
 def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> Dict[str, Any]:
@@ -181,7 +245,13 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
         for row in rows
         for blocker in row.get("blockers", [])
     ]
+    promotion_blockers = [
+        f"{row['artifactId']}:{blocker}"
+        for row in rows
+        for blocker in row.get("promotionGate", {}).get("blockers", [])
+    ]
     status = "PASS" if not blockers else "FAIL"
+    promotion_gate_passed = not promotion_blockers
     payload: Dict[str, Any] = {
         "ok": status == "PASS",
         "schema": REPORT_SCHEMA,
@@ -195,12 +265,21 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
         "presentArtifactCount": sum(1 for row in rows if row.get("exists")),
         "blockerCount": len(blockers),
         "blockers": blockers,
+        "promotionGatePassed": promotion_gate_passed,
+        "promotionGateStatus": "PASS" if promotion_gate_passed else "BLOCKED",
+        "promotionBlockerCount": len(promotion_blockers),
+        "promotionBlockers": promotion_blockers,
+        "promotionScope": ["ga_promotion", "champion_promotion"],
         "artifacts": rows,
         "safety": dict(SAFETY),
         "nextActionZh": (
-            "继续把 live-loop、production policy、GA、execution feedback 和 case memory 证据纳入晋级门。"
-            if status == "PASS"
-            else "先修复缺失证据、schema 漂移、旧仓绝对路径或 artifact hash 缺口，再允许进入晋级评审。"
+            "先修复缺失证据、schema 漂移、旧仓绝对路径或 artifact hash 缺口，再允许进入晋级评审。"
+            if status != "PASS"
+            else (
+                "核心证据文件完整，但 history freshness/覆盖仍阻断 GA/champion 晋级。"
+                if not promotion_gate_passed
+                else "继续把 live-loop、production policy、GA、execution feedback 和 case memory 证据纳入晋级门。"
+            )
         ),
     }
     if write:

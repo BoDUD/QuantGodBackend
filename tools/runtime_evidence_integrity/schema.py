@@ -87,6 +87,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.usdjpy_history_production_status.v1"],
         "required": True,
+        "requiresHistoryPromotionGate": True,
     },
     {
         "artifactId": "executionFeedbackQualityReport",
