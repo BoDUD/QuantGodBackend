@@ -168,10 +168,16 @@ def _case_memory_source_gaps(runtime_dir: Path) -> Dict[str, Any]:
     entry_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYEntryVariantComparison.json"
     exit_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYExitVariantComparison.json"
     news_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYNewsGateReplayReport.json"
+    ga_stability_path = runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json"
+    ga_blocker_path = runtime_dir / "ga" / "QuantGod_GABlockerSummary.json"
+    ga_graveyard_path = runtime_dir / "ga_factory" / "QuantGod_GAStrategyGraveyard.json"
     entry_variants = _replay_variant_metrics(entry_path)
     entry_input_coverage = _entry_input_coverage(entry_path)
     exit_variants = _replay_variant_metrics(exit_path)
     news_variants = _replay_variant_metrics(news_path)
+    ga_stability = load_json(ga_stability_path)
+    ga_blockers = load_json(ga_blocker_path)
+    ga_graveyard = load_json(ga_graveyard_path)
 
     entry_sample_count = max((_num(row.get("sampleCount")) for row in entry_variants), default=0.0)
     entry_scored_count = max((_num(row.get("scoredSampleCount")) for row in entry_variants), default=0.0)
@@ -213,6 +219,52 @@ def _case_memory_source_gaps(runtime_dir: Path) -> Dict[str, Any]:
     news_gap = "news gate replay 未发现普通新闻导致的损伤或错失机会。"
     if news_entry_delta > 0 or news_net_delta > 0 or news_soft_r > 0 or news_adverse < 0:
         news_gap = "news replay 已出现新闻门禁损伤/机会 delta，可转写 news-damage 样本。"
+
+    ga_blocker_counts: Dict[str, int] = {}
+    for source in (ga_stability.get("blockerCounts"),):
+        if isinstance(source, dict):
+            for key, value in source.items():
+                ga_blocker_counts[str(key)] = int(_num(value))
+    for row in ga_blockers.get("summary") if isinstance(ga_blockers.get("summary"), list) else []:
+        if isinstance(row, dict):
+            key = str(row.get("blockerCode") or row.get("code") or "")
+            if key:
+                ga_blocker_counts[key] = ga_blocker_counts.get(key, 0) + int(_num(row.get("count"), 1))
+    graveyard_rows = ga_graveyard.get("strategies") if isinstance(ga_graveyard.get("strategies"), list) else []
+    overfit_markers = ("OVERFIT", "WALK_FORWARD", "FORWARD_FAIL", "RETEST_FAIL", "UNSTABLE")
+    overfit_rows = []
+    for row in graveyard_rows:
+        if not isinstance(row, dict):
+            continue
+        text = " ".join(
+            str(row.get(key) or "")
+            for key in ("blockerCode", "status", "blockerZh", "reasonZh", "source", "tags")
+        ).upper()
+        if any(marker in text for marker in overfit_markers):
+            overfit_rows.append(row)
+    history_blocked = any("HISTORY_PRODUCTION_NOT_READY" in str(key).upper() for key in ga_blocker_counts)
+    stability_present = bool(ga_stability)
+    stability_grade = str(ga_stability.get("stabilityGrade") or "").upper()
+    ga_status = "WAITING_GA_STABILITY_EVIDENCE"
+    ga_gap = "GA stability / graveyard 证据尚未生成，不能形成 GA_OVERFIT 样本。"
+    ga_next_action = "先运行 GA multi-generation stability build，只保留 shadow/tester 证据。"
+    ga_prerequisite = ""
+    if overfit_rows:
+        ga_status = "READY_TO_TRANSCRIBE_GA_OVERFIT"
+        ga_gap = "GA graveyard 已出现 walk-forward/forward/retest 失效样本，可转写 GA_OVERFIT。"
+        ga_next_action = "从 graveyard 中抽取带 generation、seed、train/forward 差异和 blockerCode 的样本，再运行 Case Memory build。"
+    elif history_blocked:
+        ga_status = "BLOCKED_BY_HISTORY_FRESHNESS"
+        ga_gap = "GA 当前主要被 HISTORY_PRODUCTION_NOT_READY 阻断；这不是可转写的 GA_OVERFIT 样本。"
+        ga_next_action = "先刷新 M1/M5/M15/H1 history freshness，再重跑 GA stability；不要把 stale-history 淘汰样本写成过拟合。"
+        ga_prerequisite = (
+            "python3 tools/run_usdjpy_strategy_backtest.py --runtime-dir ./runtime "
+            "sync-klines --months 12 --timeframes M1,M5,M15,H1"
+        )
+    elif stability_present:
+        ga_status = "WAITING_GA_OVERFIT_SAMPLE"
+        ga_gap = "GA stability 已生成，但尚无 train 优秀、forward/walk-forward/retest 失效的过拟合样本。"
+        ga_next_action = "继续扩大 GA walk-forward / champion retest，只把真实 forward 失效样本写入 GA_OVERFIT。"
 
     return {
         "schema": "quantgod.case_memory_source_evidence_gaps.v1",
@@ -261,6 +313,32 @@ def _case_memory_source_gaps(runtime_dir: Path) -> Dict[str, Any]:
             "maxAdverseRDelta": news_adverse,
             "status": "WAITING_NEWS_DAMAGE_DELTA",
             "evidenceGapZh": news_gap,
+        },
+        "GA_OVERFIT": {
+            "sourceArtifact": _relative_artifact_path(runtime_dir, ga_stability_path),
+            "secondaryArtifacts": [
+                _relative_artifact_path(runtime_dir, ga_blocker_path),
+                _relative_artifact_path(runtime_dir, ga_graveyard_path),
+            ],
+            "status": ga_status,
+            "stabilityGrade": stability_grade,
+            "closureMode": ga_stability.get("closureMode") or "",
+            "generationCount": int(_num(ga_stability.get("generationCount"))),
+            "candidateCount": int(_num(ga_stability.get("candidateCount"))),
+            "eliteCount": int(_num(ga_stability.get("eliteCount"))),
+            "graveyardCount": int(_num(ga_graveyard.get("graveyardCount"), len(graveyard_rows))),
+            "overfitSampleCount": len(overfit_rows),
+            "blockerCounts": ga_blocker_counts,
+            "historyFreshnessBlocked": history_blocked,
+            "evidenceGapZh": ga_gap,
+            "requiredOutcomeFields": [
+                "generation + seedId + strategyId",
+                "train/backtest fitness and forward/walk-forward/retest result",
+                "blockerCode explaining the overfit failure",
+            ],
+            "prerequisiteCommand": ga_prerequisite,
+            "collectionCommand": "python3 tools/run_ga_multi_generation_stability.py --runtime-dir ./runtime build --write",
+            "nextActionZh": ga_next_action,
         },
     }
 

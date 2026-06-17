@@ -977,8 +977,14 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             runtime = Path(temp)
             case_memory_dir = runtime / "case_memory"
             replay_dir = runtime / "replay" / "usdjpy"
+            ga_dir = runtime / "ga"
+            ga_factory_dir = runtime / "ga_factory"
+            validation_dir = runtime / "production_validation"
             case_memory_dir.mkdir(parents=True, exist_ok=True)
             replay_dir.mkdir(parents=True, exist_ok=True)
+            ga_dir.mkdir(parents=True, exist_ok=True)
+            ga_factory_dir.mkdir(parents=True, exist_ok=True)
+            validation_dir.mkdir(parents=True, exist_ok=True)
             (case_memory_dir / "QuantGod_CaseMemoryStrategyCandidates.json").write_text(
                 json.dumps(
                     {
@@ -1057,6 +1063,60 @@ class CaseMemoryCandidateTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (validation_dir / "QuantGod_GAMultiGenerationStabilityReport.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.ga_multi_generation_stability.report.v1",
+                        "stabilityGrade": "NEGATIVE_SELECTION_CLOSED",
+                        "closureMode": "NO_ELITE_NEGATIVE_SELECTION",
+                        "generationCount": 336,
+                        "candidateCount": 1005,
+                        "eliteCount": 0,
+                        "blockerCounts": {"HISTORY_PRODUCTION_NOT_READY": 1005},
+                        "safety": {"orderSendAllowed": False},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (ga_dir / "QuantGod_GABlockerSummary.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.ga.blockers.v1",
+                        "summary": [
+                            {
+                                "blockerCode": "HISTORY_PRODUCTION_NOT_READY",
+                                "count": 16,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (ga_factory_dir / "QuantGod_GAStrategyGraveyard.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.strategy_ga_factory.strategy_graveyard.v1",
+                        "graveyardCount": 1,
+                        "strategies": [
+                            {
+                                "seedId": "GA-USDJPY-G0336-X0005",
+                                "strategyId": "USDJPY_RSI_REVERSAL_SHORT_EXPLORE_336_005",
+                                "generation": 336,
+                                "blockerCode": "HISTORY_PRODUCTION_NOT_READY",
+                                "status": "NEEDS_MORE_DATA",
+                                "directLiveAllowed": False,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
 
             hydrated = case_memory_status(runtime)
 
@@ -1069,6 +1129,11 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertIn("0 样本", gaps["EARLY_EXIT"]["evidenceGapZh"])
             self.assertEqual(gaps["NEWS_DAMAGE"]["status"], "WAITING_NEWS_DAMAGE_DELTA")
             self.assertIn("未发现普通新闻", gaps["NEWS_DAMAGE"]["evidenceGapZh"])
+            self.assertEqual(gaps["GA_OVERFIT"]["status"], "BLOCKED_BY_HISTORY_FRESHNESS")
+            self.assertTrue(gaps["GA_OVERFIT"]["historyFreshnessBlocked"])
+            self.assertEqual(gaps["GA_OVERFIT"]["overfitSampleCount"], 0)
+            self.assertIn("不是可转写的 GA_OVERFIT", gaps["GA_OVERFIT"]["evidenceGapZh"])
+            self.assertIn("run_usdjpy_strategy_backtest.py", gaps["GA_OVERFIT"]["prerequisiteCommand"])
             queue = {row["category"]: row for row in hydrated["coveragePlan"]["nextCollectionQueue"]}
             self.assertEqual(
                 queue["MISSED_OPPORTUNITY"]["sourceGap"]["status"],
@@ -1085,6 +1150,8 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertIn("run_usdjpy_bar_replay.py", queue["EARLY_EXIT"]["collectionCommand"])
             self.assertIn("exit --write", queue["EARLY_EXIT"]["collectionCommand"])
             self.assertIn("run_usdjpy_bar_replay.py", queue["NEWS_DAMAGE"]["collectionCommand"])
+            self.assertEqual(queue["GA_OVERFIT"]["sourceGap"]["status"], "BLOCKED_BY_HISTORY_FRESHNESS")
+            self.assertIn("stale-history", queue["GA_OVERFIT"]["nextActionZh"])
             self.assertFalse(hydrated["safety"]["orderSendAllowed"])
 
 

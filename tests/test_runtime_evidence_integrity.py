@@ -540,6 +540,52 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                     ],
                 },
             )
+            write_json(
+                runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json",
+                {
+                    "schema": "quantgod.ga_multi_generation_stability.report.v1",
+                    "status": "PASS",
+                    "stabilityGrade": "PRODUCTION_READY",
+                    "closureMode": "ELITE_STABILITY",
+                    "promotionAllowed": True,
+                    "generationCount": 336,
+                    "candidateCount": 1005,
+                    "eliteCount": 2,
+                    "blockerCounts": {"HISTORY_PRODUCTION_NOT_READY": 1005},
+                    "safety": {
+                        "orderSendAllowed": False,
+                        "closeAllowed": False,
+                        "cancelAllowed": False,
+                        "livePresetMutationAllowed": False,
+                        "telegramCommandExecutionAllowed": False,
+                        "writesMt5OrderRequest": False,
+                    },
+                },
+            )
+            write_json(
+                runtime_dir / "ga" / "QuantGod_GABlockerSummary.json",
+                {
+                    "schema": "quantgod.ga.blockers.v1",
+                    "summary": [{"blockerCode": "HISTORY_PRODUCTION_NOT_READY", "count": 16}],
+                },
+            )
+            write_json(
+                runtime_dir / "ga_factory" / "QuantGod_GAStrategyGraveyard.json",
+                {
+                    "schema": "quantgod.strategy_ga_factory.strategy_graveyard.v1",
+                    "graveyardCount": 1,
+                    "strategies": [
+                        {
+                            "seedId": "GA-USDJPY-G0336-X0005",
+                            "strategyId": "USDJPY_RSI_REVERSAL_SHORT_EXPLORE_336_005",
+                            "generation": 336,
+                            "blockerCode": "HISTORY_PRODUCTION_NOT_READY",
+                            "status": "NEEDS_MORE_DATA",
+                            "directLiveAllowed": False,
+                        }
+                    ],
+                },
+            )
 
             manifest = build_core_evidence_manifest(runtime_dir)
             case_memory_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "caseMemoryArtifactManifest")
@@ -590,6 +636,12 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(rows_by_category["NEWS_DAMAGE"]["sourceGapStatus"], "WAITING_NEWS_DAMAGE_DELTA")
             self.assertIn("未发现普通新闻", rows_by_category["NEWS_DAMAGE"]["evidenceGapZh"])
             self.assertIn("build --write", rows_by_category["NEWS_DAMAGE"]["collectionCommand"])
+            self.assertEqual(rows_by_category["GA_OVERFIT"]["sourceGapStatus"], "BLOCKED_BY_HISTORY_FRESHNESS")
+            self.assertIn("不是可转写的 GA_OVERFIT", rows_by_category["GA_OVERFIT"]["evidenceGapZh"])
+            self.assertIn(
+                "run_usdjpy_strategy_backtest.py",
+                rows_by_category["GA_OVERFIT"]["prerequisiteCommand"],
+            )
             coverage_queue = {
                 row["category"]: row
                 for row in case_memory_row["promotionGate"]["coveragePlan"]["nextCollectionQueue"]
@@ -597,6 +649,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("0 个可评分", coverage_queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
             self.assertIn("profitR", coverage_queue["MISSED_OPPORTUNITY"]["nextActionZh"])
             self.assertIn("run_case_memory.py", coverage_queue["MISSED_OPPORTUNITY"]["caseMemoryBuildCommand"])
+            self.assertEqual(coverage_queue["GA_OVERFIT"]["sourceGap"]["status"], "BLOCKED_BY_HISTORY_FRESHNESS")
 
     def test_case_memory_ledger_summary_counts_historical_ga_overfit_samples(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
