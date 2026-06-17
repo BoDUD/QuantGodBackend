@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.run_runtime_evidence_integrity import build_summary
 from tools.runtime_evidence_integrity.report import build_core_evidence_manifest
 
 
@@ -393,6 +394,21 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("production-status", recovery_row["verifyCommand"])
             self.assertIn("freshnessOk=true", recovery_row["acceptanceZh"])
             self.assertIn("ORDER_SEND", recovery_row["forbiddenSideEffects"])
+
+            summary = build_summary(manifest, queue_limit=1, blocker_limit=1)
+
+            self.assertEqual(summary["schema"], "quantgod.core_runtime_evidence_summary.v1")
+            self.assertEqual(summary["status"], "PASS")
+            self.assertEqual(summary["promotionGateStatus"], "BLOCKED")
+            self.assertEqual(summary["promotionBlockerCount"], len(manifest["promotionBlockers"]))
+            self.assertEqual(summary["promotionBlockerOverflowCount"], len(manifest["promotionBlockers"]) - 1)
+            self.assertEqual(summary["promotionRecoveryQueueCount"], 1)
+            self.assertEqual(len(summary["promotionRecoveryQueue"]), 1)
+            self.assertEqual(summary["promotionRecoveryQueue"][0]["kind"], "history_freshness")
+            self.assertEqual(summary["promotionRecoveryQueue"][0]["timeframe"], "M1")
+            self.assertEqual(summary["promotionRecoveryQueue"][0]["copyRatesExportLatestLagHours"], 263.4)
+            self.assertIn("ORDER_SEND", summary["promotionRecoveryQueue"][0]["forbiddenSideEffects"])
+            self.assertNotIn("artifacts", summary)
 
     def test_missing_required_history_timeframe_blocks_promotion_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
