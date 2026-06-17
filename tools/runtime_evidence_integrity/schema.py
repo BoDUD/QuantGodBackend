@@ -90,6 +90,23 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "requiresHistoryPromotionGate": True,
     },
     {
+        "artifactId": "strategyParityReport",
+        "category": "strategy-parity",
+        "path": "parity/QuantGod_StrategyParityReport.json",
+        "contentType": "json",
+        "expectedSchemas": ["quantgod.strategy_parity_report.v1"],
+        "required": True,
+        "requiresParityPromotionGate": True,
+    },
+    {
+        "artifactId": "strategyParityLedger",
+        "category": "strategy-parity",
+        "path": "parity/QuantGod_StrategyParityLedger.csv",
+        "contentType": "csv",
+        "expectedSchemas": ["quantgod.strategy_parity_ledger.v1"],
+        "required": True,
+    },
+    {
         "artifactId": "executionFeedbackQualityReport",
         "category": "execution-feedback",
         "path": "execution/QuantGod_LiveExecutionQualityReport.json",

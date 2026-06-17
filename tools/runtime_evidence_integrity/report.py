@@ -403,6 +403,82 @@ def _case_memory_promotion_gate(runtime_dir: Path, manifest: Dict[str, Any]) -> 
     }
 
 
+def _parity_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
+    gate = payload.get("promotionGate") if isinstance(payload.get("promotionGate"), dict) else {}
+    blockers: List[str] = []
+    blocker_details: List[Dict[str, Any]] = []
+    report_status = str(payload.get("status") or "").upper()
+    gate_status = str(gate.get("status") or "").upper()
+
+    if report_status != "PARITY_PASS":
+        blockers.append(f"parity_status:{report_status or 'missing'}")
+    if gate_status != "PASS":
+        blockers.append(f"promotion_gate_status:{gate_status or 'missing'}")
+    if gate.get("promotionAllowed") is not True:
+        blockers.append("promotion_not_allowed")
+
+    for item in gate.get("blockers") if isinstance(gate.get("blockers"), list) else []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("code") or "parity_blocker")
+            blockers.append(name)
+            blocker_details.append(item)
+        else:
+            name = str(item)
+            blockers.append(name)
+            blocker_details.append({"name": name})
+
+    safety = payload.get("safety") if isinstance(payload.get("safety"), dict) else {}
+    for key in (
+        "orderSendAllowed",
+        "closeAllowed",
+        "cancelAllowed",
+        "livePresetMutationAllowed",
+        "telegramCommandExecutionAllowed",
+    ):
+        if safety.get(key) is not False:
+            blockers.append(f"safety_unlock:{key}")
+
+    seen: set[str] = set()
+    deduped_blockers: List[str] = []
+    for blocker in blockers:
+        if blocker in seen:
+            continue
+        seen.add(blocker)
+        deduped_blockers.append(blocker)
+
+    passed = not deduped_blockers
+    return {
+        "gateId": "strategy_parity_promotion_gate",
+        "requiredFor": ["ga_promotion", "champion_promotion"],
+        "requiredEvidence": [
+            "Strategy JSON",
+            "Python bar replay",
+            "MQL5 EA diagnostics",
+        ],
+        "passed": passed,
+        "status": "PASS" if passed else "BLOCKED",
+        "statusZh": (
+            "Strategy JSON / Python Replay / MQL5 EA parity 可用于晋级评审"
+            if passed
+            else "Strategy JSON / Python Replay / MQL5 EA parity 未通过，禁止晋级"
+        ),
+        "reportStatus": payload.get("status") or "",
+        "promotionAllowed": bool(gate.get("promotionAllowed")),
+        "blockers": deduped_blockers,
+        "blockerDetails": blocker_details,
+        "reasonZh": gate.get("reasonZh") or payload.get("reasonZh") or "",
+        "refreshCommand": "python3 tools/run_strategy_parity.py --runtime-dir ./runtime build --write",
+        "verifyCommand": "python3 tools/run_runtime_evidence_integrity.py --runtime-dir ./runtime verify",
+        "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+        "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+        "nextActionZh": (
+            "parity 已通过；保持 Strategy JSON、Python replay、MQL5 EA diagnostics 同步。"
+            if passed
+            else "先刷新 Strategy JSON backtest、bar replay 与 MQL5 EA diagnostics，再运行 strategy parity；只允许 shadow/tester/read-only 证据。"
+        ),
+    }
+
+
 def _relative_path(root: Path, path: Path) -> str:
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
@@ -473,6 +549,8 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
         if spec.get("requiresHistoryPromotionGate") and content_type == "json"
         else None
     )
+    if spec.get("requiresParityPromotionGate") and content_type == "json":
+        promotion_gate = _parity_promotion_gate(payload)
     if spec.get("requiresCaseMemoryPromotionGate") and content_type == "json":
         promotion_gate = _case_memory_promotion_gate(runtime_dir, payload)
 
@@ -539,6 +617,38 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
                     }
                 )
+            continue
+
+        if artifact_id == "strategyParityReport":
+            queue.append(
+                {
+                    "kind": "strategy_parity",
+                    "artifactId": artifact_id,
+                    "artifactPath": row.get("path"),
+                    "gateId": gate.get("gateId"),
+                    "status": gate.get("status"),
+                    "priority": "HIGH",
+                    "reportStatus": gate.get("reportStatus"),
+                    "promotionAllowed": gate.get("promotionAllowed"),
+                    "blockers": list(gate.get("blockers", []))
+                    if isinstance(gate.get("blockers"), list)
+                    else [],
+                    "blockerDetails": list(gate.get("blockerDetails", []))
+                    if isinstance(gate.get("blockerDetails"), list)
+                    else [],
+                    "sourceArtifacts": [
+                        "backtest/QuantGod_StrategyBacktestReport.json",
+                        "replay/usdjpy/QuantGod_USDJPYBarReplayReport.json",
+                        "QuantGod_USDJPYRsiEntryDiagnostics.json",
+                    ],
+                    "refreshCommand": gate.get("refreshCommand"),
+                    "verifyCommand": gate.get("verifyCommand"),
+                    "nextActionZh": gate.get("nextActionZh"),
+                    "acceptanceZh": "promotionGate.status=PASS、promotionAllowed=true、status=PARITY_PASS，且 safety 执行开关保持 false。",
+                    "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+                    "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+                }
+            )
             continue
 
         if artifact_id == "caseMemoryArtifactManifest":

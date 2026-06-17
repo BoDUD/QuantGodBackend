@@ -61,6 +61,32 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         },
     )
     write_json(
+        runtime_dir / "parity" / "QuantGod_StrategyParityReport.json",
+        {
+            "schema": "quantgod.strategy_parity_report.v1",
+            "status": "PARITY_PASS",
+            "promotionGate": {
+                "schema": "quantgod.strategy_parity_promotion_gate.v1",
+                "status": "PASS",
+                "promotionAllowed": True,
+                "blockers": [],
+                "reasonZh": "Strategy JSON / Python Replay / MQL5 EA 关键口径一致。",
+            },
+            "safety": {
+                "orderSendAllowed": False,
+                "closeAllowed": False,
+                "cancelAllowed": False,
+                "livePresetMutationAllowed": False,
+                "telegramCommandExecutionAllowed": False,
+            },
+        },
+    )
+    write_text(
+        runtime_dir / "parity" / "QuantGod_StrategyParityLedger.csv",
+        "createdAt,symbol,parityStatus,promotionGateStatus\n"
+        "2026-06-01T00:00:00Z,USDJPYc,PARITY_PASS,PASS\n",
+    )
+    write_json(
         runtime_dir / "execution" / "QuantGod_LiveExecutionQualityReport.json",
         {"schema": "quantgod.live_execution_quality_report.v1", "sampleCount": 1},
     )
@@ -145,8 +171,11 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionRecoveryQueue"], [])
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
-            self.assertEqual(manifest["artifactCount"], 11)
+            self.assertEqual(manifest["artifactCount"], 13)
             self.assertIn("historyProductionStatus", {row["artifactId"] for row in manifest["artifacts"]})
+            parity_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "strategyParityReport")
+            self.assertEqual(parity_row["promotionGate"]["status"], "PASS")
+            self.assertEqual(parity_row["promotionGate"]["reportStatus"], "PARITY_PASS")
             case_memory_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "caseMemoryArtifactManifest")
             self.assertEqual(case_memory_row["promotionGate"]["status"], "PASS")
             self.assertEqual(case_memory_row["promotionGate"]["missingCategories"], [])
@@ -295,6 +324,58 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("historyProductionStatus:H1:span_not_ok", manifest["promotionBlockers"])
             self.assertIn("historyProductionStatus:H1:density_not_ok", manifest["promotionBlockers"])
             self.assertIn("historyProductionStatus:H1:freshness_not_ok", manifest["promotionBlockers"])
+
+    def test_parity_failure_blocks_promotion_gate_without_failing_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "parity" / "QuantGod_StrategyParityReport.json",
+                {
+                    "schema": "quantgod.strategy_parity_report.v1",
+                    "status": "PARITY_FAIL",
+                    "promotionGate": {
+                        "schema": "quantgod.strategy_parity_promotion_gate.v1",
+                        "status": "BLOCKED",
+                        "promotionAllowed": False,
+                        "blockers": [
+                            {
+                                "name": "strategy_json_python_replay_mql5_gate_matrix",
+                                "status": "FAIL",
+                                "reasonZh": "MQL5 EA diagnostics 与 Python replay 不一致。",
+                            }
+                        ],
+                    },
+                    "safety": {
+                        "orderSendAllowed": False,
+                        "closeAllowed": False,
+                        "cancelAllowed": False,
+                        "livePresetMutationAllowed": False,
+                        "telegramCommandExecutionAllowed": False,
+                    },
+                },
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+            parity_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "strategyParityReport")
+            parity_recovery = next(row for row in manifest["promotionRecoveryQueue"] if row["kind"] == "strategy_parity")
+
+            self.assertEqual(manifest["status"], "PASS")
+            self.assertTrue(manifest["ok"])
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertEqual(parity_row["status"], "PASS")
+            self.assertEqual(parity_row["promotionGate"]["status"], "BLOCKED")
+            self.assertIn(
+                "strategyParityReport:parity_status:PARITY_FAIL",
+                manifest["promotionBlockers"],
+            )
+            self.assertIn(
+                "strategyParityReport:strategy_json_python_replay_mql5_gate_matrix",
+                manifest["promotionBlockers"],
+            )
+            self.assertEqual(parity_recovery["priority"], "HIGH")
+            self.assertIn("run_strategy_parity.py", parity_recovery["refreshCommand"])
+            self.assertIn("ORDER_SEND", parity_recovery["forbiddenSideEffects"])
 
     def test_case_memory_missing_taxonomy_blocks_promotion_gate_without_failing_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
