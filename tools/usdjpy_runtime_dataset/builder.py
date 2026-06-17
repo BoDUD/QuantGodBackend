@@ -34,6 +34,7 @@ from .schema import FOCUS_SYMBOL, READ_ONLY_SAFETY, SCHEMA_DATASET, utc_now_iso
 
 HISTORY_PRODUCTION_STATUS_FILE = "QuantGod_USDJPYHistoryProductionStatus.json"
 HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
+DEFAULT_REPLAY_RISK_PIPS = 10.0
 
 
 def _pick(row: Dict[str, Any], *keys: str, default: Any = "") -> Any:
@@ -55,49 +56,179 @@ def _is_usdjpy_row(row: Dict[str, Any]) -> bool:
     return is_focus_symbol(_symbol(row)) or "USDJPY" in json.dumps(row, ensure_ascii=False).upper()
 
 
+def _pip_size(symbol: str) -> float:
+    normalized = str(symbol or "").upper()
+    return 0.01 if "JPY" in normalized else 0.0001
+
+
+def _round(value: float | None, digits: int = 4) -> float | None:
+    return round(value, digits) if value is not None else None
+
+
+def _price_move_pips(row: Dict[str, Any], direction: str, symbol: str) -> float | None:
+    open_price = to_float(_pick(row, "OpenPrice", "openPrice", "entryPrice", "EntryPrice"), None)
+    close_price = to_float(_pick(row, "ClosePrice", "closePrice", "exitPrice", "ExitPrice", "FutureClose"), None)
+    if open_price is None or close_price is None:
+        return None
+    move = (close_price - open_price) / _pip_size(symbol)
+    if direction == "SHORT":
+        move = -move
+    return _round(move, 4)
+
+
+def _directional_pips(row: Dict[str, Any], direction: str, symbol: str) -> float | None:
+    generic = to_float(
+        _pick(
+            row,
+            "pips",
+            "profitPips",
+            "pnlPips",
+            "outcomePips",
+            "DirectionalOutcomePips",
+            "DirectionalOutcome",
+            default="",
+        ),
+        None,
+    )
+    if generic is not None:
+        return generic
+    if direction == "SHORT":
+        value = to_float(_pick(row, "ShortClosePips", "shortClosePips", default=""), None)
+        if value is not None:
+            return value
+    else:
+        value = to_float(_pick(row, "LongClosePips", "longClosePips", default=""), None)
+        if value is not None:
+            return value
+    return _price_move_pips(row, direction, symbol)
+
+
+def _directional_excursion_pips(row: Dict[str, Any], direction: str, kind: str) -> float | None:
+    if kind == "mfe":
+        generic_keys = ("mfePips", "maxFavorablePips", "MfePips")
+        direction_keys = ("ShortMFEPips", "shortMFEPips") if direction == "SHORT" else ("LongMFEPips", "longMFEPips")
+    else:
+        generic_keys = ("maePips", "maxAdversePips", "MaePips")
+        direction_keys = ("ShortMAEPips", "shortMAEPips") if direction == "SHORT" else ("LongMAEPips", "longMAEPips")
+    value = to_float(_pick(row, *generic_keys, default=""), None)
+    if value is not None:
+        return abs(value)
+    value = to_float(_pick(row, *direction_keys, default=""), None)
+    return abs(value) if value is not None else None
+
+
+def _risk_pips(row: Dict[str, Any], mae_pips: float | None) -> float | None:
+    risk = to_float(_pick(row, "riskPips", "initialRiskPips", "slPips", "RiskPips"), None)
+    if risk is not None and risk > 0:
+        return risk
+    if mae_pips is not None and mae_pips > 0:
+        return max(DEFAULT_REPLAY_RISK_PIPS, abs(mae_pips))
+    return DEFAULT_REPLAY_RISK_PIPS
+
+
+def _r_from_pips(pips: float | None, risk_pips: float | None) -> float | None:
+    if pips is None or risk_pips is None or risk_pips <= 0:
+        return None
+    return _round(pips / risk_pips, 4)
+
+
+def _posterior_window(row: Dict[str, Any]) -> str:
+    minutes = to_float(_pick(row, "HorizonMinutes", "horizonMinutes", "horizonMins", default=""), None)
+    if minutes is None:
+        bars = to_float(_pick(row, "HorizonBars", "horizonBars", default=""), None)
+        timeframe = str(_pick(row, "Timeframe", "timeframe", default="")).upper()
+        if bars is not None and timeframe.startswith("M"):
+            minutes = bars * to_float(timeframe[1:], 1.0)
+    if minutes is None:
+        return "60m"
+    if minutes <= 15:
+        return "15m"
+    if minutes <= 30:
+        return "30m"
+    if minutes <= 60:
+        return "60m"
+    return "120m"
+
+
+def _posterior_maps(row: Dict[str, Any], source: str, profit_pips: float | None, risk_pips: float | None) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    posterior_pips = {
+        "15m": to_float(_pick(row, "pipsAfter15", "futurePips15", "posteriorPips15", "post15Pips"), None),
+        "30m": to_float(_pick(row, "pipsAfter30", "futurePips30", "posteriorPips30", "post30Pips"), None),
+        "60m": to_float(_pick(row, "pipsAfter60", "futurePips60", "posteriorPips60", "post60Pips"), None),
+        "120m": to_float(_pick(row, "pipsAfter120", "futurePips120", "posteriorPips120", "post120Pips"), None),
+    }
+    posterior_r = {
+        "15m": to_float(_pick(row, "rAfter15", "futureR15", "posteriorR15", "post15R"), None),
+        "30m": to_float(_pick(row, "rAfter30", "futureR30", "posteriorR30", "post30R"), None),
+        "60m": to_float(_pick(row, "rAfter60", "futureR60", "posteriorR60", "post60R"), None),
+        "120m": to_float(_pick(row, "rAfter120", "futureR120", "posteriorR120", "post120R"), None),
+    }
+    if source == "shadow_outcomes" and profit_pips is not None:
+        window = _posterior_window(row)
+        if posterior_pips.get(window) is None:
+            posterior_pips[window] = profit_pips
+        if posterior_r.get(window) is None:
+            posterior_r[window] = _r_from_pips(profit_pips, risk_pips)
+    return posterior_pips, posterior_r
+
+
 def _sample_from_csv(row: Dict[str, Any], source: str) -> Dict[str, Any]:
-    direction = to_direction(_pick(row, "direction", "side", "type", "orderType", "方向"))
-    profit = to_float(_pick(row, "profit", "netUSC", "pnl", "profitUSC", "NetUSC", "净值"), 0.0)
+    symbol = _symbol(row)
+    direction = to_direction(_pick(row, "direction", "side", "type", "orderType", "CandidateDirection", "方向"))
+    profit = to_float(_pick(row, "profit", "netUSC", "pnl", "profitUSC", "NetUSC", "NetProfit", "净值"), 0.0)
+    profit_pips = _directional_pips(row, direction, symbol)
+    mfe_pips = _directional_excursion_pips(row, direction, "mfe")
+    mae_pips = _directional_excursion_pips(row, direction, "mae")
+    risk_pips = _risk_pips(row, mae_pips)
     profit_r = to_float(_pick(row, "profitR", "rMultiple", "r", "signedR", "ProfitR"), None)
-    risk_pips = to_float(_pick(row, "riskPips", "initialRiskPips", "slPips", "RiskPips"), None)
+    if profit_r is None and source != "shadow_outcomes":
+        profit_r = _r_from_pips(profit_pips, risk_pips)
     mfe_r = to_float(_pick(row, "mfeR", "MFER", "mfe", "maxFavorableR"), None)
+    if mfe_r is None:
+        mfe_r = _r_from_pips(mfe_pips, risk_pips)
     mae_r = to_float(_pick(row, "maeR", "MAER", "mae", "maxAdverseR"), None)
-    mfe_pips = to_float(_pick(row, "mfePips", "maxFavorablePips", "MfePips"), None)
-    mae_pips = to_float(_pick(row, "maePips", "maxAdversePips", "MaePips"), None)
+    if mae_r is None and mae_pips is not None:
+        mae_r = -abs(_r_from_pips(mae_pips, risk_pips) or 0.0)
     blocker = str(_pick(row, "blocker", "blockReason", "reason", "status", "event", "label", "说明", default="")).strip()
     entered = str(_pick(row, "didEnter", "entered", "event", "type", default="")).upper() in {"1", "TRUE", "ENTRY", "OPEN"}
     if source == "close_history":
         entered = True
-    ready = "READY" in blocker.upper() or str(_pick(row, "readyBuySignal", "rsiBuySignal", default="")).lower() == "true"
+    ready = (
+        "READY" in blocker.upper()
+        or str(_pick(row, "readyBuySignal", "rsiBuySignal", default="")).lower() == "true"
+        or source == "shadow_outcomes"
+    )
+    posterior_pips, posterior_r = _posterior_maps(row, source, profit_pips, risk_pips)
     return {
         "source": source,
-        "timestamp": _pick(row, "timestamp", "time", "Time", "closeTime", "openTime", "generatedAtIso"),
+        "timestamp": _pick(
+            row,
+            "timestamp",
+            "time",
+            "Time",
+            "closeTime",
+            "openTime",
+            "generatedAtIso",
+            "OutcomeLabelTimeServer",
+            "EventBarTime",
+        ),
         "symbol": FOCUS_SYMBOL,
-        "strategy": normalize_strategy_name(_pick(row, "strategy", "route", "routeKey", "strategyName", default="UNKNOWN")),
+        "strategy": normalize_strategy_name(_pick(row, "strategy", "route", "routeKey", "strategyName", "CandidateRoute", default="UNKNOWN")),
         "direction": direction,
-        "status": _pick(row, "status", "state", "event", "label"),
+        "status": _pick(row, "status", "state", "event", "label", "OutcomeReason", default="SHADOW_CANDIDATE_SIGNAL" if source == "shadow_outcomes" else ""),
         "blockReason": blocker,
         "didEnter": bool(entered),
         "wouldEnter": bool(ready or "WOULD" in blocker.upper()),
         "profitUSC": profit,
+        "profitPips": profit_pips,
         "profitR": profit_r,
         "riskPips": risk_pips,
         "mfeR": mfe_r,
         "maeR": mae_r,
         "mfePips": mfe_pips,
         "maePips": mae_pips,
-        "posteriorPips": {
-            "15m": to_float(_pick(row, "pipsAfter15", "futurePips15", "posteriorPips15", "post15Pips"), None),
-            "30m": to_float(_pick(row, "pipsAfter30", "futurePips30", "posteriorPips30", "post30Pips"), None),
-            "60m": to_float(_pick(row, "pipsAfter60", "futurePips60", "posteriorPips60", "post60Pips"), None),
-            "120m": to_float(_pick(row, "pipsAfter120", "futurePips120", "posteriorPips120", "post120Pips"), None),
-        },
-        "posteriorR": {
-            "15m": to_float(_pick(row, "rAfter15", "futureR15", "posteriorR15", "post15R"), None),
-            "30m": to_float(_pick(row, "rAfter30", "futureR30", "posteriorR30", "post30R"), None),
-            "60m": to_float(_pick(row, "rAfter60", "futureR60", "posteriorR60", "post60R"), None),
-            "120m": to_float(_pick(row, "rAfter120", "futureR120", "posteriorR120", "post120R"), None),
-        },
+        "posteriorPips": posterior_pips,
+        "posteriorR": posterior_r,
         "exitReason": _pick(row, "exitReason", "closeReason", "reason"),
         "raw": row,
     }

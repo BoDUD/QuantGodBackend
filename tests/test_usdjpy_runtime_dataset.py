@@ -10,6 +10,7 @@ from tools.usdjpy_runtime_dataset.builder import build_runtime_dataset
 from tools.usdjpy_runtime_dataset.config_proposal import build_live_config_proposal
 from tools.usdjpy_runtime_dataset.param_tuner import build_param_tuning_report
 from tools.usdjpy_runtime_dataset.replay import build_replay_report
+from tools.usdjpy_bar_replay.replay_engine import build_entry_comparison
 
 
 class USDJPYRuntimeDatasetTests(unittest.TestCase):
@@ -165,6 +166,93 @@ class USDJPYRuntimeDatasetTests(unittest.TestCase):
             self.assertFalse(dataset["summary"]["historyFreshnessPass"])
             self.assertEqual(dataset["summary"]["historyStaleTimeframes"], ["M1", "M5", "M15", "H1"])
             self.assertIn("history_freshness_lag_exceeded", dataset["latest"]["historyFreshnessGate"]["blockers"])
+
+    def test_derives_replay_r_units_from_hfm_csv_price_and_shadow_pips(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            with (runtime / "QuantGod_CloseHistory.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "ExitTicket",
+                        "Type",
+                        "Symbol",
+                        "OpenTime",
+                        "CloseTime",
+                        "OpenPrice",
+                        "ClosePrice",
+                        "NetProfit",
+                        "Strategy",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "ExitTicket": "700000001",
+                        "Type": "BUY",
+                        "Symbol": "USDJPYc",
+                        "OpenTime": "2026.06.01 00:00",
+                        "CloseTime": "2026.06.01 01:30",
+                        "OpenPrice": "159.95",
+                        "ClosePrice": "160.12",
+                        "NetProfit": "0.15",
+                        "Strategy": "RSI_Reversal",
+                    }
+                )
+            with (runtime / "QuantGod_ShadowCandidateOutcomeLedger.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "EventId",
+                        "Symbol",
+                        "CandidateRoute",
+                        "Timeframe",
+                        "CandidateDirection",
+                        "CandidateScore",
+                        "Regime",
+                        "DirectionalOutcomePips",
+                        "LongMFEPips",
+                        "LongMAEPips",
+                        "ShortMFEPips",
+                        "ShortMAEPips",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "EventId": "SIG-RSI-1",
+                        "Symbol": "USDJPYc",
+                        "CandidateRoute": "RSI_Reversal",
+                        "Timeframe": "M15",
+                        "CandidateDirection": "LONG",
+                        "CandidateScore": "85",
+                        "Regime": "BEAR_STRETCH",
+                        "DirectionalOutcomePips": "3.2",
+                        "LongMFEPips": "6.4",
+                        "LongMAEPips": "1.8",
+                        "ShortMFEPips": "0",
+                        "ShortMAEPips": "0",
+                    }
+                )
+
+            dataset = build_runtime_dataset(runtime, write=True)
+            entry = build_entry_comparison(runtime, write=False)
+
+            close_sample = next(item for item in dataset["samples"] if item["source"] == "close_history")
+            shadow_sample = next(item for item in dataset["samples"] if item["source"] == "shadow_outcomes")
+
+            self.assertEqual(close_sample["riskPips"], 10.0)
+            self.assertEqual(close_sample["profitPips"], 17.0)
+            self.assertEqual(close_sample["profitR"], 1.7)
+            self.assertEqual(shadow_sample["riskPips"], 10.0)
+            self.assertTrue(shadow_sample["wouldEnter"])
+            self.assertEqual(shadow_sample["posteriorPips"]["60m"], 3.2)
+            self.assertEqual(shadow_sample["posteriorR"]["60m"], 0.32)
+            self.assertEqual(shadow_sample["mfeR"], 0.64)
+            self.assertEqual(shadow_sample["maeR"], -0.18)
+            self.assertEqual(entry["inputCoverage"]["actualProfitRReadyCount"], 1)
+            self.assertEqual(entry["inputCoverage"]["posteriorReadyCount"], 1)
+            self.assertEqual(entry["inputCoverage"]["entryScoreReadyCount"], 2)
 
 
 if __name__ == "__main__":
