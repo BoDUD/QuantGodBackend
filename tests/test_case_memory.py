@@ -999,6 +999,18 @@ class CaseMemoryCandidateTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema": "quantgod.usdjpy_entry_variant_comparison.v1",
+                        "inputCoverage": {
+                            "schema": "quantgod.usdjpy_bar_replay_input_coverage.v1",
+                            "sampleCount": 32,
+                            "entryScoreReadyCount": 0,
+                            "missingEntryScoreCount": 32,
+                            "actualProfitRReadyCount": 0,
+                            "posteriorReadyCount": 0,
+                            "requiredOutcomeFields": [
+                                "didEnter=true rows need profitR/rMultiple/signedR",
+                                "missed-entry rows need posteriorR15/30/60/120 or posteriorPips15/30/60/120 plus riskPips",
+                            ],
+                        },
                         "variants": [
                             {
                                 "name": "relaxed_entry_v1",
@@ -1050,7 +1062,9 @@ class CaseMemoryCandidateTests(unittest.TestCase):
 
             gaps = hydrated["sourceEvidenceGaps"]
             self.assertEqual(gaps["MISSED_OPPORTUNITY"]["status"], "BLOCKED_BY_REPLAY_SCORING_GAP")
-            self.assertIn("缺少 scored posterior R", gaps["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("0 个可评分", gaps["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertEqual(gaps["MISSED_OPPORTUNITY"]["inputCoverage"]["missingEntryScoreCount"], 32)
+            self.assertIn("posteriorR15/30/60/120", " ".join(gaps["MISSED_OPPORTUNITY"]["requiredOutcomeFields"]))
             self.assertEqual(gaps["EARLY_EXIT"]["status"], "WAITING_EXIT_REPLAY_SAMPLES")
             self.assertIn("0 样本", gaps["EARLY_EXIT"]["evidenceGapZh"])
             self.assertEqual(gaps["NEWS_DAMAGE"]["status"], "WAITING_NEWS_DAMAGE_DELTA")
@@ -1060,7 +1074,10 @@ class CaseMemoryCandidateTests(unittest.TestCase):
                 queue["MISSED_OPPORTUNITY"]["sourceGap"]["status"],
                 "BLOCKED_BY_REPLAY_SCORING_GAP",
             )
-            self.assertIn("scored posterior", queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("0 个可评分", queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("run_usdjpy_runtime_dataset.py", queue["MISSED_OPPORTUNITY"]["prerequisiteCommand"])
+            self.assertIn("posteriorR15/30/60/120", " ".join(queue["MISSED_OPPORTUNITY"]["requiredOutcomeFields"]))
+            self.assertIn("profitR", queue["MISSED_OPPORTUNITY"]["nextActionZh"])
             self.assertIn("run_usdjpy_bar_replay.py", queue["MISSED_OPPORTUNITY"]["collectionCommand"])
             self.assertIn("entry --write", queue["MISSED_OPPORTUNITY"]["collectionCommand"])
             self.assertIn("run_case_memory.py", queue["MISSED_OPPORTUNITY"]["caseMemoryBuildCommand"])

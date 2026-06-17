@@ -10,7 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - CLI entrypoint runs from tools
     from usdjpy_runtime_dataset.builder import build_runtime_dataset
     from usdjpy_strategy_lab.data_loader import first_json, to_float
 
-from .schema import FOCUS_SYMBOL
+from .schema import FOCUS_SYMBOL, POSTERIOR_WINDOWS
 
 
 def _load_dataset_payload(runtime_dir: Path) -> Dict[str, Any]:
@@ -33,6 +33,65 @@ def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().upper() in {"1", "TRUE", "YES", "Y", "READY", "PASS", "OK"}
+
+
+def _posterior_ready(sample: Dict[str, Any]) -> bool:
+    posterior_r = sample.get("posteriorR") if isinstance(sample.get("posteriorR"), dict) else {}
+    posterior_pips = sample.get("posteriorPips") if isinstance(sample.get("posteriorPips"), dict) else {}
+    if any(_maybe_float(posterior_r.get(window)) is not None for window in POSTERIOR_WINDOWS):
+        return True
+    risk_pips = _maybe_float(sample.get("riskPips"))
+    if not risk_pips or risk_pips <= 0:
+        return False
+    return any(_maybe_float(posterior_pips.get(window)) is not None for window in POSTERIOR_WINDOWS)
+
+
+def summarize_input_coverage(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+    source_counts: Dict[str, int] = {}
+    posterior_ready = 0
+    actual_profit_r_ready = 0
+    entry_score_ready = 0
+    did_enter_count = 0
+    would_enter_count = 0
+    risk_pips_ready = 0
+    for sample in samples:
+        source = str(sample.get("source") or "unknown")
+        source_counts[source] = source_counts.get(source, 0) + 1
+        did_enter = bool(sample.get("didEnter"))
+        if did_enter:
+            did_enter_count += 1
+        if sample.get("wouldEnter"):
+            would_enter_count += 1
+        if _maybe_float(sample.get("riskPips")) is not None:
+            risk_pips_ready += 1
+        has_profit_r = _maybe_float(sample.get("profitR")) is not None
+        if has_profit_r:
+            actual_profit_r_ready += 1
+        has_posterior = _posterior_ready(sample)
+        if has_posterior:
+            posterior_ready += 1
+        if (did_enter and has_profit_r) or (not did_enter and has_posterior):
+            entry_score_ready += 1
+    return {
+        "schema": "quantgod.usdjpy_bar_replay_input_coverage.v1",
+        "sampleCount": len(samples),
+        "sourceCounts": source_counts,
+        "didEnterCount": did_enter_count,
+        "wouldEnterCount": would_enter_count,
+        "riskPipsReadyCount": risk_pips_ready,
+        "actualProfitRReadyCount": actual_profit_r_ready,
+        "posteriorReadyCount": posterior_ready,
+        "entryScoreReadyCount": entry_score_ready,
+        "missingEntryScoreCount": max(0, len(samples) - entry_score_ready),
+        "requiredOutcomeFields": [
+            "didEnter=true rows need profitR/rMultiple/signedR",
+            "missed-entry rows need posteriorR15/30/60/120 or posteriorPips15/30/60/120 plus riskPips",
+        ],
+        "nextActionZh": (
+            "补齐已入场样本的 profitR，或补齐错失入场样本的 posteriorR/posteriorPips+riskPips；"
+            "再重建 runtime dataset 与 entry replay。"
+        ),
+    }
 
 
 def load_replay_samples(runtime_dir: Path) -> List[Dict[str, Any]]:
@@ -116,4 +175,3 @@ def sample_runtime(runtime_dir: Path, overwrite: bool = False) -> Dict[str, Any]
             "exitReason": "breakeven_or_trailing",
         })
     return {"ok": True, "path": str(out), "closeHistory": str(close)}
-

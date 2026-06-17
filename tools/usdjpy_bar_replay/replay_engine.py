@@ -10,7 +10,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     from usdjpy_strategy_lab.data_loader import _write_json
 
-from .dataset_loader import load_replay_samples
+from .dataset_loader import load_replay_samples, summarize_input_coverage
 from .entry_variants import build_entry_events
 from .exit_variants import build_exit_events
 from .metrics import summarize_events
@@ -37,6 +37,7 @@ def _out_dir(runtime_dir: Path) -> Path:
 
 def build_entry_comparison(runtime_dir: Path, write: bool = False) -> Dict[str, Any]:
     samples = load_replay_samples(runtime_dir)
+    input_coverage = summarize_input_coverage(samples)
     current_events = build_entry_events(samples, VARIANT_CURRENT)
     relaxed_events = build_entry_events(samples, VARIANT_RELAXED_ENTRY)
     current_metrics = summarize_events(current_events)
@@ -53,6 +54,7 @@ def build_entry_comparison(runtime_dir: Path, write: bool = False) -> Dict[str, 
             "hardGatesNeverRelaxed": ["runtime", "fastlane", "highImpactNews", "spread", "session", "cooldown", "startup", "capacity"],
             "ordinaryNewsBlocksLive": False,
         },
+        "inputCoverage": input_coverage,
         "variants": [
             {"name": VARIANT_CURRENT, "labelZh": "当前规则", "metrics": current_metrics},
             {"name": VARIANT_RELAXED_ENTRY, "labelZh": "放宽 RSI 一档", "metrics": relaxed_metrics},
@@ -131,6 +133,7 @@ def build_bar_replay_report(runtime_dir: Path, write: bool = False) -> Dict[str,
         },
         "summary": {
             "sampleCount": len(samples),
+            "inputCoverage": entry.get("inputCoverage") or {},
             "currentEntryCount": entry_current.get("sampleCount", 0),
             "relaxedEntryCount": entry_relaxed.get("sampleCount", 0),
             "entryCountDelta": entry_relaxed.get("entryCountDelta", 0),

@@ -315,6 +315,18 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYEntryVariantComparison.json",
                 {
                     "schema": "quantgod.usdjpy_entry_variant_comparison.v1",
+                    "inputCoverage": {
+                        "schema": "quantgod.usdjpy_bar_replay_input_coverage.v1",
+                        "sampleCount": 32,
+                        "entryScoreReadyCount": 0,
+                        "missingEntryScoreCount": 32,
+                        "actualProfitRReadyCount": 0,
+                        "posteriorReadyCount": 0,
+                        "requiredOutcomeFields": [
+                            "didEnter=true rows need profitR/rMultiple/signedR",
+                            "missed-entry rows need posteriorR15/30/60/120 or posteriorPips15/30/60/120 plus riskPips",
+                        ],
+                    },
                     "variants": [
                         {
                             "name": "relaxed_entry_v1",
@@ -381,7 +393,15 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 rows_by_category["MISSED_OPPORTUNITY"]["sourceGapStatus"],
                 "BLOCKED_BY_REPLAY_SCORING_GAP",
             )
-            self.assertIn("scored posterior R", rows_by_category["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("0 个可评分", rows_by_category["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn(
+                "run_usdjpy_runtime_dataset.py",
+                rows_by_category["MISSED_OPPORTUNITY"]["prerequisiteCommand"],
+            )
+            self.assertIn(
+                "posteriorR15/30/60/120",
+                " ".join(rows_by_category["MISSED_OPPORTUNITY"]["requiredOutcomeFields"]),
+            )
             self.assertIn("run_usdjpy_bar_replay.py", rows_by_category["MISSED_OPPORTUNITY"]["collectionCommand"])
             self.assertIn("entry --write", rows_by_category["MISSED_OPPORTUNITY"]["collectionCommand"])
             self.assertEqual(
@@ -398,7 +418,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 row["category"]: row
                 for row in case_memory_row["promotionGate"]["coveragePlan"]["nextCollectionQueue"]
             }
-            self.assertIn("scored posterior", coverage_queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("0 个可评分", coverage_queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("profitR", coverage_queue["MISSED_OPPORTUNITY"]["nextActionZh"])
             self.assertIn("run_case_memory.py", coverage_queue["MISSED_OPPORTUNITY"]["caseMemoryBuildCommand"])
 
     def test_case_memory_ledger_summary_counts_historical_ga_overfit_samples(self) -> None:

@@ -607,6 +607,11 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                             collection_row.get("collectionCommand")
                             or guidance.get("collectionCommand")
                         ),
+                        "prerequisiteCommand": (
+                            collection_row.get("prerequisiteCommand")
+                            or source_gap.get("prerequisiteCommand")
+                            or ""
+                        ),
                         "caseMemoryBuildCommand": (
                             collection_row.get("caseMemoryBuildCommand")
                             or guidance.get("caseMemoryBuildCommand")
@@ -619,9 +624,18 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "sourceGapStatus": source_gap.get("status") or "",
                         "sourceGapArtifact": source_gap.get("sourceArtifact") or "",
                         "evidenceGapZh": evidence_gap,
-                        "nextActionZh": guidance.get(
-                            "nextActionZh",
-                            f"补齐 Case Memory {category_key} 样本；只允许 shadow/tester/read-only 证据。",
+                        "requiredOutcomeFields": (
+                            list(source_gap.get("requiredOutcomeFields"))
+                            if isinstance(source_gap.get("requiredOutcomeFields"), list)
+                            else []
+                        ),
+                        "nextActionZh": (
+                            collection_row.get("nextActionZh")
+                            or source_gap.get("nextActionZh")
+                            or guidance.get(
+                                "nextActionZh",
+                                f"补齐 Case Memory {category_key} 样本；只允许 shadow/tester/read-only 证据。",
+                            )
                         ),
                         "acceptanceZh": guidance.get(
                             "acceptanceZh",

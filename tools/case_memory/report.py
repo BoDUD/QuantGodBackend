@@ -130,6 +130,33 @@ def _replay_variant_metrics(path: Path) -> list[Dict[str, Any]]:
     return rows
 
 
+def _entry_input_coverage(path: Path) -> Dict[str, Any]:
+    payload = load_json(path)
+    coverage = payload.get("inputCoverage") if isinstance(payload.get("inputCoverage"), dict) else {}
+    if coverage:
+        return coverage
+    events = payload.get("events") if isinstance(payload.get("events"), dict) else {}
+    rows: list[Dict[str, Any]] = []
+    for event_rows in events.values():
+        if isinstance(event_rows, list):
+            rows.extend(row for row in event_rows if isinstance(row, dict))
+    if not rows:
+        return {}
+    scored = sum(1 for row in rows if row.get("scoreR") is not None)
+    posterior_ready = sum(1 for row in rows if row.get("posteriorWindowsAvailable"))
+    return {
+        "schema": "quantgod.usdjpy_bar_replay_input_coverage.v1",
+        "sampleCount": len(rows),
+        "entryScoreReadyCount": scored,
+        "posteriorReadyCount": posterior_ready,
+        "missingEntryScoreCount": max(0, len(rows) - scored),
+        "requiredOutcomeFields": [
+            "didEnter=true rows need profitR/rMultiple/signedR",
+            "missed-entry rows need posteriorR15/30/60/120 or posteriorPips15/30/60/120 plus riskPips",
+        ],
+    }
+
+
 def _num(value: Any, fallback: float = 0.0) -> float:
     try:
         return float(value)
@@ -142,6 +169,7 @@ def _case_memory_source_gaps(runtime_dir: Path) -> Dict[str, Any]:
     exit_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYExitVariantComparison.json"
     news_path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYNewsGateReplayReport.json"
     entry_variants = _replay_variant_metrics(entry_path)
+    entry_input_coverage = _entry_input_coverage(entry_path)
     exit_variants = _replay_variant_metrics(exit_path)
     news_variants = _replay_variant_metrics(news_path)
 
@@ -161,8 +189,13 @@ def _case_memory_source_gaps(runtime_dir: Path) -> Dict[str, Any]:
     news_soft_r = max((_num(row.get("softNewsOpportunityR")) for row in news_variants), default=0.0)
     news_adverse = min((_num(row.get("maxAdverseRDelta")) for row in news_variants), default=0.0)
 
+    input_missing_count = int(_num(entry_input_coverage.get("missingEntryScoreCount"), entry_unresolved_count))
+    entry_score_ready_count = int(_num(entry_input_coverage.get("entryScoreReadyCount"), entry_scored_count))
     entry_gap = (
-        "entry replay 有样本但缺少 scored posterior R，不能证明错失机会。"
+        (
+            f"entry replay 已生成 {int(entry_sample_count)} 个触发样本，但 0 个可评分；"
+            "已入场样本需要 profitR，错失入场样本需要 posteriorR 或 posteriorPips+riskPips。"
+        )
         if entry_sample_count > 0 and entry_scored_count <= 0 and entry_unresolved_count > 0
         else "entry replay 暂无新增机会 delta。"
     )
@@ -192,6 +225,23 @@ def _case_memory_source_gaps(runtime_dir: Path) -> Dict[str, Any]:
             "netRDelta": entry_net_delta,
             "status": "BLOCKED_BY_REPLAY_SCORING_GAP" if entry_scored_count <= 0 and entry_sample_count > 0 else "WAITING_SIGNAL_DELTA",
             "evidenceGapZh": entry_gap,
+            "inputCoverage": entry_input_coverage,
+            "entryScoreReadyCount": entry_score_ready_count,
+            "missingEntryScoreCount": input_missing_count,
+            "requiredOutcomeFields": entry_input_coverage.get("requiredOutcomeFields")
+            if isinstance(entry_input_coverage.get("requiredOutcomeFields"), list)
+            else [
+                "didEnter=true rows need profitR/rMultiple/signedR",
+                "missed-entry rows need posteriorR15/30/60/120 or posteriorPips15/30/60/120 plus riskPips",
+            ],
+            "prerequisiteCommand": "python3 tools/run_usdjpy_runtime_dataset.py --runtime-dir ./runtime build --write",
+            "collectionCommand": "python3 tools/run_usdjpy_bar_replay.py --runtime-dir ./runtime entry --write",
+            "nextActionZh": (
+                "先补齐 runtime CSV/ledger 的 profitR 或 posteriorR/posteriorPips+riskPips，"
+                "运行 runtime dataset build 后再运行 entry replay；只允许 shadow/tester/read-only 证据。"
+                if entry_sample_count > 0 and entry_scored_count <= 0
+                else "继续运行 entry replay，等待可评分 missed-opportunity delta。"
+            ),
         },
         "EARLY_EXIT": {
             "sourceArtifact": _relative_artifact_path(runtime_dir, exit_path),

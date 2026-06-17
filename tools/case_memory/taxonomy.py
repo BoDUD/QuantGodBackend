@@ -256,12 +256,18 @@ def build_case_memory_coverage_plan(report: Dict[str, Any]) -> Dict[str, Any]:
                 "source": guidance["source"],
                 "sourceArtifacts": list(guidance["sourceArtifacts"]),
                 "collectionEndpoint": guidance["collectionEndpoint"],
-                "collectionCommand": guidance["collectionCommand"],
+                "collectionCommand": source_gap.get("collectionCommand") or guidance["collectionCommand"],
+                "prerequisiteCommand": source_gap.get("prerequisiteCommand") or "",
                 "caseMemoryBuildCommand": guidance["caseMemoryBuildCommand"],
                 "verifyCommand": guidance["verifyCommand"],
                 "sourceGap": source_gap,
                 "evidenceGapZh": source_gap.get("evidenceGapZh") or "",
-                "nextActionZh": guidance["nextActionZh"],
+                "requiredOutcomeFields": (
+                    list(source_gap.get("requiredOutcomeFields"))
+                    if isinstance(source_gap.get("requiredOutcomeFields"), list)
+                    else []
+                ),
+                "nextActionZh": source_gap.get("nextActionZh") or guidance["nextActionZh"],
                 "acceptanceZh": guidance["acceptanceZh"],
                 "allowedLanes": ["SHADOW", "TESTER_ONLY", "PAPER_LIVE_SIM"],
                 "forbiddenSideEffects": [
@@ -291,10 +297,12 @@ def build_case_memory_coverage_plan(report: Dict[str, Any]) -> Dict[str, Any]:
                 "sourceArtifacts": row["sourceArtifacts"],
                 "collectionEndpoint": row["collectionEndpoint"],
                 "collectionCommand": row["collectionCommand"],
+                "prerequisiteCommand": row["prerequisiteCommand"],
                 "caseMemoryBuildCommand": row["caseMemoryBuildCommand"],
                 "verifyCommand": row["verifyCommand"],
                 "sourceGap": row["sourceGap"],
                 "evidenceGapZh": row["evidenceGapZh"],
+                "requiredOutcomeFields": row["requiredOutcomeFields"],
                 "nextActionZh": row["nextActionZh"],
                 "acceptanceZh": row["acceptanceZh"],
             }

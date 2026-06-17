@@ -81,6 +81,10 @@ class USDJPYBarReplayTests(unittest.TestCase):
             self.assertTrue(entry["safety"]["causalReplay"])
             self.assertFalse(entry["safety"]["posteriorMayAffectTrigger"])
             self.assertFalse(entry["causalReplay"]["posteriorMayAffectTrigger"])
+            self.assertEqual(entry["inputCoverage"]["sampleCount"], 3)
+            self.assertEqual(entry["inputCoverage"]["posteriorReadyCount"], 2)
+            self.assertEqual(entry["inputCoverage"]["entryScoreReadyCount"], 3)
+            self.assertIn("posteriorR15/30/60/120", " ".join(entry["inputCoverage"]["requiredOutcomeFields"]))
             self.assertEqual(entry["variants"][1]["metrics"]["sampleCount"], 2)
             self.assertNotIn("NEWS_BLOCK positive posterior", str(relaxed_events))
             self.assertNotIn("EURUSDc", str(entry))
@@ -108,4 +112,3 @@ class USDJPYBarReplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
