@@ -197,6 +197,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertTrue(manifest["ok"])
             self.assertTrue(manifest["promotionGatePassed"])
             self.assertEqual(manifest["promotionGateStatus"], "PASS")
+            self.assertEqual(manifest["promotionBlockerSummaryCount"], 0)
+            self.assertEqual(manifest["promotionBlockerSummary"], [])
             self.assertEqual(manifest["promotionRecoveryQueueCount"], 0)
             self.assertEqual(manifest["promotionRecoveryQueue"], [])
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
@@ -319,6 +321,15 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             )
             self.assertEqual(ga_row["promotionGate"]["status"], "BLOCKED")
             self.assertEqual(ga_row["promotionGate"]["closureMode"], "NO_ELITE_NEGATIVE_SELECTION")
+            blocker_summary = next(
+                row for row in manifest["promotionBlockerSummary"]
+                if row["artifactId"] == "gaMultiGenerationStabilityReport"
+            )
+            self.assertEqual(blocker_summary["priority"], "HIGH")
+            self.assertEqual(blocker_summary["stabilityGrade"], "NEGATIVE_SELECTION_CLOSED")
+            self.assertEqual(blocker_summary["closureMode"], "NO_ELITE_NEGATIVE_SELECTION")
+            self.assertIn("ga_promotion", blocker_summary["requiredFor"])
+            self.assertIn("ORDER_SEND", blocker_summary["forbiddenSideEffects"])
             recovery_row = next(
                 row for row in manifest["promotionRecoveryQueue"] if row["kind"] == "ga_multi_generation_stability"
             )
@@ -394,6 +405,18 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionGateStatus"], "BLOCKED")
             self.assertIn("historyProductionStatus:history_status_not_pass", manifest["promotionBlockers"])
             self.assertIn("historyProductionStatus:M1:freshness_not_ok", manifest["promotionBlockers"])
+            self.assertEqual(manifest["promotionBlockerSummaryCount"], 1)
+            self.assertEqual(manifest["promotionBlockerSummary"][0]["artifactId"], "historyProductionStatus")
+            self.assertEqual(manifest["promotionBlockerSummary"][0]["priority"], "HIGH")
+            self.assertEqual(manifest["promotionBlockerSummary"][0]["staleTimeframes"], ["M1"])
+            self.assertEqual(
+                manifest["promotionBlockerSummary"][0]["copyRatesExportFreshnessStatus"],
+                "STALE",
+            )
+            self.assertEqual(manifest["promotionBlockerSummary"][0]["continuousSyncStatus"], "MISSING")
+            self.assertFalse(manifest["promotionBlockerSummary"][0]["continuousSyncRunning"])
+            self.assertIn("ga_promotion", manifest["promotionBlockerSummary"][0]["requiredFor"])
+            self.assertIn("ORDER_SEND", manifest["promotionBlockerSummary"][0]["forbiddenSideEffects"])
             self.assertEqual(manifest["promotionRecoveryQueueCount"], 1)
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["kind"], "history_freshness")
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["artifactId"], "historyProductionStatus")
@@ -473,6 +496,10 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(summary["promotionGateStatus"], "BLOCKED")
             self.assertEqual(summary["promotionBlockerCount"], len(manifest["promotionBlockers"]))
             self.assertEqual(summary["promotionBlockerOverflowCount"], len(manifest["promotionBlockers"]) - 1)
+            self.assertEqual(summary["promotionBlockerSummaryCount"], 1)
+            self.assertEqual(summary["promotionBlockerSummary"][0]["artifactId"], "historyProductionStatus")
+            self.assertEqual(summary["promotionBlockerSummary"][0]["staleTimeframes"], ["M1"])
+            self.assertEqual(summary["promotionBlockerSummary"][0]["continuousSyncStatus"], "MISSING")
             self.assertEqual(summary["promotionRecoveryQueueCount"], 1)
             self.assertEqual(len(summary["promotionRecoveryQueue"]), 1)
             self.assertEqual(summary["promotionRecoveryQueue"][0]["kind"], "history_freshness")

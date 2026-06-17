@@ -1002,6 +1002,94 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return queue
 
 
+def _promotion_blocker_priority(artifact_id: str, gate: Dict[str, Any]) -> str:
+    if artifact_id in {
+        "historyProductionStatus",
+        "gaMultiGenerationStabilityReport",
+        "caseMemoryArtifactManifest",
+        "strategyParityReport",
+    }:
+        return "HIGH"
+    if str(gate.get("status") or "").upper() == "BLOCKED":
+        return "MEDIUM"
+    return "LOW"
+
+
+def _promotion_blocker_summary(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    summary: List[Dict[str, Any]] = []
+    for row in rows:
+        artifact_id = str(row.get("artifactId") or "")
+        gate = row.get("promotionGate")
+        if not isinstance(gate, dict) or gate.get("passed") is True:
+            continue
+        blockers = [str(blocker) for blocker in gate.get("blockers", [])]
+        item: Dict[str, Any] = {
+            "artifactId": artifact_id,
+            "artifactPath": row.get("path"),
+            "category": row.get("category"),
+            "gateId": gate.get("gateId"),
+            "status": gate.get("status") or "BLOCKED",
+            "priority": _promotion_blocker_priority(artifact_id, gate),
+            "requiredFor": list(gate.get("requiredFor", []))
+            if isinstance(gate.get("requiredFor"), list)
+            else [],
+            "blockerCount": len(blockers),
+            "blockers": blockers,
+            "nextActionZh": gate.get("nextActionZh") or "",
+            "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+            "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+        }
+        if artifact_id == "historyProductionStatus":
+            item["staleTimeframes"] = (
+                list(gate.get("staleTimeframes", []))
+                if isinstance(gate.get("staleTimeframes"), list)
+                else []
+            )
+            item["requiredTimeframes"] = (
+                list(gate.get("requiredTimeframes", []))
+                if isinstance(gate.get("requiredTimeframes"), list)
+                else []
+            )
+            copyrates = (
+                gate.get("copyRatesExportFreshness")
+                if isinstance(gate.get("copyRatesExportFreshness"), dict)
+                else {}
+            )
+            continuous_sync = (
+                gate.get("continuousSync")
+                if isinstance(gate.get("continuousSync"), dict)
+                else {}
+            )
+            item["copyRatesExportFreshnessStatus"] = copyrates.get("status") or ""
+            item["continuousSyncStatus"] = continuous_sync.get("status") or ""
+            item["continuousSyncRunning"] = bool(continuous_sync.get("running"))
+        elif artifact_id == "gaMultiGenerationStabilityReport":
+            item["stabilityGrade"] = gate.get("stabilityGrade") or ""
+            item["closureMode"] = gate.get("closureMode") or ""
+            item["generationCount"] = gate.get("generationCount")
+            item["eliteCount"] = gate.get("eliteCount")
+        elif artifact_id == "caseMemoryArtifactManifest":
+            item["missingCategories"] = (
+                list(gate.get("missingCategories", []))
+                if isinstance(gate.get("missingCategories"), list)
+                else []
+            )
+            item["candidateCount"] = gate.get("candidateCount")
+            item["gaSeedCount"] = gate.get("gaSeedCount")
+        elif artifact_id == "strategyParityReport":
+            item["reportStatus"] = gate.get("reportStatus") or ""
+            item["promotionAllowed"] = bool(gate.get("promotionAllowed"))
+        summary.append(item)
+    priority_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    summary.sort(
+        key=lambda item: (
+            priority_order.get(str(item.get("priority") or "").upper(), 3),
+            str(item.get("artifactId") or ""),
+        )
+    )
+    return summary
+
+
 def _bounded_list(value: Any, *, limit: int) -> List[Any]:
     if not isinstance(value, list):
         return []
@@ -1059,9 +1147,11 @@ def build_core_evidence_summary(
 ) -> Dict[str, Any]:
     blockers = _bounded_list(payload.get("blockers"), limit=blocker_limit)
     promotion_blockers = _bounded_list(payload.get("promotionBlockers"), limit=blocker_limit)
+    promotion_blocker_summary = _bounded_list(payload.get("promotionBlockerSummary"), limit=blocker_limit)
     recovery_queue = _bounded_list(payload.get("promotionRecoveryQueue"), limit=queue_limit)
     blocker_count = int(payload.get("blockerCount") or 0)
     promotion_blocker_count = int(payload.get("promotionBlockerCount") or 0)
+    promotion_blocker_summary_count = int(payload.get("promotionBlockerSummaryCount") or 0)
     recovery_queue_count = int(payload.get("promotionRecoveryQueueCount") or 0)
     return {
         "schema": SUMMARY_SCHEMA,
@@ -1080,6 +1170,11 @@ def build_core_evidence_summary(
         "promotionBlockerCount": promotion_blocker_count,
         "promotionBlockers": promotion_blockers,
         "promotionBlockerOverflowCount": max(0, promotion_blocker_count - len(promotion_blockers)),
+        "promotionBlockerSummaryCount": promotion_blocker_summary_count,
+        "promotionBlockerSummary": promotion_blocker_summary,
+        "promotionBlockerSummaryOverflowCount": max(
+            0, promotion_blocker_summary_count - len(promotion_blocker_summary)
+        ),
         "promotionRecoveryQueueCount": recovery_queue_count,
         "promotionRecoveryQueue": [
             _summarize_recovery_row(row) for row in recovery_queue if isinstance(row, dict)
@@ -1105,6 +1200,7 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
     ]
     status = "PASS" if not blockers else "FAIL"
     promotion_gate_passed = not promotion_blockers
+    promotion_blocker_summary = _promotion_blocker_summary(rows)
     promotion_recovery_queue = _promotion_recovery_queue(rows)
     payload: Dict[str, Any] = {
         "ok": status == "PASS",
@@ -1123,6 +1219,8 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
         "promotionGateStatus": "PASS" if promotion_gate_passed else "BLOCKED",
         "promotionBlockerCount": len(promotion_blockers),
         "promotionBlockers": promotion_blockers,
+        "promotionBlockerSummaryCount": len(promotion_blocker_summary),
+        "promotionBlockerSummary": promotion_blocker_summary,
         "promotionRecoveryQueueCount": len(promotion_recovery_queue),
         "promotionRecoveryQueue": promotion_recovery_queue,
         "promotionScope": ["ga_promotion", "champion_promotion"],
