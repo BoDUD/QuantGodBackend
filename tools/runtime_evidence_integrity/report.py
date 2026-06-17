@@ -42,6 +42,9 @@ EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS = [
     "MT5_REQUEST_WRITE",
     "WALLET_AUTHORIZATION",
 ]
+HISTORY_SYNC_RECOVERY_MODE = "READ_ONLY_HISTORY_SYNC_LOOP"
+HISTORY_SYNC_LOOP_COMMAND = "tools/run_mac_usdjpy_history_sync_loop.sh --loop"
+HISTORY_SYNC_ONCE_COMMAND = "tools/run_mac_usdjpy_history_sync_loop.sh --once"
 
 
 def utc_now_iso() -> str:
@@ -187,6 +190,49 @@ def _continuous_sync_queue_context(continuous_sync: Dict[str, Any] | None) -> Di
     }
 
 
+def _history_sync_recovery_contract_blockers(
+    continuous_sync: Dict[str, Any],
+    stale_timeframes: List[str],
+) -> List[str]:
+    if not stale_timeframes:
+        return []
+    blockers: List[str] = []
+    if not isinstance(continuous_sync, dict) or not continuous_sync:
+        return ["history_sync_recovery_contract_missing"]
+
+    if continuous_sync.get("expected") is not True:
+        blockers.append("history_sync_recovery_contract_expected_not_true")
+    if continuous_sync.get("mode") != HISTORY_SYNC_RECOVERY_MODE:
+        blockers.append("history_sync_recovery_contract_mode_missing")
+    if continuous_sync.get("startupCommand") != HISTORY_SYNC_LOOP_COMMAND:
+        blockers.append("history_sync_recovery_contract_startup_missing")
+    if continuous_sync.get("onceCommand") != HISTORY_SYNC_ONCE_COMMAND:
+        blockers.append("history_sync_recovery_contract_once_missing")
+    if continuous_sync.get("requiresFreshCopyRatesExporter") is not True:
+        blockers.append("history_sync_recovery_contract_copyrates_requirement_missing")
+    if not continuous_sync.get("acceptanceZh"):
+        blockers.append("history_sync_recovery_contract_acceptance_missing")
+
+    allowed_lanes = set(continuous_sync.get("allowedLanes") or [])
+    if not set(EVIDENCE_RECOVERY_ALLOWED_LANES).issubset(allowed_lanes):
+        blockers.append("history_sync_recovery_contract_allowed_lanes_missing")
+    forbidden_side_effects = set(continuous_sync.get("forbiddenSideEffects") or [])
+    if not set(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS).issubset(forbidden_side_effects):
+        blockers.append("history_sync_recovery_contract_forbidden_side_effects_missing")
+
+    safety = continuous_sync.get("safety") if isinstance(continuous_sync.get("safety"), dict) else {}
+    for key in (
+        "orderSendAllowed",
+        "closeAllowed",
+        "cancelAllowed",
+        "livePresetMutationAllowed",
+        "telegramCommandExecutionAllowed",
+    ):
+        if safety.get(key) is not False:
+            blockers.append(f"history_sync_recovery_contract_safety_unlock:{key}")
+    return blockers
+
+
 def _history_recovery_queue(
     rows: Dict[str, Dict[str, Any]],
     copyrates_freshness: Dict[str, Any] | None = None,
@@ -286,15 +332,16 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not row["passed"]:
             blockers.append(f"{timeframe}:not_passed")
 
-    passed = not blockers
     copyrates_freshness = (
         payload.get("copyRatesExportFreshness")
         if isinstance(payload.get("copyRatesExportFreshness"), dict)
         else {}
     )
     continuous_sync = payload.get("continuousSync") if isinstance(payload.get("continuousSync"), dict) else {}
-    recovery_queue = _history_recovery_queue(rows, copyrates_freshness, continuous_sync)
     stale_timeframes = [timeframe for timeframe, row in rows.items() if not row.get("freshnessOk")]
+    blockers.extend(_history_sync_recovery_contract_blockers(continuous_sync, stale_timeframes))
+    passed = not blockers
+    recovery_queue = _history_recovery_queue(rows, copyrates_freshness, continuous_sync)
     return {
         "gateId": "history_freshness_promotion_gate",
         "requiredFor": ["ga_promotion", "champion_promotion"],

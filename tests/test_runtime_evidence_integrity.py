@@ -358,8 +358,21 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                         "launchdService": "com.quantgod.usdjpy-history-sync",
                         "matchingProcessCount": 0,
                         "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
-                        "forbiddenSideEffects": ["ORDER_SEND", "POSITION_CLOSE", "LIVE_PRESET_MUTATION"],
+                        "forbiddenSideEffects": [
+                            "ORDER_SEND",
+                            "POSITION_CLOSE",
+                            "LIVE_PRESET_MUTATION",
+                            "MT5_REQUEST_WRITE",
+                            "WALLET_AUTHORIZATION",
+                        ],
                         "requiresFreshCopyRatesExporter": True,
+                        "safety": {
+                            "orderSendAllowed": False,
+                            "closeAllowed": False,
+                            "cancelAllowed": False,
+                            "livePresetMutationAllowed": False,
+                            "telegramCommandExecutionAllowed": False,
+                        },
                         "nextActionZh": "启动只读 history sync loop，并先刷新 MQL5 CopyRates exporter；不写订单、不改 preset。",
                         "acceptanceZh": "continuousSync.running=true、CopyRates exporter 新鲜。",
                     },
@@ -477,6 +490,68 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("READ_ONLY_RESEARCH", summary["promotionRecoveryQueue"][0]["continuousSyncAllowedLanes"])
             self.assertIn("ORDER_SEND", summary["promotionRecoveryQueue"][0]["forbiddenSideEffects"])
             self.assertNotIn("artifacts", summary)
+
+    def test_stale_history_requires_read_only_sync_recovery_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
+                {
+                    "schema": "quantgod.usdjpy_history_production_status.v1",
+                    "status": "WARN",
+                    "historyTargetSatisfied": False,
+                    "copyRatesExportFreshness": {
+                        "schema": "quantgod.mql5_copyrates_export_freshness.v1",
+                        "status": "STALE",
+                        "stale": True,
+                        "latestLagHoursByTimeframe": {"M1": 120.0},
+                        "staleTimeframes": ["M1"],
+                    },
+                    "continuousSync": {
+                        "expected": True,
+                        "status": "MISSING",
+                        "running": False,
+                        "script": "tools/run_mac_usdjpy_history_sync_loop.sh --loop",
+                    },
+                    "timeframes": {
+                        "M1": {"passed": False, "spanOk": True, "densityOk": True, "freshnessOk": False},
+                        "M5": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                        "M15": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                        "H1": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
+                    },
+                },
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+            history_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "historyProductionStatus")
+
+            self.assertEqual(manifest["status"], "PASS")
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertIn(
+                "historyProductionStatus:history_sync_recovery_contract_mode_missing",
+                manifest["promotionBlockers"],
+            )
+            self.assertIn(
+                "historyProductionStatus:history_sync_recovery_contract_once_missing",
+                manifest["promotionBlockers"],
+            )
+            self.assertIn(
+                "historyProductionStatus:history_sync_recovery_contract_forbidden_side_effects_missing",
+                manifest["promotionBlockers"],
+            )
+            self.assertIn(
+                "historyProductionStatus:history_sync_recovery_contract_safety_unlock:orderSendAllowed",
+                manifest["promotionBlockers"],
+            )
+            self.assertIn(
+                "history_sync_recovery_contract_mode_missing",
+                history_row["promotionGate"]["blockers"],
+            )
+            recovery_row = history_row["promotionGate"]["freshnessRecoveryQueue"][0]
+            self.assertEqual(recovery_row["continuousSyncStartupCommand"], "tools/run_mac_usdjpy_history_sync_loop.sh --loop")
+            self.assertEqual(recovery_row["continuousSyncOnceCommand"], "")
+            self.assertEqual(recovery_row["continuousSyncMode"], "")
 
     def test_missing_required_history_timeframe_blocks_promotion_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
