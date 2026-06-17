@@ -99,7 +99,16 @@ test('dashboard state overlays stale MT5 snapshot with non-execution safety', as
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
     assert.equal(res.body._freshness.status, 'STALE_DASHBOARD_SNAPSHOT');
+    assert.equal(res.body._freshness.sourceFile, dashboardPath);
+    assert.match(res.body._freshness.mtimeIso, /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(res.body._freshness.checkedAtIso, /^\d{4}-\d{2}-\d{2}T/);
+    assert.ok(
+      res.body._freshness.recoveryStepsZh.some((step) =>
+        step.includes('/api/dashboard/state') && step.includes('/api/mt5-readonly/snapshot'),
+      ),
+    );
     assert.equal(res.body.data._freshness.status, 'STALE_DASHBOARD_SNAPSHOT');
+    assert.equal(res.body.data._freshness.sourceFile, dashboardPath);
     assert.equal(res.body.data.safety.orderSendAllowed, false);
     assert.equal(res.body.data.safety.mt5OrderSendAllowed, false);
     assert.equal(res.body.data.trading.historicalTradeStatus, 'RUNNING');

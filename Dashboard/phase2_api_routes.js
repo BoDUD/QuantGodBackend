@@ -216,24 +216,37 @@ function fileMeta(filePath, stat, format) {
   };
 }
 
-function latestDashboardFreshness(stat) {
+function dashboardFreshnessRecoverySteps() {
+  return [
+    '确认对应 HFM/MT5 终端正在运行。',
+    '确认 QuantGod EA 已加载并持续写出 QuantGod_Dashboard.json。',
+    '刷新 /api/dashboard/state 和 /api/mt5-readonly/snapshot，直到 freshness 重新变为 fresh。',
+  ];
+}
+
+function latestDashboardFreshness(stat, sourceFile = '') {
   if (!stat) return {};
   const ageMs = Math.max(0, Date.now() - Number(stat.mtimeMs || 0));
   const fresh = ageMs <= latestDashboardFreshMs;
+  const checkedAtIso = new Date().toISOString();
   return {
     mode: 'LATEST_DASHBOARD_MTIME_WATCH',
     status: fresh ? 'FRESH_DASHBOARD_SNAPSHOT' : 'STALE_DASHBOARD_SNAPSHOT',
     statusZh: fresh ? 'MT5 dashboard 快照新鲜' : 'MT5 dashboard 快照已过期',
+    checkedAtIso,
     fresh,
     stale: !fresh,
     ageMs,
     ageSeconds: Math.round(ageMs / 100) / 10,
     maxAgeMs: latestDashboardFreshMs,
     maxAgeSeconds: Math.round(latestDashboardFreshMs / 100) / 10,
+    sourceFile,
+    mtimeIso: stat.mtime ? stat.mtime.toISOString() : '',
     blockers: fresh ? [] : ['live_dashboard_snapshot_stale'],
     nextActionZh: fresh
       ? '继续读取最新 MT5 dashboard。'
       : '恢复主 MT5/EA 进程并刷新 QuantGod_Dashboard.json；不要把旧快照当成当前实盘状态。',
+    recoveryStepsZh: fresh ? [] : dashboardFreshnessRecoverySteps(),
     orderSendAllowed: false,
     mt5OrderSendAllowed: false,
     brokerCallsMade: false,
@@ -246,8 +259,8 @@ function cloneJsonObject(payload) {
   return JSON.parse(JSON.stringify(payload));
 }
 
-function withDashboardFreshnessOverlay(payload, stat) {
-  const freshness = latestDashboardFreshness(stat);
+function withDashboardFreshnessOverlay(payload, stat, sourceFile = '') {
+  const freshness = latestDashboardFreshness(stat, sourceFile);
   const next = cloneJsonObject(payload);
   next._freshness = freshness;
   next._runtimeUsability = {
@@ -506,7 +519,11 @@ function handleJsonEndpoint(req, res, ctx, endpoint, fileName) {
     const text = stripBom(fs.readFileSync(resolved.filePath, 'utf8'));
     const rawPayload = JSON.parse(text || '{}');
     if (endpoint === DASHBOARD_STATE_ENDPOINT) {
-      const { payload, freshness } = withDashboardFreshnessOverlay(rawPayload, resolved.stat);
+      const { payload, freshness } = withDashboardFreshnessOverlay(
+        rawPayload,
+        resolved.stat,
+        resolved.filePath,
+      );
       sendJson(res, 200, withEnvelope(payload, endpoint, resolved.filePath, resolved.stat, 'json', { _freshness: freshness }));
       return true;
     }
