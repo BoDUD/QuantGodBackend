@@ -30,6 +30,10 @@ from .schema import CORE_ARTIFACTS, REPORT_SCHEMA, SAFETY, SCHEMA_VERSION, manif
 
 LEGACY_ABSOLUTE_PATH_RE = re.compile(r"/Users/[^\n\r\t\"']*/Quard/QuantGod(?:/|\b)")
 REQUIRED_HISTORY_TIMEFRAMES = ("M1", "M5", "M15", "H1")
+SUMMARY_SCHEMA = "quantgod.core_runtime_evidence_summary.v1"
+SUMMARY_SCHEMA_VERSION = 1
+DEFAULT_SUMMARY_QUEUE_LIMIT = 8
+DEFAULT_SUMMARY_BLOCKER_LIMIT = 12
 EVIDENCE_RECOVERY_ALLOWED_LANES = ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"]
 EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS = [
     "ORDER_SEND",
@@ -900,6 +904,81 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
         )
     )
     return queue
+
+
+def _bounded_list(value: Any, *, limit: int) -> List[Any]:
+    if not isinstance(value, list):
+        return []
+    return value[: max(0, limit)]
+
+
+def _summarize_recovery_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    compact_keys = (
+        "kind",
+        "artifactId",
+        "category",
+        "timeframe",
+        "status",
+        "priority",
+        "stabilityGrade",
+        "closureMode",
+        "sourceGapStatus",
+        "sourceGapArtifact",
+        "copyRatesExportFreshnessStatus",
+        "copyRatesExportGeneratedLagHours",
+        "copyRatesExportLatestLagHours",
+        "evidenceGapZh",
+        "copyRatesExportNextActionZh",
+        "nextActionZh",
+        "acceptanceZh",
+        "prerequisiteCommand",
+        "refreshCommand",
+        "collectionCommand",
+        "caseMemoryBuildCommand",
+        "verifyCommand",
+        "allowedLanes",
+        "forbiddenSideEffects",
+    )
+    return {key: row[key] for key in compact_keys if key in row and row[key] is not None}
+
+
+def build_core_evidence_summary(
+    payload: Dict[str, Any],
+    *,
+    queue_limit: int = DEFAULT_SUMMARY_QUEUE_LIMIT,
+    blocker_limit: int = DEFAULT_SUMMARY_BLOCKER_LIMIT,
+) -> Dict[str, Any]:
+    blockers = _bounded_list(payload.get("blockers"), limit=blocker_limit)
+    promotion_blockers = _bounded_list(payload.get("promotionBlockers"), limit=blocker_limit)
+    recovery_queue = _bounded_list(payload.get("promotionRecoveryQueue"), limit=queue_limit)
+    blocker_count = int(payload.get("blockerCount") or 0)
+    promotion_blocker_count = int(payload.get("promotionBlockerCount") or 0)
+    recovery_queue_count = int(payload.get("promotionRecoveryQueueCount") or 0)
+    return {
+        "schema": SUMMARY_SCHEMA,
+        "schemaVersion": SUMMARY_SCHEMA_VERSION,
+        "generatedAt": payload.get("generatedAt"),
+        "status": payload.get("status"),
+        "statusZh": payload.get("statusZh"),
+        "ok": bool(payload.get("ok")),
+        "artifactCount": payload.get("artifactCount"),
+        "presentArtifactCount": payload.get("presentArtifactCount"),
+        "blockerCount": blocker_count,
+        "blockers": blockers,
+        "blockerOverflowCount": max(0, blocker_count - len(blockers)),
+        "promotionGateStatus": payload.get("promotionGateStatus"),
+        "promotionGatePassed": bool(payload.get("promotionGatePassed")),
+        "promotionBlockerCount": promotion_blocker_count,
+        "promotionBlockers": promotion_blockers,
+        "promotionBlockerOverflowCount": max(0, promotion_blocker_count - len(promotion_blockers)),
+        "promotionRecoveryQueueCount": recovery_queue_count,
+        "promotionRecoveryQueue": [
+            _summarize_recovery_row(row) for row in recovery_queue if isinstance(row, dict)
+        ],
+        "promotionRecoveryQueueOverflowCount": max(0, recovery_queue_count - len(recovery_queue)),
+        "nextActionZh": payload.get("nextActionZh"),
+        "safety": dict(payload.get("safety") or {}),
+    }
 
 
 def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> Dict[str, Any]:

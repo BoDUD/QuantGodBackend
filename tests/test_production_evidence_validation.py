@@ -18,6 +18,11 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             self.assertEqual(report["status"], "FAIL")
             self.assertFalse(report["safety"]["orderSendAllowed"])
             self.assertEqual(report["coreRuntimeEvidenceIntegrity"]["status"], "FAIL")
+            self.assertEqual(
+                report["coreRuntimeEvidenceSummary"]["schema"],
+                "quantgod.core_runtime_evidence_summary.v1",
+            )
+            self.assertEqual(report["coreRuntimeEvidenceSummary"]["status"], "FAIL")
             self.assertIn("核心运行证据 integrity 未通过", report["blockersZh"])
             self.assertIn(
                 "先修复核心 runtime evidence integrity",
@@ -43,6 +48,11 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             saved = json.loads(Path(paths["latest"]).read_text(encoding="utf-8"))
             self.assertIn("historyProduction", saved)
             self.assertIn("coreRuntimeEvidenceIntegrity", saved)
+            self.assertIn("coreRuntimeEvidenceSummary", saved)
+            self.assertEqual(
+                saved["coreRuntimeEvidenceSummary"]["schema"],
+                "quantgod.core_runtime_evidence_summary.v1",
+            )
             self.assertEqual(saved["historyProduction"]["status"], "WARN")
             self.assertIn("M15 历史覆盖不足", saved["historyProduction"]["blockersZh"])
 

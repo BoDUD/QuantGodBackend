@@ -6,8 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.run_runtime_evidence_integrity import build_summary
-from tools.runtime_evidence_integrity.report import build_core_evidence_manifest
+from tools.runtime_evidence_integrity.report import build_core_evidence_manifest, build_core_evidence_summary
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -395,7 +394,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("freshnessOk=true", recovery_row["acceptanceZh"])
             self.assertIn("ORDER_SEND", recovery_row["forbiddenSideEffects"])
 
-            summary = build_summary(manifest, queue_limit=1, blocker_limit=1)
+            summary = build_core_evidence_summary(manifest, queue_limit=1, blocker_limit=1)
 
             self.assertEqual(summary["schema"], "quantgod.core_runtime_evidence_summary.v1")
             self.assertEqual(summary["status"], "PASS")

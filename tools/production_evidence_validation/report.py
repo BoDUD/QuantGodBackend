@@ -27,10 +27,10 @@ except ImportError:  # pragma: no cover - used when imported as tools.* in tests
     from tools.case_memory.report import status as case_memory_status
 
 try:
-    from runtime_evidence_integrity.report import build_core_evidence_manifest
+    from runtime_evidence_integrity.report import build_core_evidence_manifest, build_core_evidence_summary
     from runtime_evidence_integrity.schema import manifest_path as core_evidence_manifest_path
 except ImportError:  # pragma: no cover - used when imported as tools.* in tests
-    from tools.runtime_evidence_integrity.report import build_core_evidence_manifest
+    from tools.runtime_evidence_integrity.report import build_core_evidence_manifest, build_core_evidence_summary
     from tools.runtime_evidence_integrity.schema import manifest_path as core_evidence_manifest_path
 
 
@@ -137,6 +137,7 @@ def build_report(runtime_dir: Path) -> dict[str, Any]:
         },
         write=False,
     )
+    runtime_integrity_summary = build_core_evidence_summary(runtime_integrity)
     sections = [runtime_integrity, history, parity, execution_feedback, ga, case_memory, rsi_lineage]
     status = _overall_status(sections)
     blockers = []
@@ -165,6 +166,7 @@ def build_report(runtime_dir: Path) -> dict[str, Any]:
         "blockersZh": blockers,
         "historyProduction": history,
         "coreRuntimeEvidenceIntegrity": runtime_integrity,
+        "coreRuntimeEvidenceSummary": runtime_integrity_summary,
         "strategyFamilyParity": parity,
         "liveExecutionFeedbackCoverage": execution_feedback,
         "gaMultiGenerationStability": ga,
