@@ -4,6 +4,7 @@ import csv
 import importlib
 import json
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -34,6 +35,8 @@ CHUNK_DAYS = {"M1": 21, "M5": 60, "M15": 120, "H1": 180, "H4": 372}
 MQL5_EXPORT_SOURCE = "MQL5_COPYRATES_EXPORT_FALLBACK"
 DEFAULT_MAX_LATEST_LAG_HOURS = 96
 MAX_FUTURE_BAR_SKEW_HOURS = 24.0
+CONTINUOUS_SYNC_SCRIPT = "tools/run_mac_usdjpy_history_sync_loop.sh --loop"
+CONTINUOUS_SYNC_SERVICE = "com.quantgod.usdjpy-history-sync"
 
 
 def sync_historical_klines(
@@ -287,6 +290,22 @@ def build_history_production_status(
         max_latest_lag_hours=max_latest_lag_hours,
     )
     status = "PASS" if not failed and bool(sync_report.get("ok", True)) else "WARN"
+    continuous_sync = _continuous_sync_probe()
+    continuous_sync_status = str(continuous_sync.get("status") or "UNKNOWN").upper()
+    continuous_sync_running = continuous_sync.get("running") is True
+    if continuous_sync_running:
+        continuous_sync_reason_zh = "后台历史同步 loop 正在运行；继续保持 SQLite 和 MT5 CopyRates 导出同步。"
+        continuous_sync_next_action_zh = "保持 history sync loop 和 MQL5 CopyRates exporter 正常刷新。"
+    elif continuous_sync_status == "UNKNOWN":
+        continuous_sync_reason_zh = "当前环境无法确认 history sync loop 进程；需在宿主机只读检查同步 loop。"
+        continuous_sync_next_action_zh = (
+            "在宿主机只读确认 history sync loop 状态，并刷新 MQL5 CopyRates exporter；不写订单、不改 preset。"
+        )
+    else:
+        continuous_sync_reason_zh = "后台应每小时刷新 sync-klines 与 quality；当前未检测到 history sync loop。"
+        continuous_sync_next_action_zh = (
+            "启动只读 history sync loop，并先刷新 MQL5 CopyRates exporter；不写订单、不改 preset。"
+        )
     return {
         "ok": status == "PASS",
         "schema": "quantgod.usdjpy_history_production_status.v1",
@@ -313,9 +332,11 @@ def build_history_production_status(
         "continuousSync": {
             "expected": True,
             "intervalSeconds": int(float(os.environ.get("QG_USDJPY_HISTORY_INTERVAL_SECONDS", "3600"))),
-            "script": "tools/run_mac_usdjpy_history_sync_loop.sh --loop",
-            "launchdService": "com.quantgod.usdjpy-history-sync",
-            "reasonZh": "后台应每小时刷新 sync-klines 与 quality，保持 SQLite 和 MT5 CopyRates 导出同步。",
+            "script": CONTINUOUS_SYNC_SCRIPT,
+            "launchdService": CONTINUOUS_SYNC_SERVICE,
+            **continuous_sync,
+            "reasonZh": continuous_sync_reason_zh,
+            "nextActionZh": continuous_sync_next_action_zh,
         },
         "reasonZh": (
             "USDJPY SQLite 历史数据生产状态通过：M1/M5/M15/H1 覆盖、密度和最新延迟均满足目标。"
@@ -323,6 +344,55 @@ def build_history_production_status(
             else "USDJPY SQLite 历史数据仍未达到生产验收；请继续运行 MQL5 CopyRates exporter 与后台 sync-klines。"
         ),
         "safety": dict(SAFETY_BOUNDARY),
+    }
+
+
+def _continuous_sync_probe() -> Dict[str, Any]:
+    """Read-only process probe for the macOS USDJPY history sync loop."""
+    try:
+        result = subprocess.run(
+            ["ps", "ax"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "status": "UNKNOWN",
+            "running": False,
+            "scanner": "ps ax",
+            "matchingProcessCount": 0,
+            "processCommandSamples": [],
+            "probeError": str(exc),
+        }
+    if result.returncode != 0:
+        return {
+            "status": "UNKNOWN",
+            "running": False,
+            "scanner": "ps ax",
+            "matchingProcessCount": 0,
+            "processCommandSamples": [],
+            "probeError": f"ps exited {result.returncode}",
+        }
+    haystack = result.stdout or ""
+    matches: List[str] = []
+    for raw_line in haystack.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "run_mac_usdjpy_history_sync_loop.sh" not in line:
+            continue
+        if "rg " in line or "grep " in line:
+            continue
+        matches.append(line)
+    return {
+        "status": "RUNNING" if matches else "MISSING",
+        "running": bool(matches),
+        "scanner": "ps ax",
+        "matchingProcessCount": len(matches),
+        "processCommandSamples": matches[:3],
+        "probeError": "",
     }
 
 

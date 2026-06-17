@@ -157,9 +157,23 @@ def _copyrates_queue_context(copyrates_freshness: Dict[str, Any] | None, timefra
     }
 
 
+def _continuous_sync_queue_context(continuous_sync: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not isinstance(continuous_sync, dict) or not continuous_sync:
+        return {}
+    return {
+        "continuousSyncStatus": continuous_sync.get("status") or "",
+        "continuousSyncRunning": bool(continuous_sync.get("running")),
+        "continuousSyncScript": continuous_sync.get("script") or "",
+        "continuousSyncLaunchdService": continuous_sync.get("launchdService") or "",
+        "continuousSyncMatchingProcessCount": continuous_sync.get("matchingProcessCount"),
+        "continuousSyncNextActionZh": continuous_sync.get("nextActionZh") or "",
+    }
+
+
 def _history_recovery_queue(
     rows: Dict[str, Dict[str, Any]],
     copyrates_freshness: Dict[str, Any] | None = None,
+    continuous_sync: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     refresh_command = (
         "python3 tools/run_usdjpy_strategy_backtest.py --runtime-dir ./runtime "
@@ -215,6 +229,7 @@ def _history_recovery_queue(
             "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
         }
         queue_row.update(_copyrates_queue_context(copyrates_freshness, timeframe))
+        queue_row.update(_continuous_sync_queue_context(continuous_sync))
         queue.append(queue_row)
     return queue
 
@@ -260,7 +275,8 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(payload.get("copyRatesExportFreshness"), dict)
         else {}
     )
-    recovery_queue = _history_recovery_queue(rows, copyrates_freshness)
+    continuous_sync = payload.get("continuousSync") if isinstance(payload.get("continuousSync"), dict) else {}
+    recovery_queue = _history_recovery_queue(rows, copyrates_freshness, continuous_sync)
     stale_timeframes = [timeframe for timeframe, row in rows.items() if not row.get("freshnessOk")]
     return {
         "gateId": "history_freshness_promotion_gate",
@@ -273,6 +289,7 @@ def _history_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
         "timeframes": rows,
         "staleTimeframes": stale_timeframes,
         "copyRatesExportFreshness": copyrates_freshness,
+        "continuousSync": continuous_sync,
         "freshnessRecoveryQueue": recovery_queue,
         "nextActionZh": (
             "历史数据 freshness 已通过；保持后台增量同步。"
@@ -704,6 +721,12 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "copyRatesExportLatestLagHours": item.get("copyRatesExportLatestLagHours"),
                         "copyRatesExportStaleTimeframes": item.get("copyRatesExportStaleTimeframes"),
                         "copyRatesExportNextActionZh": item.get("copyRatesExportNextActionZh"),
+                        "continuousSyncStatus": item.get("continuousSyncStatus"),
+                        "continuousSyncRunning": item.get("continuousSyncRunning"),
+                        "continuousSyncScript": item.get("continuousSyncScript"),
+                        "continuousSyncLaunchdService": item.get("continuousSyncLaunchdService"),
+                        "continuousSyncMatchingProcessCount": item.get("continuousSyncMatchingProcessCount"),
+                        "continuousSyncNextActionZh": item.get("continuousSyncNextActionZh"),
                         "refreshCommand": item.get("refreshCommand"),
                         "verifyCommand": item.get("verifyCommand"),
                         "nextActionZh": item.get("nextActionZh"),
@@ -927,6 +950,12 @@ def _summarize_recovery_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "copyRatesExportFreshnessStatus",
         "copyRatesExportGeneratedLagHours",
         "copyRatesExportLatestLagHours",
+        "continuousSyncStatus",
+        "continuousSyncRunning",
+        "continuousSyncScript",
+        "continuousSyncLaunchdService",
+        "continuousSyncMatchingProcessCount",
+        "continuousSyncNextActionZh",
         "evidenceGapZh",
         "copyRatesExportNextActionZh",
         "nextActionZh",

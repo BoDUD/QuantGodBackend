@@ -347,6 +347,15 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                         "staleTimeframes": ["M1"],
                         "nextActionZh": "先刷新 MQL5 CopyRates exporter，再运行 sync-klines 与 production-status。",
                     },
+                    "continuousSync": {
+                        "expected": True,
+                        "status": "MISSING",
+                        "running": False,
+                        "script": "tools/run_mac_usdjpy_history_sync_loop.sh --loop",
+                        "launchdService": "com.quantgod.usdjpy-history-sync",
+                        "matchingProcessCount": 0,
+                        "nextActionZh": "启动只读 history sync loop，并先刷新 MQL5 CopyRates exporter；不写订单、不改 preset。",
+                    },
                     "timeframes": {
                         "M1": {"passed": False, "spanOk": True, "densityOk": True, "freshnessOk": False},
                         "M5": {"passed": True, "spanOk": True, "densityOk": True, "freshnessOk": True},
@@ -371,6 +380,13 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["timeframe"], "M1")
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["copyRatesExportFreshnessStatus"], "STALE")
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["copyRatesExportLatestLagHours"], 263.4)
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["continuousSyncStatus"], "MISSING")
+            self.assertFalse(manifest["promotionRecoveryQueue"][0]["continuousSyncRunning"])
+            self.assertEqual(
+                manifest["promotionRecoveryQueue"][0]["continuousSyncScript"],
+                "tools/run_mac_usdjpy_history_sync_loop.sh --loop",
+            )
+            self.assertIn("history sync loop", manifest["promotionRecoveryQueue"][0]["continuousSyncNextActionZh"])
             self.assertIn("CopyRates exporter", manifest["promotionRecoveryQueue"][0]["copyRatesExportNextActionZh"])
             self.assertIn("ORDER_SEND", manifest["promotionRecoveryQueue"][0]["forbiddenSideEffects"])
             self.assertEqual(history_row["status"], "PASS")
@@ -378,6 +394,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("ga_promotion", history_row["promotionGate"]["requiredFor"])
             self.assertEqual(history_row["promotionGate"]["staleTimeframes"], ["M1"])
             self.assertEqual(history_row["promotionGate"]["copyRatesExportFreshness"]["status"], "STALE")
+            self.assertEqual(history_row["promotionGate"]["continuousSync"]["status"], "MISSING")
             recovery_row = history_row["promotionGate"]["freshnessRecoveryQueue"][0]
             self.assertEqual(recovery_row["timeframe"], "M1")
             self.assertEqual(recovery_row["status"], "FRESHNESS_STALE")
@@ -388,6 +405,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(recovery_row["copyRatesExportGeneratedLagHours"], 263.4)
             self.assertEqual(recovery_row["copyRatesExportLatestLagHours"], 263.4)
             self.assertEqual(recovery_row["copyRatesExportStaleTimeframes"], ["M1"])
+            self.assertEqual(recovery_row["continuousSyncStatus"], "MISSING")
+            self.assertFalse(recovery_row["continuousSyncRunning"])
             self.assertIn("CopyRates exporter", recovery_row["copyRatesExportNextActionZh"])
             self.assertIn("sync-klines", recovery_row["refreshCommand"])
             self.assertIn("production-status", recovery_row["verifyCommand"])
@@ -406,6 +425,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(summary["promotionRecoveryQueue"][0]["kind"], "history_freshness")
             self.assertEqual(summary["promotionRecoveryQueue"][0]["timeframe"], "M1")
             self.assertEqual(summary["promotionRecoveryQueue"][0]["copyRatesExportLatestLagHours"], 263.4)
+            self.assertEqual(summary["promotionRecoveryQueue"][0]["continuousSyncStatus"], "MISSING")
             self.assertIn("ORDER_SEND", summary["promotionRecoveryQueue"][0]["forbiddenSideEffects"])
             self.assertNotIn("artifacts", summary)
 
