@@ -22,6 +22,11 @@ from .schema import (
 )
 
 try:
+    from ga_multi_generation_stability.stability import build_report as build_ga_stability_report
+except ImportError:  # pragma: no cover - used when imported as tools.* in tests
+    from tools.ga_multi_generation_stability.stability import build_report as build_ga_stability_report
+
+try:
     from case_memory.report import status as case_memory_status
 except ImportError:  # pragma: no cover - used when imported as tools.* in tests
     from tools.case_memory.report import status as case_memory_status
@@ -199,7 +204,7 @@ def write_reports(runtime_dir: Path, report: dict[str, Any]) -> dict[str, str]:
     write_json(Path(paths["coreRuntimeEvidenceManifest"]), report.get("coreRuntimeEvidenceIntegrity") or {})
     write_json(Path(paths["parityMatrix"]), report.get("strategyFamilyParity") or {})
     write_json(Path(paths["executionFeedbackCoverage"]), report.get("liveExecutionFeedbackCoverage") or {})
-    write_json(Path(paths["gaStability"]), report.get("gaMultiGenerationStability") or {})
+    write_json(Path(paths["gaStability"]), build_ga_stability_report(runtime_dir, write=False))
     paths.update(write_rsi_lineage_closure(runtime_dir, report.get("rsiStabilityLineageClosure") or {}))
     return paths
 

@@ -55,6 +55,13 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             )
             self.assertEqual(saved["historyProduction"]["status"], "WARN")
             self.assertIn("M15 历史覆盖不足", saved["historyProduction"]["blockersZh"])
+            ga_stability = json.loads(Path(paths["gaStability"]).read_text(encoding="utf-8"))
+            self.assertEqual(
+                ga_stability["schema"],
+                "quantgod.ga_multi_generation_stability.report.v1",
+            )
+            self.assertIn("agentVersion", ga_stability)
+            self.assertIn("safety", ga_stability)
 
     def test_history_audit_requires_all_core_timeframes_and_freshness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

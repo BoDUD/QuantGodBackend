@@ -24,7 +24,7 @@ def _count_items(value: Any) -> int:
 
 def audit_ga(runtime_dir: Path) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
-    stability = build_stability_report(runtime_dir, write=True)
+    stability = build_stability_report(runtime_dir, write=False)
     factory_dir = runtime_dir / "ga_factory"
     state = read_json(factory_dir / "QuantGod_GAFactoryState.json", {}) or {}
     elite = read_json(factory_dir / "QuantGod_GAEliteArchive.json", {}) or {}
