@@ -51,6 +51,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.production_execution_policy.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
     },
     {
         "artifactId": "autoExecutionPolicy",
@@ -78,6 +79,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.strategy_ga_factory.artifact_manifest.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
         "requiresArtifactHashes": True,
     },
     {
@@ -87,6 +89,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.ga_multi_generation_stability.report.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
         "requiresGaStabilityPromotionGate": True,
     },
     {
@@ -104,6 +107,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.usdjpy_history_production_status.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
         "requiresHistoryPromotionGate": True,
     },
     {
@@ -113,6 +117,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.strategy_parity_report.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
         "requiresParityPromotionGate": True,
     },
     {
@@ -130,6 +135,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.live_execution_quality_report.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
     },
     {
         "artifactId": "executionFeedbackLedger",
@@ -146,6 +152,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.case_memory_artifact_manifest.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
         "requiresArtifactHashes": True,
         "requiresCaseMemoryPromotionGate": True,
     },

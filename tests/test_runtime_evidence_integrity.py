@@ -52,6 +52,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json",
         {
             "schema": "quantgod.ga_multi_generation_stability.report.v1",
+            "agentVersion": "test-ga-stability-v1",
             "status": "PASS",
             "stabilityGrade": "PRODUCTION_READY",
             "promotionAllowed": True,
@@ -82,6 +83,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
         {
             "schema": "quantgod.usdjpy_history_production_status.v1",
+            "agentVersion": "test-history-v1",
             "status": "PASS",
             "historyTargetSatisfied": True,
             "timeframes": {
@@ -94,6 +96,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         runtime_dir / "parity" / "QuantGod_StrategyParityReport.json",
         {
             "schema": "quantgod.strategy_parity_report.v1",
+            "agentVersion": "test-parity-v1",
             "status": "PARITY_PASS",
             "promotionGate": {
                 "schema": "quantgod.strategy_parity_promotion_gate.v1",
@@ -118,7 +121,11 @@ def write_complete_runtime(runtime_dir: Path) -> None:
     )
     write_json(
         runtime_dir / "execution" / "QuantGod_LiveExecutionQualityReport.json",
-        {"schema": "quantgod.live_execution_quality_report.v1", "sampleCount": 1},
+        {
+            "schema": "quantgod.live_execution_quality_report.v1",
+            "agentVersion": "test-execution-v1",
+            "sampleCount": 1,
+        },
     )
     write_text(
         runtime_dir / "execution" / "QuantGod_LiveExecutionFeedback.jsonl",
@@ -201,6 +208,21 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionBlockerSummary"], [])
             self.assertEqual(manifest["promotionRecoveryQueueCount"], 0)
             self.assertEqual(manifest["promotionRecoveryQueue"], [])
+            self.assertEqual(manifest["jsonArtifactCount"], 11)
+            self.assertEqual(manifest["jsonDeclaredVersionCount"], 7)
+            self.assertEqual(manifest["versionCoverageStatus"], "PARTIAL")
+            self.assertEqual(
+                manifest["versionMissingArtifacts"],
+                [
+                    "liveLoopStatus",
+                    "autoExecutionPolicy",
+                    "executionFeedbackLedger",
+                    "productionEvidenceValidationReport",
+                ],
+            )
+            self.assertEqual(manifest["declaredVersionRequiredCount"], 7)
+            self.assertEqual(manifest["declaredVersionRequiredMissingCount"], 0)
+            self.assertEqual(manifest["declaredVersionRequiredStatus"], "PASS")
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
             self.assertEqual(manifest["artifactCount"], 15)
@@ -220,12 +242,49 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 self.assertEqual(row["status"], "PASS", row)
                 self.assertEqual(row["hashAlgorithm"], "sha256")
                 self.assertTrue(row["sha256"], row)
+                if row["requiresDeclaredVersion"]:
+                    self.assertTrue(row["declaredVersionPresent"], row)
+                    self.assertEqual(row["versionStatus"], "DECLARED_VERSION_PRESENT", row)
                 self.assertFalse(row["path"].startswith("/"), row["path"])
                 self.assertEqual(
                     row["sha256"],
                     hashlib.sha256((runtime_dir / row["path"]).read_bytes()).hexdigest(),
                 )
             self.assertTrue((runtime_dir / "integrity" / "QuantGod_CoreRuntimeEvidenceManifest.json").exists())
+
+    def test_required_declared_version_blocks_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "case_memory" / "QuantGod_CaseMemoryArtifactManifest.json",
+                {
+                    "schema": "quantgod.case_memory_artifact_manifest.v1",
+                    "artifacts": [
+                        {
+                            "artifactId": "candidateReport",
+                            "path": "case_memory/QuantGod_CaseMemoryStrategyCandidates.json",
+                            "exists": True,
+                            "sha256": "def",
+                        }
+                    ],
+                },
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+            case_memory_row = next(
+                row for row in manifest["artifacts"] if row["artifactId"] == "caseMemoryArtifactManifest"
+            )
+
+            self.assertEqual(manifest["status"], "FAIL")
+            self.assertIn("caseMemoryArtifactManifest:missing_declared_version", manifest["blockers"])
+            self.assertEqual(manifest["declaredVersionRequiredStatus"], "FAIL")
+            self.assertEqual(
+                manifest["declaredVersionRequiredMissingArtifacts"],
+                ["caseMemoryArtifactManifest"],
+            )
+            self.assertFalse(case_memory_row["declaredVersionPresent"])
+            self.assertEqual(case_memory_row["versionStatus"], "MISSING_REQUIRED_VERSION")
 
     def test_legacy_quantgod_absolute_path_blocks_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -277,6 +336,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json",
                 {
                     "schema": "quantgod.ga_multi_generation_stability.report.v1",
+                    "agentVersion": "test-ga-stability-v1",
                     "status": "PASS",
                     "stabilityGrade": "NEGATIVE_SELECTION_CLOSED",
                     "closureMode": "NO_ELITE_NEGATIVE_SELECTION",
@@ -346,6 +406,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
                 {
                     "schema": "quantgod.usdjpy_history_production_status.v1",
+                    "agentVersion": "test-history-v1",
                     "status": "WARN",
                     "historyTargetSatisfied": False,
                     "copyRatesExportFreshness": {
@@ -526,6 +587,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
                 {
                     "schema": "quantgod.usdjpy_history_production_status.v1",
+                    "agentVersion": "test-history-v1",
                     "status": "WARN",
                     "historyTargetSatisfied": False,
                     "copyRatesExportFreshness": {
@@ -588,6 +650,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
                 {
                     "schema": "quantgod.usdjpy_history_production_status.v1",
+                    "agentVersion": "test-history-v1",
                     "status": "PASS",
                     "historyTargetSatisfied": True,
                     "timeframes": {
@@ -614,6 +677,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "parity" / "QuantGod_StrategyParityReport.json",
                 {
                     "schema": "quantgod.strategy_parity_report.v1",
+                    "agentVersion": "test-parity-v1",
                     "status": "PARITY_FAIL",
                     "promotionGate": {
                         "schema": "quantgod.strategy_parity_promotion_gate.v1",
@@ -730,6 +794,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json",
                 {
                     "schema": "quantgod.ga_multi_generation_stability.report.v1",
+                    "agentVersion": "test-ga-stability-v1",
                     "status": "PASS",
                     "stabilityGrade": "PRODUCTION_READY",
                     "closureMode": "ELITE_STABILITY",

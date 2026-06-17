@@ -115,6 +115,12 @@ def _declared_json_schema(path: Path, content_type: str) -> tuple[str, Any, Dict
     return schema, version, payload
 
 
+def _declared_version_present(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value is not None and value != ""
+
+
 def _manifest_hash_rows_ok(payload: Dict[str, Any]) -> bool:
     rows = payload.get("artifacts")
     if not isinstance(rows, list) or not rows:
@@ -669,10 +675,13 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
     path = runtime_dir / rel_path
     content_type = str(spec.get("contentType") or "json")
     expected_schemas = [str(item) for item in spec.get("expectedSchemas", [])]
+    requires_declared_version = bool(spec.get("requiresDeclaredVersion"))
     blockers: List[str] = []
     payload: Dict[str, Any] = {}
     declared_schema = ""
     declared_version: Any = ""
+    declared_version_present = False
+    version_status = "NOT_APPLICABLE"
     headers: List[str] = []
 
     if not path.exists():
@@ -691,6 +700,9 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
             "expectedSchemas": expected_schemas,
             "declaredSchema": "",
             "declaredVersion": "",
+            "declaredVersionPresent": False,
+            "requiresDeclaredVersion": requires_declared_version,
+            "versionStatus": "MISSING_ARTIFACT",
             "headers": [],
             "status": _row_status(blockers),
             "blockers": blockers,
@@ -700,10 +712,20 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
     file_hash = _sha256(path)
     if content_type in {"json", "jsonl"}:
         declared_schema, declared_version, payload = _declared_json_schema(path, content_type)
+        declared_version_present = _declared_version_present(declared_version)
+        version_status = (
+            "DECLARED_VERSION_PRESENT"
+            if declared_version_present
+            else "MISSING_REQUIRED_VERSION"
+            if requires_declared_version
+            else "MISSING_OPTIONAL_VERSION"
+        )
         if not declared_schema:
             blockers.append("missing_declared_schema")
         elif expected_schemas and declared_schema not in expected_schemas:
             blockers.append("schema_mismatch")
+        if requires_declared_version and not declared_version_present:
+            blockers.append("missing_declared_version")
     elif content_type == "csv":
         declared_schema = expected_schemas[0] if expected_schemas else ""
         headers = _csv_headers(path)
@@ -743,6 +765,9 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
         "expectedSchemas": expected_schemas,
         "declaredSchema": declared_schema,
         "declaredVersion": declared_version,
+        "declaredVersionPresent": declared_version_present,
+        "requiresDeclaredVersion": requires_declared_version,
+        "versionStatus": version_status,
         "headers": headers,
         "status": _row_status(blockers),
         "blockers": blockers,
@@ -1180,6 +1205,18 @@ def build_core_evidence_summary(
             _summarize_recovery_row(row) for row in recovery_queue if isinstance(row, dict)
         ],
         "promotionRecoveryQueueOverflowCount": max(0, recovery_queue_count - len(recovery_queue)),
+        "jsonArtifactCount": payload.get("jsonArtifactCount"),
+        "jsonDeclaredVersionCount": payload.get("jsonDeclaredVersionCount"),
+        "versionCoverageStatus": payload.get("versionCoverageStatus"),
+        "versionCoverageRatio": payload.get("versionCoverageRatio"),
+        "versionMissingArtifacts": _bounded_list(payload.get("versionMissingArtifacts"), limit=blocker_limit),
+        "declaredVersionRequiredCount": payload.get("declaredVersionRequiredCount"),
+        "declaredVersionRequiredMissingCount": payload.get("declaredVersionRequiredMissingCount"),
+        "declaredVersionRequiredStatus": payload.get("declaredVersionRequiredStatus"),
+        "declaredVersionRequiredMissingArtifacts": _bounded_list(
+            payload.get("declaredVersionRequiredMissingArtifacts"),
+            limit=blocker_limit,
+        ),
         "nextActionZh": payload.get("nextActionZh"),
         "safety": dict(payload.get("safety") or {}),
     }
@@ -1188,6 +1225,23 @@ def build_core_evidence_summary(
 def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     rows = [_artifact_row(runtime_dir, spec) for spec in CORE_ARTIFACTS]
+    json_rows = [
+        row for row in rows if row.get("exists") and row.get("contentType") in {"json", "jsonl"}
+    ]
+    json_declared_version_rows = [
+        row for row in json_rows if row.get("declaredVersionPresent") is True
+    ]
+    version_missing_artifacts = [
+        str(row.get("artifactId") or "") for row in json_rows if row.get("declaredVersionPresent") is not True
+    ]
+    required_version_rows = [
+        row for row in json_rows if row.get("requiresDeclaredVersion") is True
+    ]
+    required_version_missing_artifacts = [
+        str(row.get("artifactId") or "")
+        for row in required_version_rows
+        if row.get("declaredVersionPresent") is not True
+    ]
     blockers = [
         f"{row['artifactId']}:{blocker}"
         for row in rows
@@ -1213,6 +1267,21 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
         "runtimeRoot": ".",
         "artifactCount": len(rows),
         "presentArtifactCount": sum(1 for row in rows if row.get("exists")),
+        "jsonArtifactCount": len(json_rows),
+        "jsonDeclaredVersionCount": len(json_declared_version_rows),
+        "versionCoverageRatio": (
+            round(len(json_declared_version_rows) / len(json_rows), 4)
+            if json_rows
+            else 1.0
+        ),
+        "versionCoverageStatus": "PASS" if not version_missing_artifacts else "PARTIAL",
+        "versionMissingArtifacts": version_missing_artifacts,
+        "declaredVersionRequiredCount": len(required_version_rows),
+        "declaredVersionRequiredMissingCount": len(required_version_missing_artifacts),
+        "declaredVersionRequiredStatus": (
+            "PASS" if not required_version_missing_artifacts else "FAIL"
+        ),
+        "declaredVersionRequiredMissingArtifacts": required_version_missing_artifacts,
         "blockerCount": len(blockers),
         "blockers": blockers,
         "promotionGatePassed": promotion_gate_passed,
