@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.ga_multi_generation_stability.schema import SCHEMA_STABILITY_REPORT
 from tools.ga_multi_generation_stability.stability import build_report
 
 
@@ -55,11 +56,15 @@ class GAMultiGenerationStabilityTests(unittest.TestCase):
             )
             report = build_report(runtime, write=True)
             self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["schema"], SCHEMA_STABILITY_REPORT)
             self.assertGreaterEqual(report["generationCount"], 3)
             self.assertGreaterEqual(report["candidateCount"], 18)
             self.assertGreaterEqual(report["eliteCount"], 1)
             self.assertGreaterEqual(report["eliteRepeatCount"], 1)
-            self.assertTrue((runtime / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json").exists())
+            report_file = runtime / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json"
+            self.assertTrue(report_file.exists())
+            saved_report = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(saved_report["schema"], SCHEMA_STABILITY_REPORT)
 
     def test_build_report_reads_archived_candidate_runs_after_runtime_compaction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,6 +119,7 @@ class GAMultiGenerationStabilityTests(unittest.TestCase):
 
             report = build_report(runtime, write=False)
             self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["schema"], SCHEMA_STABILITY_REPORT)
             self.assertGreaterEqual(report["candidateCount"], 18)
             self.assertGreaterEqual(report["eliteCount"], 1)
 
@@ -157,6 +163,7 @@ class GAMultiGenerationStabilityTests(unittest.TestCase):
 
             report = build_report(runtime, write=False)
 
+            self.assertEqual(report["schema"], SCHEMA_STABILITY_REPORT)
             self.assertEqual(report["eliteCount"], 0)
             self.assertGreaterEqual(report["lineageDepth"], 2)
 
@@ -204,6 +211,7 @@ class GAMultiGenerationStabilityTests(unittest.TestCase):
             report = build_report(runtime, write=False)
 
             self.assertEqual(report["status"], "PASS")
+            self.assertEqual(report["schema"], SCHEMA_STABILITY_REPORT)
             self.assertEqual(report["stabilityGrade"], "NEGATIVE_SELECTION_CLOSED")
             self.assertEqual(report["closureMode"], "NO_ELITE_NEGATIVE_SELECTION")
             self.assertFalse(report["promotionAllowed"])
