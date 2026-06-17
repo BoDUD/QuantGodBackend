@@ -156,6 +156,7 @@ def _copyrates_queue_context(copyrates_freshness: Dict[str, Any] | None, timefra
         else []
     )
     return {
+        "copyRatesExportSchemaVersion": copyrates_freshness.get("schemaVersion"),
         "copyRatesExportFreshnessStatus": copyrates_freshness.get("status"),
         "copyRatesExportStale": bool(copyrates_freshness.get("stale")),
         "copyRatesExportGeneratedAtServer": copyrates_freshness.get("generatedAtServer") or "",
@@ -170,6 +171,7 @@ def _continuous_sync_queue_context(continuous_sync: Dict[str, Any] | None) -> Di
     if not isinstance(continuous_sync, dict) or not continuous_sync:
         return {}
     return {
+        "continuousSyncSchemaVersion": continuous_sync.get("schemaVersion"),
         "continuousSyncStatus": continuous_sync.get("status") or "",
         "continuousSyncRunning": bool(continuous_sync.get("running")),
         "continuousSyncMode": continuous_sync.get("mode") or "",
@@ -178,6 +180,8 @@ def _continuous_sync_queue_context(continuous_sync: Dict[str, Any] | None) -> Di
         "continuousSyncOnceCommand": continuous_sync.get("onceCommand") or "",
         "continuousSyncLaunchdService": continuous_sync.get("launchdService") or "",
         "continuousSyncMatchingProcessCount": continuous_sync.get("matchingProcessCount"),
+        "continuousSyncProbePermissionDenied": bool(continuous_sync.get("probePermissionDenied")),
+        "continuousSyncHostProbeCommand": continuous_sync.get("hostProbeCommand") or "",
         "continuousSyncNextActionZh": continuous_sync.get("nextActionZh") or "",
         "continuousSyncAcceptanceZh": continuous_sync.get("acceptanceZh") or "",
         "continuousSyncAllowedLanes": (
@@ -804,6 +808,7 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "maxLatestLagHours": item.get("maxLatestLagHours"),
                         "excessLagHours": item.get("excessLagHours"),
                         "copyRatesExportFreshnessStatus": item.get("copyRatesExportFreshnessStatus"),
+                        "copyRatesExportSchemaVersion": item.get("copyRatesExportSchemaVersion"),
                         "copyRatesExportStale": item.get("copyRatesExportStale"),
                         "copyRatesExportGeneratedAtServer": item.get("copyRatesExportGeneratedAtServer"),
                         "copyRatesExportGeneratedLagHours": item.get("copyRatesExportGeneratedLagHours"),
@@ -811,6 +816,7 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "copyRatesExportStaleTimeframes": item.get("copyRatesExportStaleTimeframes"),
                         "copyRatesExportNextActionZh": item.get("copyRatesExportNextActionZh"),
                         "continuousSyncStatus": item.get("continuousSyncStatus"),
+                        "continuousSyncSchemaVersion": item.get("continuousSyncSchemaVersion"),
                         "continuousSyncRunning": item.get("continuousSyncRunning"),
                         "continuousSyncMode": item.get("continuousSyncMode"),
                         "continuousSyncScript": item.get("continuousSyncScript"),
@@ -818,6 +824,8 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "continuousSyncOnceCommand": item.get("continuousSyncOnceCommand"),
                         "continuousSyncLaunchdService": item.get("continuousSyncLaunchdService"),
                         "continuousSyncMatchingProcessCount": item.get("continuousSyncMatchingProcessCount"),
+                        "continuousSyncProbePermissionDenied": item.get("continuousSyncProbePermissionDenied"),
+                        "continuousSyncHostProbeCommand": item.get("continuousSyncHostProbeCommand"),
                         "continuousSyncNextActionZh": item.get("continuousSyncNextActionZh"),
                         "continuousSyncAcceptanceZh": item.get("continuousSyncAcceptanceZh"),
                         "continuousSyncAllowedLanes": item.get("continuousSyncAllowedLanes"),
@@ -1133,9 +1141,11 @@ def _summarize_recovery_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "closureMode",
         "sourceGapStatus",
         "sourceGapArtifact",
+        "copyRatesExportSchemaVersion",
         "copyRatesExportFreshnessStatus",
         "copyRatesExportGeneratedLagHours",
         "copyRatesExportLatestLagHours",
+        "continuousSyncSchemaVersion",
         "continuousSyncStatus",
         "continuousSyncRunning",
         "continuousSyncMode",
@@ -1144,6 +1154,8 @@ def _summarize_recovery_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "continuousSyncOnceCommand",
         "continuousSyncLaunchdService",
         "continuousSyncMatchingProcessCount",
+        "continuousSyncProbePermissionDenied",
+        "continuousSyncHostProbeCommand",
         "continuousSyncNextActionZh",
         "continuousSyncAcceptanceZh",
         "continuousSyncAllowedLanes",

@@ -19,6 +19,7 @@ from tools.strategy_json.schema import base_strategy_seed
 from tools.strategy_json.validator import validate_strategy_json
 from tools.usdjpy_strategy_backtest.cost_model import BacktestCostModel
 from tools.usdjpy_strategy_backtest.history_sync import (
+    _continuous_sync_probe,
     _copyrates_export_freshness,
     _reason,
     build_history_production_status,
@@ -1473,14 +1474,17 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
                     )
 
             self.assertTrue(report["ok"], report)
+            self.assertEqual(report["schemaVersion"], 1)
             self.assertEqual(report["source"], "MQL5_COPYRATES_EXPORT_FALLBACK")
             self.assertEqual(report["fallback"]["mql5Export"]["exportDir"], str(export_dir.resolve()))
             production = report["productionStatus"]
             self.assertEqual(production["schema"], "quantgod.usdjpy_history_production_status.v1")
+            self.assertEqual(production["schemaVersion"], 1)
             self.assertTrue(production["historyTargetSatisfied"], production)
             self.assertEqual(production["status"], "PASS")
             self.assertEqual(production["source"]["mql5ExportDir"], str(export_dir.resolve()))
             self.assertEqual(production["source"]["copyRatesExportFreshnessStatus"], "PASS")
+            self.assertEqual(production["copyRatesExportFreshness"]["schemaVersion"], 1)
             self.assertEqual(production["copyRatesExportFreshness"]["status"], "PASS")
             self.assertEqual(production["copyRatesExportFreshness"]["staleTimeframes"], [])
             current = status(runtime_dir)
@@ -1532,12 +1536,25 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
         )
 
         self.assertEqual(freshness["schema"], "quantgod.mql5_copyrates_export_freshness.v1")
+        self.assertEqual(freshness["schemaVersion"], 1)
         self.assertEqual(freshness["status"], "STALE")
         self.assertTrue(freshness["stale"])
         self.assertEqual(freshness["staleTimeframes"], ["M1", "M5", "M15", "H1"])
         self.assertGreater(freshness["latestLagHoursByTimeframe"]["H1"], 96)
         self.assertIn("刷新 MQL5 CopyRates exporter", freshness["nextActionZh"])
         self.assertFalse(freshness["safety"]["orderSendAllowed"])
+
+    def test_continuous_sync_probe_reports_permission_blocker_explicitly(self):
+        with patch(
+            "tools.usdjpy_strategy_backtest.history_sync.subprocess.run",
+            side_effect=PermissionError("ps denied"),
+        ):
+            probe = _continuous_sync_probe()
+
+        self.assertEqual(probe["status"], "PROBE_BLOCKED")
+        self.assertFalse(probe["running"])
+        self.assertTrue(probe["probePermissionDenied"])
+        self.assertIn("ps ax", probe["hostProbeCommand"])
 
     def test_history_production_status_exposes_read_only_sync_recovery_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1581,6 +1598,9 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
 
             continuous_sync = report["continuousSync"]
             self.assertEqual(report["status"], "PASS", report)
+            self.assertEqual(report["schemaVersion"], 1)
+            self.assertEqual(continuous_sync["schema"], "quantgod.usdjpy_history_continuous_sync_probe.v1")
+            self.assertEqual(continuous_sync["schemaVersion"], 1)
             self.assertEqual(continuous_sync["mode"], "READ_ONLY_HISTORY_SYNC_LOOP")
             self.assertEqual(
                 continuous_sync["startupCommand"],
@@ -1649,6 +1669,8 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
             stdout_payload = json.loads(completed.stdout)
             disk_payload = json.loads(production_status_path(runtime_dir).read_text(encoding="utf-8"))
             self.assertEqual(stdout_payload["generatedAt"], disk_payload["generatedAt"])
+            self.assertEqual(disk_payload["schemaVersion"], 1)
+            self.assertEqual(disk_payload["continuousSync"]["schemaVersion"], 1)
             self.assertEqual(disk_payload["continuousSync"]["mode"], "READ_ONLY_HISTORY_SYNC_LOOP")
             self.assertEqual(
                 disk_payload["continuousSync"]["startupCommand"],

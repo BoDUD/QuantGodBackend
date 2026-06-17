@@ -135,6 +135,7 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
                         "maxLatestLagHours": 96.0,
                         "copyRatesExportFreshness": {
                             "schema": "quantgod.mql5_copyrates_export_freshness.v1",
+                            "schemaVersion": 1,
                             "status": "STALE",
                             "stale": True,
                             "generatedAtServer": "2026-06-05T11:56:59Z",
@@ -178,6 +179,7 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
             self.assertIn("M1 最新 K 线延迟超阈值", history["blockersZh"])
             self.assertEqual(history["staleTimeframes"], ["M1", "M5", "M15", "H1"])
             self.assertEqual(history["copyRatesExportFreshness"]["status"], "STALE")
+            self.assertEqual(history["copyRatesExportFreshness"]["schemaVersion"], 1)
             self.assertEqual(len(history["freshnessRecoveryQueue"]), 4)
             queue_row = history["freshnessRecoveryQueue"][0]
             self.assertEqual(queue_row["timeframe"], "M1")

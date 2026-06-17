@@ -411,6 +411,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                     "historyTargetSatisfied": False,
                     "copyRatesExportFreshness": {
                         "schema": "quantgod.mql5_copyrates_export_freshness.v1",
+                        "schemaVersion": 1,
                         "status": "STALE",
                         "stale": True,
                         "generatedAtServer": "2026-06-05T11:56:59Z",
@@ -420,6 +421,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                         "nextActionZh": "先刷新 MQL5 CopyRates exporter，再运行 sync-klines 与 production-status。",
                     },
                     "continuousSync": {
+                        "schema": "quantgod.usdjpy_history_continuous_sync_probe.v1",
+                        "schemaVersion": 1,
                         "expected": True,
                         "mode": "READ_ONLY_HISTORY_SYNC_LOOP",
                         "status": "MISSING",
@@ -429,6 +432,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                         "onceCommand": "tools/run_mac_usdjpy_history_sync_loop.sh --once",
                         "launchdService": "com.quantgod.usdjpy-history-sync",
                         "matchingProcessCount": 0,
+                        "probePermissionDenied": False,
+                        "hostProbeCommand": "ps ax | rg run_mac_usdjpy_history_sync_loop.sh",
                         "allowedLanes": ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"],
                         "forbiddenSideEffects": [
                             "ORDER_SEND",
@@ -483,8 +488,10 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["artifactId"], "historyProductionStatus")
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["timeframe"], "M1")
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["copyRatesExportFreshnessStatus"], "STALE")
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["copyRatesExportSchemaVersion"], 1)
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["copyRatesExportLatestLagHours"], 263.4)
             self.assertEqual(manifest["promotionRecoveryQueue"][0]["continuousSyncStatus"], "MISSING")
+            self.assertEqual(manifest["promotionRecoveryQueue"][0]["continuousSyncSchemaVersion"], 1)
             self.assertFalse(manifest["promotionRecoveryQueue"][0]["continuousSyncRunning"])
             self.assertEqual(
                 manifest["promotionRecoveryQueue"][0]["continuousSyncMode"],
@@ -502,6 +509,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 manifest["promotionRecoveryQueue"][0]["continuousSyncOnceCommand"],
                 "tools/run_mac_usdjpy_history_sync_loop.sh --once",
             )
+            self.assertFalse(manifest["promotionRecoveryQueue"][0]["continuousSyncProbePermissionDenied"])
+            self.assertIn("ps ax", manifest["promotionRecoveryQueue"][0]["continuousSyncHostProbeCommand"])
             self.assertIn("history sync loop", manifest["promotionRecoveryQueue"][0]["continuousSyncNextActionZh"])
             self.assertIn("CopyRates exporter", manifest["promotionRecoveryQueue"][0]["continuousSyncAcceptanceZh"])
             self.assertIn("READ_ONLY_RESEARCH", manifest["promotionRecoveryQueue"][0]["continuousSyncAllowedLanes"])
@@ -519,18 +528,22 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertIn("ga_promotion", history_row["promotionGate"]["requiredFor"])
             self.assertEqual(history_row["promotionGate"]["staleTimeframes"], ["M1"])
             self.assertEqual(history_row["promotionGate"]["copyRatesExportFreshness"]["status"], "STALE")
+            self.assertEqual(history_row["promotionGate"]["copyRatesExportFreshness"]["schemaVersion"], 1)
             self.assertEqual(history_row["promotionGate"]["continuousSync"]["status"], "MISSING")
+            self.assertEqual(history_row["promotionGate"]["continuousSync"]["schemaVersion"], 1)
             recovery_row = history_row["promotionGate"]["freshnessRecoveryQueue"][0]
             self.assertEqual(recovery_row["timeframe"], "M1")
             self.assertEqual(recovery_row["status"], "FRESHNESS_STALE")
             self.assertEqual(recovery_row["priority"], "HIGH")
             self.assertEqual(recovery_row["copyRatesExportFreshnessStatus"], "STALE")
+            self.assertEqual(recovery_row["copyRatesExportSchemaVersion"], 1)
             self.assertTrue(recovery_row["copyRatesExportStale"])
             self.assertEqual(recovery_row["copyRatesExportGeneratedAtServer"], "2026-06-05T11:56:59Z")
             self.assertEqual(recovery_row["copyRatesExportGeneratedLagHours"], 263.4)
             self.assertEqual(recovery_row["copyRatesExportLatestLagHours"], 263.4)
             self.assertEqual(recovery_row["copyRatesExportStaleTimeframes"], ["M1"])
             self.assertEqual(recovery_row["continuousSyncStatus"], "MISSING")
+            self.assertEqual(recovery_row["continuousSyncSchemaVersion"], 1)
             self.assertFalse(recovery_row["continuousSyncRunning"])
             self.assertEqual(recovery_row["continuousSyncMode"], "READ_ONLY_HISTORY_SYNC_LOOP")
             self.assertEqual(
@@ -541,6 +554,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 recovery_row["continuousSyncOnceCommand"],
                 "tools/run_mac_usdjpy_history_sync_loop.sh --once",
             )
+            self.assertFalse(recovery_row["continuousSyncProbePermissionDenied"])
+            self.assertIn("ps ax", recovery_row["continuousSyncHostProbeCommand"])
             self.assertIn("READ_ONLY_RESEARCH", recovery_row["continuousSyncAllowedLanes"])
             self.assertIn("ORDER_SEND", recovery_row["continuousSyncForbiddenSideEffects"])
             self.assertTrue(recovery_row["continuousSyncRequiresFreshCopyRatesExporter"])
@@ -566,7 +581,9 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(summary["promotionRecoveryQueue"][0]["kind"], "history_freshness")
             self.assertEqual(summary["promotionRecoveryQueue"][0]["timeframe"], "M1")
             self.assertEqual(summary["promotionRecoveryQueue"][0]["copyRatesExportLatestLagHours"], 263.4)
+            self.assertEqual(summary["promotionRecoveryQueue"][0]["copyRatesExportSchemaVersion"], 1)
             self.assertEqual(summary["promotionRecoveryQueue"][0]["continuousSyncStatus"], "MISSING")
+            self.assertEqual(summary["promotionRecoveryQueue"][0]["continuousSyncSchemaVersion"], 1)
             self.assertEqual(
                 summary["promotionRecoveryQueue"][0]["continuousSyncMode"],
                 "READ_ONLY_HISTORY_SYNC_LOOP",
@@ -575,6 +592,8 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 summary["promotionRecoveryQueue"][0]["continuousSyncOnceCommand"],
                 "tools/run_mac_usdjpy_history_sync_loop.sh --once",
             )
+            self.assertFalse(summary["promotionRecoveryQueue"][0]["continuousSyncProbePermissionDenied"])
+            self.assertIn("ps ax", summary["promotionRecoveryQueue"][0]["continuousSyncHostProbeCommand"])
             self.assertIn("READ_ONLY_RESEARCH", summary["promotionRecoveryQueue"][0]["continuousSyncAllowedLanes"])
             self.assertIn("ORDER_SEND", summary["promotionRecoveryQueue"][0]["forbiddenSideEffects"])
             self.assertNotIn("artifacts", summary)

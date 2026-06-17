@@ -9,7 +9,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-from .schema import AGENT_VERSION, FOCUS_SYMBOL, SAFETY_BOUNDARY, history_sync_report_path, production_status_path
+from .schema import (
+    AGENT_VERSION,
+    FOCUS_SYMBOL,
+    SAFETY_BOUNDARY,
+    SCHEMA_VERSION,
+    history_sync_report_path,
+    production_status_path,
+)
 from .sqlite_store import (
     Bar,
     bar_coverage_summary,
@@ -79,6 +86,7 @@ def sync_historical_klines(
     report: Dict[str, Any] = {
         "ok": False,
         "schema": "quantgod.usdjpy_historical_kline_sync_report.v1",
+        "schemaVersion": SCHEMA_VERSION,
         "agentVersion": "perfect-v1.0",
         "symbol": FOCUS_SYMBOL,
         "sourceSymbol": mt5_symbol,
@@ -306,7 +314,7 @@ def build_history_production_status(
     if continuous_sync_running:
         continuous_sync_reason_zh = "后台历史同步 loop 正在运行；继续保持 SQLite 和 MT5 CopyRates 导出同步。"
         continuous_sync_next_action_zh = "保持 history sync loop 和 MQL5 CopyRates exporter 正常刷新。"
-    elif continuous_sync_status == "UNKNOWN":
+    elif continuous_sync_status in {"UNKNOWN", "PROBE_BLOCKED"}:
         continuous_sync_reason_zh = "当前环境无法确认 history sync loop 进程；需在宿主机只读检查同步 loop。"
         continuous_sync_next_action_zh = (
             "在宿主机只读确认 history sync loop 状态，并刷新 MQL5 CopyRates exporter；不写订单、不改 preset。"
@@ -319,6 +327,7 @@ def build_history_production_status(
     return {
         "ok": status == "PASS",
         "schema": "quantgod.usdjpy_history_production_status.v1",
+        "schemaVersion": SCHEMA_VERSION,
         "agentVersion": AGENT_VERSION,
         "generatedAt": _iso(checked_at),
         "symbol": FOCUS_SYMBOL,
@@ -340,6 +349,8 @@ def build_history_production_status(
         },
         "copyRatesExportFreshness": copyrates_freshness,
         "continuousSync": {
+            "schema": "quantgod.usdjpy_history_continuous_sync_probe.v1",
+            "schemaVersion": SCHEMA_VERSION,
             "expected": True,
             "mode": CONTINUOUS_SYNC_MODE,
             "intervalSeconds": int(float(os.environ.get("QG_USDJPY_HISTORY_INTERVAL_SECONDS", "3600"))),
@@ -380,21 +391,25 @@ def _continuous_sync_probe() -> Dict[str, Any]:
         )
     except Exception as exc:
         return {
-            "status": "UNKNOWN",
+            "status": "PROBE_BLOCKED",
             "running": False,
             "scanner": "ps ax",
             "matchingProcessCount": 0,
             "processCommandSamples": [],
             "probeError": str(exc),
+            "probePermissionDenied": isinstance(exc, PermissionError),
+            "hostProbeCommand": "ps ax | rg run_mac_usdjpy_history_sync_loop.sh",
         }
     if result.returncode != 0:
         return {
-            "status": "UNKNOWN",
+            "status": "PROBE_BLOCKED",
             "running": False,
             "scanner": "ps ax",
             "matchingProcessCount": 0,
             "processCommandSamples": [],
             "probeError": f"ps exited {result.returncode}",
+            "probePermissionDenied": False,
+            "hostProbeCommand": "ps ax | rg run_mac_usdjpy_history_sync_loop.sh",
         }
     haystack = result.stdout or ""
     matches: List[str] = []
@@ -414,6 +429,8 @@ def _continuous_sync_probe() -> Dict[str, Any]:
         "matchingProcessCount": len(matches),
         "processCommandSamples": matches[:3],
         "probeError": "",
+        "probePermissionDenied": False,
+        "hostProbeCommand": "ps ax | rg run_mac_usdjpy_history_sync_loop.sh",
     }
 
 
@@ -458,6 +475,7 @@ def _copyrates_export_freshness(
         status = "PASS"
     return {
         "schema": "quantgod.mql5_copyrates_export_freshness.v1",
+        "schemaVersion": SCHEMA_VERSION,
         "status": status,
         "stale": status == "STALE",
         "exportDir": export_report.get("exportDir") or "",

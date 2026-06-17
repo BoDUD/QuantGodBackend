@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 AGENT_VERSION = "perfect-v1.0"
+SCHEMA_VERSION = 1
 FOCUS_SYMBOL = "USDJPYc"
 DB_FILE = "usdjpy.sqlite"
 REPORT_FILE = "QuantGod_StrategyBacktestReport.json"
