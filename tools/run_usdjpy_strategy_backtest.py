@@ -12,6 +12,7 @@ from usdjpy_evidence_os.telegram_gateway import dispatch_text
 from usdjpy_strategy_backtest.history_sync import build_history_production_status, sync_historical_klines
 from usdjpy_strategy_backtest.quality import build_quality_report, write_quality_report
 from usdjpy_strategy_backtest.report import build_sample, run_backtest, status
+from usdjpy_strategy_backtest.schema import production_status_path
 from usdjpy_strategy_backtest.telegram_text import backtest_to_chinese_text
 from usdjpy_strategy_backtest.walk_forward import build_seed_walk_forward
 
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     prod.add_argument("--lookback-days", type=int, default=int(os.environ["QG_USDJPY_HISTORY_LOOKBACK_DAYS"]) if os.environ.get("QG_USDJPY_HISTORY_LOOKBACK_DAYS") else None)
     prod.add_argument("--months", type=int, default=int(os.environ.get("QG_USDJPY_HISTORY_MONTHS", "12")))
     prod.add_argument("--max-latest-lag-hours", type=float, default=float(os.environ.get("QG_USDJPY_HISTORY_MAX_LAG_HOURS", "96")))
+    prod.add_argument("--no-write", action="store_true")
     text = sub.add_parser("telegram-text")
     text.add_argument("--refresh", action="store_true")
     text.add_argument("--send", action="store_true")
@@ -119,6 +121,12 @@ def main(argv: list[str] | None = None) -> int:
             target_days=target_days,
             max_latest_lag_hours=args.max_latest_lag_hours,
         )
+        if not args.no_write:
+            production_status_path(runtime_dir).parent.mkdir(parents=True, exist_ok=True)
+            production_status_path(runtime_dir).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         return emit(payload)
     if args.command == "telegram-text":
         report = run_backtest(runtime_dir, load_strategy(args.strategy_json), write=True) if args.refresh else status(runtime_dir).get("latestReport", {})

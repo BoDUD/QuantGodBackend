@@ -1,6 +1,7 @@
 import tempfile
 import json
 import sqlite3
+import subprocess
 import sys
 import types
 import unittest
@@ -1537,6 +1538,123 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
         self.assertGreater(freshness["latestLagHoursByTimeframe"]["H1"], 96)
         self.assertIn("刷新 MQL5 CopyRates exporter", freshness["nextActionZh"])
         self.assertFalse(freshness["safety"]["orderSendAllowed"])
+
+    def test_history_production_status_exposes_read_only_sync_recovery_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            checked_at = datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc)
+            start = checked_at - timedelta(days=10)
+            steps = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
+            with connect(runtime_dir) as conn:
+                for timeframe, step in steps.items():
+                    bars = []
+                    cursor = start
+                    index = 0
+                    while cursor <= checked_at:
+                        price = 156.0 + (index % 20) * 0.001
+                        bars.append(
+                            Bar(
+                                timestamp=cursor.isoformat().replace("+00:00", "Z"),
+                                open=price,
+                                high=price + 0.01,
+                                low=price - 0.01,
+                                close=price + 0.002,
+                                volume=1000,
+                                spread=10,
+                            )
+                        )
+                        cursor += timedelta(seconds=step)
+                        index += 1
+                    upsert_bars(conn, timeframe, bars)
+
+            with patch(
+                "tools.usdjpy_strategy_backtest.history_sync._continuous_sync_probe",
+                return_value={"status": "MISSING", "running": False, "matchingProcessCount": 0},
+            ):
+                report = build_history_production_status(
+                    runtime_dir,
+                    sync_report={"ok": True, "source": "MQL5_COPYRATES_EXPORT_FALLBACK"},
+                    target_days=10,
+                    max_latest_lag_hours=2,
+                    now=checked_at,
+                )
+
+            continuous_sync = report["continuousSync"]
+            self.assertEqual(report["status"], "PASS", report)
+            self.assertEqual(continuous_sync["mode"], "READ_ONLY_HISTORY_SYNC_LOOP")
+            self.assertEqual(
+                continuous_sync["startupCommand"],
+                "tools/run_mac_usdjpy_history_sync_loop.sh --loop",
+            )
+            self.assertEqual(
+                continuous_sync["onceCommand"],
+                "tools/run_mac_usdjpy_history_sync_loop.sh --once",
+            )
+            self.assertEqual(continuous_sync["launchdService"], "com.quantgod.usdjpy-history-sync")
+            self.assertIn("READ_ONLY_RESEARCH", continuous_sync["allowedLanes"])
+            self.assertIn("ORDER_SEND", continuous_sync["forbiddenSideEffects"])
+            self.assertTrue(continuous_sync["requiresFreshCopyRatesExporter"])
+            self.assertFalse(continuous_sync["safety"]["orderSendAllowed"])
+            self.assertFalse(continuous_sync["safety"]["livePresetMutationAllowed"])
+            self.assertIn("continuousSync.running=true", continuous_sync["acceptanceZh"])
+            self.assertIn("不写订单、不改 preset", continuous_sync["nextActionZh"])
+
+    def test_production_status_cli_writes_runtime_evidence_file_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            checked_at = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            start = checked_at - timedelta(days=10)
+            steps = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
+            with connect(runtime_dir) as conn:
+                for timeframe, step in steps.items():
+                    bars = []
+                    cursor = start
+                    index = 0
+                    while cursor <= checked_at:
+                        price = 156.0 + (index % 20) * 0.001
+                        bars.append(
+                            Bar(
+                                timestamp=cursor.isoformat().replace("+00:00", "Z"),
+                                open=price,
+                                high=price + 0.01,
+                                low=price - 0.01,
+                                close=price + 0.002,
+                                volume=1000,
+                                spread=10,
+                            )
+                        )
+                        cursor += timedelta(seconds=step)
+                        index += 1
+                    upsert_bars(conn, timeframe, bars)
+
+            repo_root = Path(__file__).resolve().parents[1]
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "tools/run_usdjpy_strategy_backtest.py",
+                    "--runtime-dir",
+                    str(runtime_dir),
+                    "production-status",
+                    "--lookback-days",
+                    "10",
+                    "--max-latest-lag-hours",
+                    "2",
+                ],
+                cwd=repo_root,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            stdout_payload = json.loads(completed.stdout)
+            disk_payload = json.loads(production_status_path(runtime_dir).read_text(encoding="utf-8"))
+            self.assertEqual(stdout_payload["generatedAt"], disk_payload["generatedAt"])
+            self.assertEqual(disk_payload["continuousSync"]["mode"], "READ_ONLY_HISTORY_SYNC_LOOP")
+            self.assertEqual(
+                disk_payload["continuousSync"]["startupCommand"],
+                "tools/run_mac_usdjpy_history_sync_loop.sh --loop",
+            )
+            self.assertIn("ORDER_SEND", disk_payload["continuousSync"]["forbiddenSideEffects"])
 
     def test_history_production_allows_small_mt5_server_time_skew(self):
         with tempfile.TemporaryDirectory() as tmp:

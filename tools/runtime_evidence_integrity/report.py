@@ -163,10 +163,27 @@ def _continuous_sync_queue_context(continuous_sync: Dict[str, Any] | None) -> Di
     return {
         "continuousSyncStatus": continuous_sync.get("status") or "",
         "continuousSyncRunning": bool(continuous_sync.get("running")),
+        "continuousSyncMode": continuous_sync.get("mode") or "",
         "continuousSyncScript": continuous_sync.get("script") or "",
+        "continuousSyncStartupCommand": continuous_sync.get("startupCommand") or continuous_sync.get("script") or "",
+        "continuousSyncOnceCommand": continuous_sync.get("onceCommand") or "",
         "continuousSyncLaunchdService": continuous_sync.get("launchdService") or "",
         "continuousSyncMatchingProcessCount": continuous_sync.get("matchingProcessCount"),
         "continuousSyncNextActionZh": continuous_sync.get("nextActionZh") or "",
+        "continuousSyncAcceptanceZh": continuous_sync.get("acceptanceZh") or "",
+        "continuousSyncAllowedLanes": (
+            list(continuous_sync.get("allowedLanes"))
+            if isinstance(continuous_sync.get("allowedLanes"), list)
+            else []
+        ),
+        "continuousSyncForbiddenSideEffects": (
+            list(continuous_sync.get("forbiddenSideEffects"))
+            if isinstance(continuous_sync.get("forbiddenSideEffects"), list)
+            else []
+        ),
+        "continuousSyncRequiresFreshCopyRatesExporter": bool(
+            continuous_sync.get("requiresFreshCopyRatesExporter")
+        ),
     }
 
 
@@ -723,10 +740,19 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "copyRatesExportNextActionZh": item.get("copyRatesExportNextActionZh"),
                         "continuousSyncStatus": item.get("continuousSyncStatus"),
                         "continuousSyncRunning": item.get("continuousSyncRunning"),
+                        "continuousSyncMode": item.get("continuousSyncMode"),
                         "continuousSyncScript": item.get("continuousSyncScript"),
+                        "continuousSyncStartupCommand": item.get("continuousSyncStartupCommand"),
+                        "continuousSyncOnceCommand": item.get("continuousSyncOnceCommand"),
                         "continuousSyncLaunchdService": item.get("continuousSyncLaunchdService"),
                         "continuousSyncMatchingProcessCount": item.get("continuousSyncMatchingProcessCount"),
                         "continuousSyncNextActionZh": item.get("continuousSyncNextActionZh"),
+                        "continuousSyncAcceptanceZh": item.get("continuousSyncAcceptanceZh"),
+                        "continuousSyncAllowedLanes": item.get("continuousSyncAllowedLanes"),
+                        "continuousSyncForbiddenSideEffects": item.get("continuousSyncForbiddenSideEffects"),
+                        "continuousSyncRequiresFreshCopyRatesExporter": item.get(
+                            "continuousSyncRequiresFreshCopyRatesExporter"
+                        ),
                         "refreshCommand": item.get("refreshCommand"),
                         "verifyCommand": item.get("verifyCommand"),
                         "nextActionZh": item.get("nextActionZh"),
@@ -952,10 +978,17 @@ def _summarize_recovery_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "copyRatesExportLatestLagHours",
         "continuousSyncStatus",
         "continuousSyncRunning",
+        "continuousSyncMode",
         "continuousSyncScript",
+        "continuousSyncStartupCommand",
+        "continuousSyncOnceCommand",
         "continuousSyncLaunchdService",
         "continuousSyncMatchingProcessCount",
         "continuousSyncNextActionZh",
+        "continuousSyncAcceptanceZh",
+        "continuousSyncAllowedLanes",
+        "continuousSyncForbiddenSideEffects",
+        "continuousSyncRequiresFreshCopyRatesExporter",
         "evidenceGapZh",
         "copyRatesExportNextActionZh",
         "nextActionZh",

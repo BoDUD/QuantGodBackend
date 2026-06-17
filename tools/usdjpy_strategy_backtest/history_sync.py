@@ -36,7 +36,17 @@ MQL5_EXPORT_SOURCE = "MQL5_COPYRATES_EXPORT_FALLBACK"
 DEFAULT_MAX_LATEST_LAG_HOURS = 96
 MAX_FUTURE_BAR_SKEW_HOURS = 24.0
 CONTINUOUS_SYNC_SCRIPT = "tools/run_mac_usdjpy_history_sync_loop.sh --loop"
+CONTINUOUS_SYNC_ONCE_COMMAND = "tools/run_mac_usdjpy_history_sync_loop.sh --once"
 CONTINUOUS_SYNC_SERVICE = "com.quantgod.usdjpy-history-sync"
+CONTINUOUS_SYNC_MODE = "READ_ONLY_HISTORY_SYNC_LOOP"
+CONTINUOUS_SYNC_ALLOWED_LANES = ["READ_ONLY_RESEARCH", "SHADOW", "TESTER_ONLY"]
+CONTINUOUS_SYNC_FORBIDDEN_SIDE_EFFECTS = [
+    "ORDER_SEND",
+    "POSITION_CLOSE",
+    "LIVE_PRESET_MUTATION",
+    "MT5_REQUEST_WRITE",
+    "WALLET_AUTHORIZATION",
+]
 
 
 def sync_historical_klines(
@@ -331,12 +341,23 @@ def build_history_production_status(
         "copyRatesExportFreshness": copyrates_freshness,
         "continuousSync": {
             "expected": True,
+            "mode": CONTINUOUS_SYNC_MODE,
             "intervalSeconds": int(float(os.environ.get("QG_USDJPY_HISTORY_INTERVAL_SECONDS", "3600"))),
             "script": CONTINUOUS_SYNC_SCRIPT,
+            "startupCommand": CONTINUOUS_SYNC_SCRIPT,
+            "onceCommand": CONTINUOUS_SYNC_ONCE_COMMAND,
             "launchdService": CONTINUOUS_SYNC_SERVICE,
+            "allowedLanes": list(CONTINUOUS_SYNC_ALLOWED_LANES),
+            "forbiddenSideEffects": list(CONTINUOUS_SYNC_FORBIDDEN_SIDE_EFFECTS),
+            "requiresFreshCopyRatesExporter": True,
+            "safety": dict(SAFETY_BOUNDARY),
             **continuous_sync,
             "reasonZh": continuous_sync_reason_zh,
             "nextActionZh": continuous_sync_next_action_zh,
+            "acceptanceZh": (
+                "continuousSync.running=true、CopyRates exporter 新鲜、"
+                "production-status 全周期 freshnessOk=true，且 safety 执行开关保持 false。"
+            ),
         },
         "reasonZh": (
             "USDJPY SQLite 历史数据生产状态通过：M1/M5/M15/H1 覆盖、密度和最新延迟均满足目标。"
