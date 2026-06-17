@@ -81,6 +81,23 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "requiresArtifactHashes": True,
     },
     {
+        "artifactId": "gaMultiGenerationStabilityReport",
+        "category": "ga-stability",
+        "path": "production_validation/QuantGod_GAMultiGenerationStabilityReport.json",
+        "contentType": "json",
+        "expectedSchemas": ["quantgod.ga_multi_generation_stability.report.v1"],
+        "required": True,
+        "requiresGaStabilityPromotionGate": True,
+    },
+    {
+        "artifactId": "gaMultiGenerationStabilityLedger",
+        "category": "ga-stability",
+        "path": "production_validation/QuantGod_GAMultiGenerationStabilityLedger.csv",
+        "contentType": "csv",
+        "expectedSchemas": ["quantgod.ga_multi_generation_stability.ledger.v1"],
+        "required": True,
+    },
+    {
         "artifactId": "historyProductionStatus",
         "category": "history-production",
         "path": "backtest/QuantGod_USDJPYHistoryProductionStatus.json",

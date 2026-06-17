@@ -49,6 +49,36 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         },
     )
     write_json(
+        runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json",
+        {
+            "schema": "quantgod.ga_multi_generation_stability.report.v1",
+            "status": "PASS",
+            "stabilityGrade": "PRODUCTION_READY",
+            "promotionAllowed": True,
+            "generationCount": 5,
+            "candidateCount": 24,
+            "eliteCount": 3,
+            "eliteRepeatCount": 1,
+            "lineageDepth": 3,
+            "factoryLedgerRows": 3,
+            "blockers": [],
+            "recommendationsZh": ["GA 多代稳定性已达到生产观察门槛。"],
+            "safety": {
+                "orderSendAllowed": False,
+                "closeAllowed": False,
+                "cancelAllowed": False,
+                "livePresetMutationAllowed": False,
+                "telegramCommandExecutionAllowed": False,
+                "writesMt5OrderRequest": False,
+            },
+        },
+    )
+    write_text(
+        runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityLedger.csv",
+        "generatedAt,status,stabilityGrade,closureMode,promotionAllowed,generationCount,candidateCount,eliteCount\n"
+        "2026-06-01T00:00:00Z,PASS,PRODUCTION_READY,ELITE_STABILITY,true,5,24,3\n",
+    )
+    write_json(
         runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
         {
             "schema": "quantgod.usdjpy_history_production_status.v1",
@@ -171,8 +201,13 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionRecoveryQueue"], [])
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
-            self.assertEqual(manifest["artifactCount"], 13)
+            self.assertEqual(manifest["artifactCount"], 15)
             self.assertIn("historyProductionStatus", {row["artifactId"] for row in manifest["artifacts"]})
+            ga_stability_row = next(
+                row for row in manifest["artifacts"] if row["artifactId"] == "gaMultiGenerationStabilityReport"
+            )
+            self.assertEqual(ga_stability_row["promotionGate"]["status"], "PASS")
+            self.assertEqual(ga_stability_row["promotionGate"]["stabilityGrade"], "PRODUCTION_READY")
             parity_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "strategyParityReport")
             self.assertEqual(parity_row["promotionGate"]["status"], "PASS")
             self.assertEqual(parity_row["promotionGate"]["reportStatus"], "PARITY_PASS")
@@ -231,6 +266,66 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
 
             self.assertEqual(manifest["status"], "FAIL")
             self.assertIn("historyProductionStatus:missing_required_artifact", manifest["blockers"])
+
+    def test_ga_negative_selection_blocks_promotion_gate_without_failing_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            write_complete_runtime(runtime_dir)
+            write_json(
+                runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json",
+                {
+                    "schema": "quantgod.ga_multi_generation_stability.report.v1",
+                    "status": "PASS",
+                    "stabilityGrade": "NEGATIVE_SELECTION_CLOSED",
+                    "closureMode": "NO_ELITE_NEGATIVE_SELECTION",
+                    "promotionAllowed": False,
+                    "generationCount": 336,
+                    "candidateCount": 1005,
+                    "eliteCount": 0,
+                    "eliteRepeatCount": 0,
+                    "lineageDepth": 2,
+                    "factoryLedgerRows": 312,
+                    "blockers": [],
+                    "recommendationsZh": [
+                        "GA 已完成多代负筛选闭环：当前没有可晋级 elite，保持禁止晋级并扩大下一轮搜索。"
+                    ],
+                    "safety": {
+                        "orderSendAllowed": False,
+                        "closeAllowed": False,
+                        "cancelAllowed": False,
+                        "livePresetMutationAllowed": False,
+                        "telegramCommandExecutionAllowed": False,
+                        "writesMt5OrderRequest": False,
+                    },
+                },
+            )
+
+            manifest = build_core_evidence_manifest(runtime_dir)
+
+            self.assertEqual(manifest["status"], "PASS")
+            self.assertTrue(manifest["ok"])
+            self.assertFalse(manifest["promotionGatePassed"])
+            self.assertEqual(manifest["promotionGateStatus"], "BLOCKED")
+            self.assertIn(
+                "gaMultiGenerationStabilityReport:stability_grade:NEGATIVE_SELECTION_CLOSED",
+                manifest["promotionBlockers"],
+            )
+            self.assertIn(
+                "gaMultiGenerationStabilityReport:promotion_not_allowed",
+                manifest["promotionBlockers"],
+            )
+            ga_row = next(
+                row for row in manifest["artifacts"] if row["artifactId"] == "gaMultiGenerationStabilityReport"
+            )
+            self.assertEqual(ga_row["promotionGate"]["status"], "BLOCKED")
+            self.assertEqual(ga_row["promotionGate"]["closureMode"], "NO_ELITE_NEGATIVE_SELECTION")
+            recovery_row = next(
+                row for row in manifest["promotionRecoveryQueue"] if row["kind"] == "ga_multi_generation_stability"
+            )
+            self.assertEqual(recovery_row["priority"], "HIGH")
+            self.assertEqual(recovery_row["stabilityGrade"], "NEGATIVE_SELECTION_CLOSED")
+            self.assertIn("run_ga_multi_generation_stability.py", recovery_row["refreshCommand"])
+            self.assertIn("ORDER_SEND", recovery_row["forbiddenSideEffects"])
 
     def test_stale_history_blocks_promotion_gate_without_failing_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -479,6 +479,95 @@ def _parity_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _ga_stability_promotion_gate(payload: Dict[str, Any]) -> Dict[str, Any]:
+    blockers: List[str] = []
+    status = str(payload.get("status") or "").upper()
+    grade = str(payload.get("stabilityGrade") or "").upper()
+    promotion_allowed = payload.get("promotionAllowed") is True
+    generation_count = _safe_int(payload.get("generationCount"))
+    candidate_count = _safe_int(payload.get("candidateCount"))
+    elite_count = _safe_int(payload.get("eliteCount"))
+    closure_mode = str(payload.get("closureMode") or "")
+
+    if status != "PASS":
+        blockers.append(f"stability_status:{status or 'missing'}")
+    if grade not in {"STABLE", "PRODUCTION_READY"}:
+        blockers.append(f"stability_grade:{grade or 'missing'}")
+    if not promotion_allowed:
+        blockers.append("promotion_not_allowed")
+
+    for item in payload.get("blockers") if isinstance(payload.get("blockers"), list) else []:
+        blockers.append(str(item))
+
+    safety = payload.get("safety") if isinstance(payload.get("safety"), dict) else {}
+    for key in (
+        "orderSendAllowed",
+        "closeAllowed",
+        "cancelAllowed",
+        "livePresetMutationAllowed",
+        "telegramCommandExecutionAllowed",
+        "writesMt5OrderRequest",
+    ):
+        if safety.get(key) is not False:
+            blockers.append(f"safety_unlock:{key}")
+
+    deduped_blockers: List[str] = []
+    seen: set[str] = set()
+    for blocker in blockers:
+        if blocker in seen:
+            continue
+        seen.add(blocker)
+        deduped_blockers.append(blocker)
+
+    passed = not deduped_blockers
+    if passed:
+        next_action = "GA 多代稳定性已可用于晋级评审；继续保持 walk-forward、parity 与 Case Memory 覆盖。"
+    elif grade == "NEGATIVE_SELECTION_CLOSED":
+        next_action = "GA 已形成负筛选闭环但当前无可晋级 elite；扩大下一轮搜索并把过拟合/淘汰样本写入 Case Memory。"
+    else:
+        next_action = "先运行 GA multi-generation stability build，补齐多代候选、elite 重复、lineage 和 graveyard 证据。"
+
+    return {
+        "gateId": "ga_multi_generation_stability_promotion_gate",
+        "requiredFor": ["ga_promotion", "champion_promotion"],
+        "requiredEvidence": [
+            "GA candidate runs",
+            "GA factory ledger",
+            "elite repeat evidence",
+            "lineage graph",
+            "graveyard / blocker samples",
+        ],
+        "passed": passed,
+        "status": "PASS" if passed else "BLOCKED",
+        "statusZh": (
+            "GA 多代稳定性可用于晋级评审"
+            if passed
+            else "GA 多代稳定性尚不允许晋级"
+        ),
+        "reportStatus": status,
+        "stabilityGrade": grade,
+        "closureMode": closure_mode,
+        "promotionAllowed": promotion_allowed,
+        "generationCount": generation_count,
+        "candidateCount": candidate_count,
+        "eliteCount": elite_count,
+        "eliteRepeatCount": _safe_int(payload.get("eliteRepeatCount")),
+        "lineageDepth": _safe_int(payload.get("lineageDepth")),
+        "factoryLedgerRows": _safe_int(payload.get("factoryLedgerRows")),
+        "blockers": deduped_blockers,
+        "recommendationsZh": (
+            payload.get("recommendationsZh")
+            if isinstance(payload.get("recommendationsZh"), list)
+            else []
+        ),
+        "refreshCommand": "python3 tools/run_ga_multi_generation_stability.py --runtime-dir ./runtime build --write",
+        "verifyCommand": "python3 tools/run_runtime_evidence_integrity.py --runtime-dir ./runtime verify",
+        "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+        "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+        "nextActionZh": next_action,
+    }
+
+
 def _relative_path(root: Path, path: Path) -> str:
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
@@ -551,6 +640,8 @@ def _artifact_row(runtime_dir: Path, spec: Dict[str, Any]) -> Dict[str, Any]:
     )
     if spec.get("requiresParityPromotionGate") and content_type == "json":
         promotion_gate = _parity_promotion_gate(payload)
+    if spec.get("requiresGaStabilityPromotionGate") and content_type == "json":
+        promotion_gate = _ga_stability_promotion_gate(payload)
     if spec.get("requiresCaseMemoryPromotionGate") and content_type == "json":
         promotion_gate = _case_memory_promotion_gate(runtime_dir, payload)
 
@@ -645,6 +736,51 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                     "verifyCommand": gate.get("verifyCommand"),
                     "nextActionZh": gate.get("nextActionZh"),
                     "acceptanceZh": "promotionGate.status=PASS、promotionAllowed=true、status=PARITY_PASS，且 safety 执行开关保持 false。",
+                    "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
+                    "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
+                }
+            )
+            continue
+
+        if artifact_id == "gaMultiGenerationStabilityReport":
+            queue.append(
+                {
+                    "kind": "ga_multi_generation_stability",
+                    "artifactId": artifact_id,
+                    "artifactPath": row.get("path"),
+                    "gateId": gate.get("gateId"),
+                    "status": gate.get("status"),
+                    "priority": "HIGH",
+                    "reportStatus": gate.get("reportStatus"),
+                    "stabilityGrade": gate.get("stabilityGrade"),
+                    "closureMode": gate.get("closureMode"),
+                    "promotionAllowed": gate.get("promotionAllowed"),
+                    "generationCount": gate.get("generationCount"),
+                    "candidateCount": gate.get("candidateCount"),
+                    "eliteCount": gate.get("eliteCount"),
+                    "eliteRepeatCount": gate.get("eliteRepeatCount"),
+                    "lineageDepth": gate.get("lineageDepth"),
+                    "factoryLedgerRows": gate.get("factoryLedgerRows"),
+                    "blockers": list(gate.get("blockers", []))
+                    if isinstance(gate.get("blockers"), list)
+                    else [],
+                    "recommendationsZh": list(gate.get("recommendationsZh", []))
+                    if isinstance(gate.get("recommendationsZh"), list)
+                    else [],
+                    "sourceArtifacts": [
+                        "ga/QuantGod_GACandidateRuns.jsonl",
+                        "ga/QuantGod_GAStatus.json",
+                        "ga/QuantGod_GABlockerSummary.json",
+                        "ga_factory/QuantGod_GAFactoryLedger.csv",
+                        "ga_factory/QuantGod_GAStrategyGraveyard.json",
+                    ],
+                    "refreshCommand": gate.get("refreshCommand"),
+                    "verifyCommand": gate.get("verifyCommand"),
+                    "nextActionZh": gate.get("nextActionZh"),
+                    "acceptanceZh": (
+                        "status=PASS、stabilityGrade=STABLE/PRODUCTION_READY、promotionAllowed=true，"
+                        "且 safety 执行开关保持 false。"
+                    ),
                     "allowedLanes": list(EVIDENCE_RECOVERY_ALLOWED_LANES),
                     "forbiddenSideEffects": list(EVIDENCE_RECOVERY_FORBIDDEN_SIDE_EFFECTS),
                 }
