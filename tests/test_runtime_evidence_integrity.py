@@ -22,7 +22,11 @@ def write_text(path: Path, text: str) -> None:
 def write_complete_runtime(runtime_dir: Path) -> None:
     write_json(
         runtime_dir / "live" / "QuantGod_USDJPYLiveLoopStatus.json",
-        {"schema": "quantgod.usdjpy_live_loop_status.v1", "generatedAt": "2026-06-01T00:00:00Z"},
+        {
+            "schema": "quantgod.usdjpy_live_loop_status.v1",
+            "schemaVersion": 1,
+            "generatedAt": "2026-06-01T00:00:00Z",
+        },
     )
     write_text(
         runtime_dir / "live" / "QuantGod_USDJPYLiveLoopLedger.csv",
@@ -34,7 +38,11 @@ def write_complete_runtime(runtime_dir: Path) -> None:
     )
     write_json(
         runtime_dir / "adaptive" / "QuantGod_AutoExecutionPolicy.json",
-        {"schema": "quantgod.usdjpy_auto_execution_policy.v1", "generatedAt": "2026-06-01T00:00:00Z"},
+        {
+            "schema": "quantgod.usdjpy_auto_execution_policy.v1",
+            "schemaVersion": 1,
+            "generatedAt": "2026-06-01T00:00:00Z",
+        },
     )
     write_text(
         runtime_dir / "adaptive" / "QuantGod_AutoExecutionPolicyLedger.csv",
@@ -129,7 +137,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
     )
     write_text(
         runtime_dir / "execution" / "QuantGod_LiveExecutionFeedback.jsonl",
-        json.dumps({"schema": "quantgod.execution_feedback.v1", "feedbackId": "F-001"}) + "\n",
+        json.dumps({"schema": "quantgod.execution_feedback.v1", "schemaVersion": 1, "feedbackId": "F-001"}) + "\n",
     )
     write_json(
         runtime_dir / "case_memory" / "QuantGod_CaseMemoryStrategyCandidates.json",
@@ -186,7 +194,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
     )
     write_json(
         runtime_dir / "production_validation" / "QuantGod_ProductionEvidenceValidationReport.json",
-        {"schema": "quantgod.production_evidence_validation.v1", "status": "WARN"},
+        {"schema": "quantgod.production_evidence_validation.v1", "schemaVersion": 1, "status": "WARN"},
     )
 
 
@@ -209,18 +217,10 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionRecoveryQueueCount"], 0)
             self.assertEqual(manifest["promotionRecoveryQueue"], [])
             self.assertEqual(manifest["jsonArtifactCount"], 11)
-            self.assertEqual(manifest["jsonDeclaredVersionCount"], 7)
-            self.assertEqual(manifest["versionCoverageStatus"], "PARTIAL")
-            self.assertEqual(
-                manifest["versionMissingArtifacts"],
-                [
-                    "liveLoopStatus",
-                    "autoExecutionPolicy",
-                    "executionFeedbackLedger",
-                    "productionEvidenceValidationReport",
-                ],
-            )
-            self.assertEqual(manifest["declaredVersionRequiredCount"], 7)
+            self.assertEqual(manifest["jsonDeclaredVersionCount"], 11)
+            self.assertEqual(manifest["versionCoverageStatus"], "PASS")
+            self.assertEqual(manifest["versionMissingArtifacts"], [])
+            self.assertEqual(manifest["declaredVersionRequiredCount"], 11)
             self.assertEqual(manifest["declaredVersionRequiredMissingCount"], 0)
             self.assertEqual(manifest["declaredVersionRequiredStatus"], "PASS")
             self.assertFalse(manifest["safety"]["orderSendAllowed"])

@@ -165,6 +165,7 @@ def build_report(runtime_dir: Path) -> dict[str, Any]:
         blockers.append("RSI guarded elite lineage 尚未完成冻结/复核")
     return {
         "schema": REPORT_SCHEMA,
+        "schemaVersion": 1,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "status": status,
         "summaryZh": "生产证据可用" if status == "PASS" else "生产证据仍需补强",

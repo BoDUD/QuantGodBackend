@@ -166,6 +166,7 @@ class AutoPolicyRow:
 def build_policy_document(rows: List[AutoPolicyRow], runtime_dir: str, generated_by: str = "run_auto_execution_policy.py") -> Dict[str, Any]:
     payload = {
         "schema": SCHEMA_VERSION,
+        "schemaVersion": 1,
         "generatedAt": now_iso(),
         "generatedBy": generated_by,
         "runtimeDir": runtime_dir,

@@ -11,6 +11,7 @@ from .io_utils import ensure_dir, read_csv_rows, read_json, read_jsonl, write_js
 from .schema import (
     ARTIFACT_MANIFEST,
     CORE_FIELDS,
+    FEEDBACK_SCHEMA,
     FEEDBACK_LEDGER,
     FOCUS_SYMBOL,
     OUTPUT_DIR,
@@ -18,6 +19,7 @@ from .schema import (
     SAFETY,
     SCHEMA,
     SCHEMA_ARTIFACT_MANIFEST,
+    SCHEMA_VERSION,
 )
 
 
@@ -43,7 +45,7 @@ def _file_sha256(path: Path) -> str:
 def _artifact_specs(runtime_dir: Path) -> list[tuple[str, Path, str]]:
     out_dir = runtime_dir / OUTPUT_DIR
     return [
-        ("ledger", out_dir / FEEDBACK_LEDGER, "quantgod.execution_feedback.v1"),
+        ("ledger", out_dir / FEEDBACK_LEDGER, FEEDBACK_SCHEMA),
         ("producerReport", out_dir / PRODUCER_REPORT, SCHEMA),
     ]
 
@@ -659,7 +661,8 @@ def _event_from_shadow(row: dict[str, Any], source: str) -> dict[str, Any] | Non
     elif fill is None:
         fill = expected
     event = {
-        "schema": "quantgod.execution_feedback.v1",
+        "schema": FEEDBACK_SCHEMA,
+        "schemaVersion": SCHEMA_VERSION,
         "timestamp": timestamp,
         "symbol": FOCUS_SYMBOL,
         "strategyId": strategy,
@@ -704,7 +707,8 @@ def _event_from_close_history(row: dict[str, Any], source: str) -> dict[str, Any
         fill = expected
     mfe_r, mae_r = _movement_pair(row, direction, profit_r)
     event = {
-        "schema": "quantgod.execution_feedback.v1",
+        "schema": FEEDBACK_SCHEMA,
+        "schemaVersion": SCHEMA_VERSION,
         "timestamp": _text(row, "timestamp", "closeTime", "time", default=_now_iso()),
         "symbol": FOCUS_SYMBOL,
         "strategyId": strategy,
@@ -811,7 +815,8 @@ def _event_from_feedback(row: dict[str, Any], source: str) -> dict[str, Any] | N
     direction = _direction(row)
     mfe_r, mae_r = _movement_pair(row, direction, profit_r)
     event = {
-        "schema": "quantgod.execution_feedback.v1",
+        "schema": FEEDBACK_SCHEMA,
+        "schemaVersion": SCHEMA_VERSION,
         "timestamp": _text(row, "timestamp", "createdAt", "generatedAt", "generatedAtServer", "eventTimeServer", default=_now_iso()),
         "symbol": FOCUS_SYMBOL,
         "strategyId": _text(row, "strategyId", "strategy", default="USDJPY_FEEDBACK_UNKNOWN"),
@@ -896,6 +901,7 @@ def build_feedback(runtime_dir: Path, write: bool = False) -> dict[str, Any]:
     generated_at = _now_iso()
     report = {
         "schema": SCHEMA,
+        "schemaVersion": SCHEMA_VERSION,
         "generatedAt": generated_at,
         "status": "PASS" if len(complete_rows) >= 5 else "WARN",
         "summaryZh": "执行反馈样本已自动补齐" if len(complete_rows) >= 5 else "执行反馈样本仍需积累",

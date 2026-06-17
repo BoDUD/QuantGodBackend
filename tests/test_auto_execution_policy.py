@@ -16,6 +16,7 @@ class AutoExecutionPolicyTests(unittest.TestCase):
             runtime = Path(td)
             cmd_sample(Namespace(runtime_dir=str(runtime), overwrite=True))
             doc = AutoExecutionPolicyEngine(runtime).build(["USDJPYc"], directions=["LONG"], write=True)
+            self.assertEqual(doc["schemaVersion"], 1)
             row = doc["policies"][0]
             self.assertEqual(row["entryMode"], "OPPORTUNITY_ENTRY")
             self.assertTrue(row["allowed"])

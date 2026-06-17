@@ -35,6 +35,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.usdjpy_live_loop_status.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
     },
     {
         "artifactId": "liveLoopLedger",
@@ -63,6 +64,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
             "quantgod.usdjpy_auto_execution_policy.v1",
         ],
         "required": True,
+        "requiresDeclaredVersion": True,
     },
     {
         "artifactId": "autoExecutionPolicyLedger",
@@ -144,6 +146,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "jsonl",
         "expectedSchemas": ["quantgod.execution_feedback.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
     },
     {
         "artifactId": "caseMemoryArtifactManifest",
@@ -163,6 +166,7 @@ CORE_ARTIFACTS: List[Dict[str, Any]] = [
         "contentType": "json",
         "expectedSchemas": ["quantgod.production_evidence_validation.v1"],
         "required": True,
+        "requiresDeclaredVersion": True,
     },
 ]
 

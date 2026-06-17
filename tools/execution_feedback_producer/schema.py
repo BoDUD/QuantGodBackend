@@ -4,6 +4,8 @@ from typing import Final
 
 SCHEMA: Final[str] = "quantgod.execution_feedback_producer.v1"
 SCHEMA_ARTIFACT_MANIFEST: Final[str] = "quantgod.execution_feedback_producer.artifact_manifest.v1"
+SCHEMA_VERSION: Final[int] = 1
+FEEDBACK_SCHEMA: Final[str] = "quantgod.execution_feedback.v1"
 FOCUS_SYMBOL: Final[str] = "USDJPYc"
 OUTPUT_DIR: Final[str] = "execution"
 FEEDBACK_LEDGER: Final[str] = "QuantGod_LiveExecutionFeedback.jsonl"

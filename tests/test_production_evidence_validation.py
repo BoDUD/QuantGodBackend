@@ -15,6 +15,7 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = build_report(Path(tmp))
             self.assertEqual(report["schema"], "quantgod.production_evidence_validation.v1")
+            self.assertEqual(report["schemaVersion"], 1)
             self.assertEqual(report["status"], "FAIL")
             self.assertFalse(report["safety"]["orderSendAllowed"])
             self.assertEqual(report["coreRuntimeEvidenceIntegrity"]["status"], "FAIL")

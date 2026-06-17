@@ -156,6 +156,7 @@ def build_live_loop(repo_root: Path, runtime_dir: Path, *, write: bool = False, 
     top = policy.get("topLiveEligiblePolicy") or policy.get("liveRecoveryCandidate") or policy.get("topPolicy") or {}
     intent = {
         "schema": SCHEMA_INTENT,
+        "schemaVersion": 1,
         "generatedAt": utc_now_iso(),
         "symbol": FOCUS_SYMBOL,
         "state": state,
@@ -179,6 +180,7 @@ def build_live_loop(repo_root: Path, runtime_dir: Path, *, write: bool = False, 
     }
     payload = {
         "schema": SCHEMA_STATUS,
+        "schemaVersion": 1,
         "generatedAt": intent["generatedAt"],
         "symbol": FOCUS_SYMBOL,
         "state": state,
@@ -216,6 +218,7 @@ def build_live_loop(repo_root: Path, runtime_dir: Path, *, write: bool = False, 
         _write_json(live_dir / "QuantGod_USDJPYLiveIntent.json", intent)
         daily = {
             "schema": SCHEMA_DAILY,
+            "schemaVersion": 1,
             "generatedAt": payload["generatedAt"],
             "summaryZh": payload["stateZh"],
             "state": state,

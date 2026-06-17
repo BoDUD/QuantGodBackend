@@ -23,6 +23,7 @@ class ExecutionFeedbackProducerTests(unittest.TestCase):
             with patch.object(producer, "_source_dirs", return_value=[runtime]):
                 report = producer.build_feedback(runtime, write=True)
             self.assertEqual(report["status"], "WARN")
+            self.assertEqual(report["schemaVersion"], 1)
             self.assertEqual(report["generatedCount"], 2)
             self.assertEqual(report["completeSampleCount"], 2)
             ledger = runtime / "execution" / "QuantGod_LiveExecutionFeedback.jsonl"
@@ -77,6 +78,7 @@ class ExecutionFeedbackProducerTests(unittest.TestCase):
             rows = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual(len(rows), 1)
             event = json.loads(rows[0])
+            self.assertEqual(event["schemaVersion"], 1)
             self.assertEqual(event["side"], "LONG")
             self.assertEqual(event["strategyId"], "RSI_Reversal")
             self.assertEqual(event["sourceEventId"], "evt-1")
