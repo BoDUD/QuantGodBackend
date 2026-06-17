@@ -7,7 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.api_route_registry import build_api_route_registry, extract_api_paths, normalize_backend_path
+from tools.api_route_registry import (
+    build_api_route_registry,
+    discover_route_files,
+    extract_api_paths,
+    normalize_backend_path,
+)
 
 
 class ApiRouteRegistryTests(unittest.TestCase):
@@ -47,6 +52,49 @@ class ApiRouteRegistryTests(unittest.TestCase):
             self.assertTrue(registry["safety"]["readOnly"])
             self.assertFalse(registry["safety"]["orderSendAllowed"])
             self.assertFalse(registry["safety"]["livePresetMutationAllowed"])
+
+    def test_registry_auto_discovers_dashboard_api_route_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dashboard = root / "Dashboard"
+            dashboard.mkdir()
+            (dashboard / "new_feature_api_routes.js").write_text(
+                "router.get('/api/new-feature/status', handler)",
+                encoding="utf-8",
+            )
+
+            registry = build_api_route_registry(root)
+
+            self.assertIn("/api/new-feature/status", registry["paths"])
+            self.assertIn("Dashboard/new_feature_api_routes.js", discover_route_files(root))
+            source_paths = {
+                source_file["relativePath"]
+                for source_file in registry["sourceFiles"]
+                if "/api/new-feature/status" in source_file["rawPaths"]
+            }
+            self.assertEqual(source_paths, {"Dashboard/new_feature_api_routes.js"})
+
+    def test_registry_can_use_explicit_route_files_for_focused_scans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dashboard = root / "Dashboard"
+            dashboard.mkdir()
+            (dashboard / "new_feature_api_routes.js").write_text(
+                "router.get('/api/new-feature/status', handler)",
+                encoding="utf-8",
+            )
+            (dashboard / "focused_api_routes.js").write_text(
+                "router.get('/api/focused/status', handler)",
+                encoding="utf-8",
+            )
+
+            registry = build_api_route_registry(
+                root,
+                route_files=("Dashboard/focused_api_routes.js",),
+            )
+
+            self.assertIn("/api/focused/status", registry["paths"])
+            self.assertNotIn("/api/new-feature/status", registry["paths"])
 
     def test_normalize_backend_path_preserves_static_paths(self) -> None:
         self.assertEqual(

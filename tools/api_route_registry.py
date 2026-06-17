@@ -12,6 +12,10 @@ from typing import Iterable
 
 PATH_RE = re.compile(r"/api/[A-Za-z0-9_./:-]+")
 
+ROUTE_FILE_DISCOVERY_PATTERNS = (
+    "Dashboard/*_api_routes.js",
+)
+
 ROUTE_FILE_RELATIVE_PATHS = (
     "Dashboard/phase1_api_routes.js",
     "Dashboard/phase2_api_routes.js",
@@ -120,12 +124,35 @@ def _source_file_entry(backend_root: Path, relative_path: str) -> dict:
     }
 
 
+def discover_route_files(
+    backend_root: Path,
+    explicit_route_files: Iterable[str] = ROUTE_FILE_RELATIVE_PATHS,
+) -> tuple[str, ...]:
+    root = backend_root.resolve()
+    discovered: set[str] = set(explicit_route_files)
+
+    for pattern in ROUTE_FILE_DISCOVERY_PATTERNS:
+        for path in sorted(root.glob(pattern)):
+            if path.is_file():
+                discovered.add(path.relative_to(root).as_posix())
+
+    return tuple(sorted(discovered))
+
+
 def build_api_route_registry(
     backend_root: Path,
-    route_files: Iterable[str] = ROUTE_FILE_RELATIVE_PATHS,
+    route_files: Iterable[str] | None = None,
 ) -> dict:
     root = backend_root.resolve()
-    source_files = [_source_file_entry(root, relative_path) for relative_path in route_files]
+    resolved_route_files = (
+        tuple(route_files)
+        if route_files is not None
+        else discover_route_files(root)
+    )
+    source_files = [
+        _source_file_entry(root, relative_path)
+        for relative_path in resolved_route_files
+    ]
 
     raw_paths = sorted(
         {
@@ -147,6 +174,7 @@ def build_api_route_registry(
         "schema": "quantgod.backend_api_route_registry.v1",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "backendRoot": str(root),
+        "routeFileDiscoveryPatterns": list(ROUTE_FILE_DISCOVERY_PATTERNS),
         "routeFileCount": len(source_files),
         "observedRouteFileCount": sum(1 for source_file in source_files if source_file["exists"]),
         "rawPathCount": len(raw_paths),
