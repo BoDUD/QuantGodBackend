@@ -56,6 +56,17 @@ function read(rel) {
   return readFileSync(join(root, rel), 'utf8');
 }
 
+function assertNoTrueFlag(source, flag) {
+  assert.doesNotMatch(source, new RegExp(`${flag}["']?\\s*[:=]\\s*(?:True|true)`));
+}
+
+test('side-effect flag guard rejects Python and JavaScript truthy literals', () => {
+  assert.throws(() => assertNoTrueFlag('orderSendAllowed: true', 'orderSendAllowed'));
+  assert.throws(() => assertNoTrueFlag('"orderSendAllowed": True', 'orderSendAllowed'));
+  assert.doesNotThrow(() => assertNoTrueFlag('orderSendAllowed: false', 'orderSendAllowed'));
+  assert.doesNotThrow(() => assertNoTrueFlag('"orderSendAllowed": False', 'orderSendAllowed'));
+});
+
 test('live automation readiness remains review-only', () => {
   const combined = files.map((file) => read(file)).join('\n');
   for (const marker of [
@@ -346,27 +357,31 @@ test('live automation readiness remains review-only', () => {
     combined,
     /OrderSend\s*\(|OrderSendAsync\s*\(|TRADE_ACTION_DEAL|PositionClose\s*\(|\bCTrade\b/,
   );
-  assert.doesNotMatch(combined, /orderSendAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /mt5OrderSendAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /hfmCryptoExecutionAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /copyTradeExecutionAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /walletAuthorizationAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /livePresetMutationAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /livePilotActivationAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /receiptWritesAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /receiptFilesWritten["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /autoDisableMutationAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /eaRequestReaderAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /eaRequestReaderEnabled["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /eaRequestFilesRead["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /eaRequestFilesConsumed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /eaOrderSendAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /mt5PendingOrderIntentsWritten["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /brokerExecutionAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /requestWritesAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /adapterExecutionAllowed["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /requestFilesWritten["']?\s*[:=]\s*True/);
-  assert.doesNotMatch(combined, /brokerCallsMade["']?\s*[:=]\s*True/);
+  for (const flag of [
+    'orderSendAllowed',
+    'mt5OrderSendAllowed',
+    'hfmCryptoExecutionAllowed',
+    'copyTradeExecutionAllowed',
+    'walletAuthorizationAllowed',
+    'livePresetMutationAllowed',
+    'livePilotActivationAllowed',
+    'receiptWritesAllowed',
+    'receiptFilesWritten',
+    'autoDisableMutationAllowed',
+    'eaRequestReaderAllowed',
+    'eaRequestReaderEnabled',
+    'eaRequestFilesRead',
+    'eaRequestFilesConsumed',
+    'eaOrderSendAllowed',
+    'mt5PendingOrderIntentsWritten',
+    'brokerExecutionAllowed',
+    'requestWritesAllowed',
+    'adapterExecutionAllowed',
+    'requestFilesWritten',
+    'brokerCallsMade',
+  ]) {
+    assertNoTrueFlag(combined, flag);
+  }
 });
 
 test('dashboard exposes live automation readiness namespace', () => {
