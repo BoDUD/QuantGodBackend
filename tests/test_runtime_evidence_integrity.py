@@ -372,6 +372,9 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(bad_entry_row["status"], "MISSING_CATEGORY")
             self.assertEqual(bad_entry_row["priority"], "HIGH")
             self.assertEqual(bad_entry_row["collectionEndpoint"], "/api/usdjpy-strategy-lab/evidence-os/execution-feedback")
+            self.assertIn("run_live_execution_feedback.py", bad_entry_row["collectionCommand"])
+            self.assertIn("run_case_memory.py", bad_entry_row["caseMemoryBuildCommand"])
+            self.assertIn("run_runtime_evidence_integrity.py", bad_entry_row["verifyCommand"])
             self.assertIn("MT5_REQUEST_WRITE", bad_entry_row["forbiddenSideEffects"])
             rows_by_category = {row.get("category"): row for row in recovery_rows}
             self.assertEqual(
@@ -379,19 +382,24 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
                 "BLOCKED_BY_REPLAY_SCORING_GAP",
             )
             self.assertIn("scored posterior R", rows_by_category["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("run_usdjpy_bar_replay.py", rows_by_category["MISSED_OPPORTUNITY"]["collectionCommand"])
+            self.assertIn("entry --write", rows_by_category["MISSED_OPPORTUNITY"]["collectionCommand"])
             self.assertEqual(
                 rows_by_category["MISSED_OPPORTUNITY"]["sourceGapArtifact"],
                 "replay/usdjpy/QuantGod_USDJPYEntryVariantComparison.json",
             )
             self.assertEqual(rows_by_category["EARLY_EXIT"]["sourceGapStatus"], "WAITING_EXIT_REPLAY_SAMPLES")
             self.assertIn("0 样本", rows_by_category["EARLY_EXIT"]["evidenceGapZh"])
+            self.assertIn("exit --write", rows_by_category["EARLY_EXIT"]["collectionCommand"])
             self.assertEqual(rows_by_category["NEWS_DAMAGE"]["sourceGapStatus"], "WAITING_NEWS_DAMAGE_DELTA")
             self.assertIn("未发现普通新闻", rows_by_category["NEWS_DAMAGE"]["evidenceGapZh"])
+            self.assertIn("build --write", rows_by_category["NEWS_DAMAGE"]["collectionCommand"])
             coverage_queue = {
                 row["category"]: row
                 for row in case_memory_row["promotionGate"]["coveragePlan"]["nextCollectionQueue"]
             }
             self.assertIn("scored posterior", coverage_queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("run_case_memory.py", coverage_queue["MISSED_OPPORTUNITY"]["caseMemoryBuildCommand"])
 
     def test_case_memory_ledger_summary_counts_historical_ga_overfit_samples(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

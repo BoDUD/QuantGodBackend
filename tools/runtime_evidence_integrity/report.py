@@ -603,6 +603,18 @@ def _promotion_recovery_queue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
                         "source": guidance.get("source"),
                         "sourceArtifacts": list(guidance.get("sourceArtifacts", [])),
                         "collectionEndpoint": guidance.get("collectionEndpoint"),
+                        "collectionCommand": (
+                            collection_row.get("collectionCommand")
+                            or guidance.get("collectionCommand")
+                        ),
+                        "caseMemoryBuildCommand": (
+                            collection_row.get("caseMemoryBuildCommand")
+                            or guidance.get("caseMemoryBuildCommand")
+                        ),
+                        "verifyCommand": (
+                            collection_row.get("verifyCommand")
+                            or guidance.get("verifyCommand")
+                        ),
                         "sourceGap": source_gap,
                         "sourceGapStatus": source_gap.get("status") or "",
                         "sourceGapArtifact": source_gap.get("sourceArtifact") or "",

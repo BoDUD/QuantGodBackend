@@ -1061,6 +1061,13 @@ class CaseMemoryCandidateTests(unittest.TestCase):
                 "BLOCKED_BY_REPLAY_SCORING_GAP",
             )
             self.assertIn("scored posterior", queue["MISSED_OPPORTUNITY"]["evidenceGapZh"])
+            self.assertIn("run_usdjpy_bar_replay.py", queue["MISSED_OPPORTUNITY"]["collectionCommand"])
+            self.assertIn("entry --write", queue["MISSED_OPPORTUNITY"]["collectionCommand"])
+            self.assertIn("run_case_memory.py", queue["MISSED_OPPORTUNITY"]["caseMemoryBuildCommand"])
+            self.assertIn("run_runtime_evidence_integrity.py", queue["MISSED_OPPORTUNITY"]["verifyCommand"])
+            self.assertIn("run_usdjpy_bar_replay.py", queue["EARLY_EXIT"]["collectionCommand"])
+            self.assertIn("exit --write", queue["EARLY_EXIT"]["collectionCommand"])
+            self.assertIn("run_usdjpy_bar_replay.py", queue["NEWS_DAMAGE"]["collectionCommand"])
             self.assertFalse(hydrated["safety"]["orderSendAllowed"])
 
 
