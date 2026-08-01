@@ -59,20 +59,6 @@ from .schema import (
     utc_now_iso,
 )
 
-try:
-    from tools.hfm_crypto_cfd.filled_input_validator import (
-        build_hfm_crypto_filled_input_validator,
-        read_hfm_crypto_filled_input_validator,
-    )
-    from tools.hfm_crypto_cfd.schema import filled_input_validator_path as hfm_filled_input_validator_path
-except ModuleNotFoundError:  # pragma: no cover
-    from hfm_crypto_cfd.filled_input_validator import (
-        build_hfm_crypto_filled_input_validator,
-        read_hfm_crypto_filled_input_validator,
-    )
-    from hfm_crypto_cfd.schema import filled_input_validator_path as hfm_filled_input_validator_path
-
-
 def _safe_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -174,9 +160,6 @@ def _saved_or_built(
         for key in (
             "operator_approval_json",
             "request_json",
-            "moss_backtest_json",
-            "hfm_simulation_profile_json",
-            "hfm_contract_spec_json",
         )
     ) or bool(kwargs.get("extra_bases_roots"))
     if not bool(kwargs.get("refresh_sources")) and not explicit_inputs_present and path.exists() and path.is_file():
@@ -203,28 +186,16 @@ def _build_artifacts(
     operator_approval_json: str,
     write: bool,
     refresh_sources: bool,
-    moss_backtest_json: str,
-    hfm_simulation_profile_json: str,
-    hfm_contract_spec_json: str,
     extra_bases_roots: list[str],
 ) -> dict[str, dict[str, Any]]:
-    common = {
-        "write": write,
-        "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
+    common = {"write": write, "refresh_sources": refresh_sources}
+    approval = {
+        **common,
+        "operator_approval_json": operator_approval_json,
         "extra_bases_roots": extra_bases_roots,
     }
-    approval = {**common, "operator_approval_json": operator_approval_json}
     adapter = {**approval, "request_json": request_json}
-    hfm_filled = (
-        read_hfm_crypto_filled_input_validator(runtime_dir)
-        if not refresh_sources and hfm_filled_input_validator_path(runtime_dir).exists()
-        else build_hfm_crypto_filled_input_validator(runtime_dir, write=write)
-    )
     return {
-        "hfmFilledInputValidator": hfm_filled,
         "evidenceIntake": _saved_or_built(runtime_dir, live_evidence_intake_path(runtime_dir), read_live_evidence_intake, build_live_evidence_intake, approval),
         "readiness": _saved_or_built(runtime_dir, readiness_path(runtime_dir), read_live_automation_readiness, build_live_automation_readiness, common),
         "promotionCandidates": _saved_or_built(runtime_dir, live_promotion_candidates_path(runtime_dir), read_live_promotion_candidates, build_live_promotion_candidates, approval),
@@ -255,7 +226,6 @@ def _build_artifacts(
 
 def _read_artifacts(runtime_dir: Path) -> dict[str, dict[str, Any]]:
     return {
-        "hfmFilledInputValidator": read_hfm_crypto_filled_input_validator(runtime_dir),
         "evidenceIntake": read_live_evidence_intake(runtime_dir),
         "readiness": read_live_automation_readiness(runtime_dir),
         "promotionCandidates": read_live_promotion_candidates(runtime_dir),
@@ -288,19 +258,18 @@ def _stage_rows(artifacts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     readiness = _safe_dict(artifacts.get("readiness"))
     lanes = _safe_dict(readiness.get("lanes"))
     usd_lane = _safe_dict(lanes.get("usdjpyMt5"))
-    hfm_intake = _safe_dict(artifacts.get("evidenceIntake"))
-    hfm_filled = _safe_dict(artifacts.get("hfmFilledInputValidator"))
-    hfm_inputs_present = hfm_intake.get("status") == "HFM_REVIEW_INPUTS_PRESENT"
+    evidence_intake = _safe_dict(artifacts.get("evidenceIntake"))
+    forex_inputs_present = evidence_intake.get("status") == "USDJPY_REVIEW_INPUTS_PRESENT"
     usd_candidate = bool(usd_lane.get("reviewCandidate"))
-    input_source_passed = bool(hfm_inputs_present or hfm_filled.get("filledInputsValid") or usd_candidate)
+    input_source_passed = bool(forex_inputs_present or usd_candidate)
     stages = [
         _stage(
             "input_source",
             "证据输入源",
-            hfm_intake,
+            evidence_intake,
             passed=input_source_passed,
             next_action_zh=(
-                "HFM specs/profile 或 USDJPY deployment gate 至少一路先过线。"
+                "USDJPY tester/forward、deployment gate 与 runtime handoff 证据需要先过线。"
                 if not input_source_passed
                 else "证据输入已足够进入候选选择。"
             ),
@@ -468,16 +437,10 @@ def _live_execution_terminal_stage(live_stages: list[dict[str, Any]]) -> dict[st
 def _commands(current_stage: str) -> list[dict[str, Any]]:
     rows = [
         {
-            "id": "validate_hfm_filled_inputs",
-            "stageId": "input_source",
-            "command": "python3 tools/run_hfm_crypto_cfd.py --runtime-dir runtime filled-input-validator --write",
-            "whenZh": "人工 filled specs/profile 改过后先校验。",
-        },
-        {
             "id": "refresh_evidence_intake",
             "stageId": "input_source",
             "command": "python3 tools/run_live_automation_readiness.py --runtime-dir runtime evidence-intake --write --refresh-sources",
-            "whenZh": "刷新 HFM/USDJPY 证据输入。",
+            "whenZh": "刷新 USDJPY 外汇证据输入。",
         },
         {
             "id": "run_orchestrator",
@@ -941,10 +904,8 @@ def build_sim_to_live_orchestrator(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
+    **_retired_inputs: Any,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     operator_approval_json, operator_approval_reuse = operator_approval_json_for_refresh(
@@ -958,9 +919,6 @@ def build_sim_to_live_orchestrator(
         operator_approval_json=operator_approval_json,
         write=write,
         refresh_sources=refresh_sources,
-        moss_backtest_json=moss_backtest_json,
-        hfm_simulation_profile_json=hfm_simulation_profile_json,
-        hfm_contract_spec_json=hfm_contract_spec_json,
         extra_bases_roots=extra_bases_roots or [],
     )
     stages = _stage_rows(artifacts)
@@ -1004,7 +962,7 @@ def build_sim_to_live_orchestrator(
     if live_execution_ready:
         next_required_action_zh = "进入单独 live execution implementation PR；本总控仍不会写 MT5 请求文件或调用 broker。"
     elif execution_mode_status_blocked:
-        next_required_action_zh = "HFM/BTC 总控数据面、审批、dry-run、adapter review、sandbox、validator 和 live execution review-only artifacts 已具备；仅剩执行模式闸门。"
+        next_required_action_zh = "USDJPY 外汇总控数据面、审批、dry-run、adapter review、sandbox、validator 和 live execution review-only artifacts 已具备；仅剩执行模式闸门。"
     elif adapter_review_ready:
         next_required_action_zh = live_current.get("nextRequiredActionZh") or "继续补齐 live execution 后半段评审证据。"
     else:
@@ -1067,7 +1025,6 @@ def build_sim_to_live_orchestrator(
         "stages": stages,
         "liveExecutionStages": live_stages,
         "artifacts": {
-            "hfmFilledInputValidator": _artifact_summary(artifacts["hfmFilledInputValidator"], ("filledInputsValid", "readyForEvidenceIntakeRefresh")),
             "evidenceIntake": _artifact_summary(artifacts["evidenceIntake"], ("fileInputSummary",)),
             "readiness": _artifact_summary(artifacts["readiness"], ("reviewCandidateCount", "simulationQualifiedCount")),
             "promotionCandidates": _artifact_summary(artifacts["promotionCandidates"], ("reviewCandidateCount", "readyForOperatorReviewPacket")),
@@ -1281,7 +1238,7 @@ def read_sim_to_live_orchestrator(runtime_dir: Path) -> dict[str, Any]:
         "liveExecutionStages": live_stages,
         "blockers": blockers,
         "nextRequiredActionZh": (
-            "HFM/BTC 总控数据面、审批、dry-run、adapter review、sandbox、validator 和 live execution review-only artifacts 已具备；仅剩执行模式闸门。"
+            "USDJPY 外汇总控数据面、审批、dry-run、adapter review、sandbox、validator 和 live execution review-only artifacts 已具备；仅剩执行模式闸门。"
             if data_plane_orchestrator_ready and execution_mode_only_blocked
             else current.get("nextRequiredActionZh") or live_current.get("nextRequiredActionZh") or "运行 orchestrator --write 刷新完整状态机。"
         ),

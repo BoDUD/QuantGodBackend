@@ -38,8 +38,6 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
     live = morning.get("liveLane") if isinstance(morning.get("liveLane"), dict) else {}
     mt5 = morning.get("mt5ShadowLane") if isinstance(morning.get("mt5ShadowLane"), dict) else {}
     mt5_summary = mt5.get("summary") if isinstance(mt5.get("summary"), dict) else {}
-    hfm_crypto = morning.get("hfmCryptoShadowLane") if isinstance(morning.get("hfmCryptoShadowLane"), dict) else {}
-    hfm_crypto_summary = hfm_crypto.get("summary") if isinstance(hfm_crypto.get("summary"), dict) else {}
     news_gate = morning.get("newsGate") if isinstance(morning.get("newsGate"), dict) else {}
     spread_gate = morning.get("spreadGate") if isinstance(morning.get("spreadGate"), dict) else {}
     usd_deployment_gate = morning.get("usdDeploymentGate") if isinstance(morning.get("usdDeploymentGate"), dict) else {}
@@ -75,7 +73,7 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
         f"账户模式：{_fmt(morning.get('accountMode'), 'cent')} / {_fmt(morning.get('accountCurrencyUnit'), 'USC')}",
         (
             f"美分账户：{_fmt(cent_lane.get('accountAlias'), 'hfm_cent')} / "
-            f"{_fmt(cent_lane.get('defaultStage'), 'CENT_MICRO_LIVE')}；"
+            f"{_fmt(cent_lane.get('defaultStage'), 'CENT_PAPER')}；"
             f"允许 {_fmt(_join_entry_modes(cent_lane), 'OPPORTUNITY_ENTRY,STANDARD_ENTRY')}"
         ),
         (
@@ -95,11 +93,6 @@ def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
         "MT5 模拟车道：",
         f"- 路线：{_fmt(mt5_summary.get('routeCount'), '0')} 条",
         f"- 快速模拟：{fast_shadow}，测试器：{tester_only}，暂停：{paused}",
-        "",
-        "HFM Crypto CFD 影子车道：",
-        f"- 状态：{_fmt(hfm_crypto.get('stageZh') or hfm_crypto.get('stage'))}",
-        f"- Moss ROI：{_fmt(hfm_crypto_summary.get('mossRoiPct'), '—')}%，Sharpe：{_fmt(hfm_crypto_summary.get('mossSharpe'), '—')}",
-        "- 只做 symbol/Moss 回测映射，不触发 MT5 crypto 下单。",
         "",
         "新闻门禁：",
         f"- 模式：{_fmt(news_gate.get('mode'), 'SOFT')}；风险：{_fmt(news_gate.get('riskLevel'), 'UNKNOWN')}",

@@ -23,6 +23,18 @@ platform = load_module("mt5_platform_store")
 
 
 class Mt5PendingWorkerAndPlatformTests(unittest.TestCase):
+    def test_platform_database_uses_wal_busy_timeout_and_foreign_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / platform.DB_NAME
+            connection = platform.connect_db(database)
+            try:
+                self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
+                self.assertGreaterEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 30000)
+                self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+                self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 1)
+            finally:
+                connection.close()
+
     def write_intents(self, runtime: Path):
         payload = {
             "mode": "TEST_INTENTS",
@@ -86,8 +98,8 @@ class Mt5PendingWorkerAndPlatformTests(unittest.TestCase):
                 payload={
                     "credentialId": "hfm-live",
                     "displayName": "HFM Live",
-                    "accountLogin": 186054398,
-                    "server": "HFMarketsGlobal-Live12",
+                    "accountLogin": 90000001,
+                    "server": "SyntheticBroker-Demo",
                     "terminalPath": r"C:\Program Files\HFM Metatrader 5\terminal64.exe",
                     "password": "do-not-store-me",
                     "passwordEnvVar": "QG_MT5_HFM_PASSWORD",
@@ -235,6 +247,8 @@ class Mt5PendingWorkerAndPlatformTests(unittest.TestCase):
                     "mappings": [
                         {"brokerSymbol": "EURUSDc", "canonicalSymbol": "EURUSD", "assetClass": "Forex", "marketCategory": "Forex", "brokerSuffix": "c"},
                         {"brokerSymbol": "EURUSD.raw", "canonicalSymbol": "EURUSD", "assetClass": "Forex", "marketCategory": "Forex", "brokerSuffix": ".raw"},
+                        {"brokerSymbol": "XAUUSD.synthetic", "canonicalSymbol": "XAUUSD", "assetClass": "Forex", "marketCategory": "Forex", "brokerSuffix": ".synthetic"},
+                        {"brokerSymbol": "US30.synthetic", "canonicalSymbol": "US30", "assetClass": "Indices", "marketCategory": "index_cfd", "brokerSuffix": ".synthetic"},
                     ]
                 },
             )
@@ -242,6 +256,25 @@ class Mt5PendingWorkerAndPlatformTests(unittest.TestCase):
             self.assertGreaterEqual(symbols_state["summary"]["symbolCatalog"], 2)
             self.assertIn("EURUSD", {row["canonicalSymbol"] for row in symbols_state["symbolCatalog"]})
             self.assertIn("standardLot", symbols_state["symbolCatalog"][0])
+            self.assertTrue(symbols_state["symbolCatalog"])
+            self.assertTrue(all(row["marketCategory"].lower() == "forex" for row in symbols_state["symbolCatalog"]))
+            self.assertNotIn(
+                "XAUUSD.synthetic",
+                {row["brokerSymbol"] for row in symbols_state["symbolCatalog"]},
+            )
+            self.assertNotIn(
+                "US30.synthetic",
+                {row["brokerSymbol"] for row in symbols_state["symbolCatalog"]},
+            )
+
+            db = sqlite3.connect(runtime / platform.DB_NAME)
+            try:
+                non_forex_count = db.execute(
+                    "SELECT COUNT(*) FROM qd_market_symbols WHERE lower(COALESCE(market_category, '')) <> 'forex'"
+                ).fetchone()[0]
+                self.assertEqual(non_forex_count, 0)
+            finally:
+                db.close()
 
     def test_platform_db_worker_processes_pending_orders_and_records_task(self):
         with tempfile.TemporaryDirectory() as tmp:

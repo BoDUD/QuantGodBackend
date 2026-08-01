@@ -130,7 +130,6 @@ def _checklist_item(check_id: str, label_zh: str, passed: bool, reason_zh: str) 
 def _evidence_checklist(artifacts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     readiness = _safe_dict(artifacts.get("readiness"))
     lanes = _safe_dict(readiness.get("lanes"))
-    hfm = _safe_dict(lanes.get("hfmCryptoCfd"))
     usd = _safe_dict(lanes.get("usdjpyMt5"))
     approval = _safe_dict(artifacts.get("approvalEvidence"))
     replay = _safe_dict(artifacts.get("dryRunReplay"))
@@ -148,25 +147,7 @@ def _evidence_checklist(artifacts: dict[str, dict[str, Any]]) -> list[dict[str, 
             "review_candidate_lane",
             "至少一个 lane 达到模拟转实盘审查候选",
             review_candidate_count > 0,
-            "需要 USDJPY deployment gate 或 HFM crypto simulation/contract evidence 先过线。",
-        ),
-        _checklist_item(
-            "hfm_crypto_symbol_evidence",
-            "HFM crypto broker symbol 证据",
-            bool(hfm.get("symbolEvidenceFound")),
-            "需要 HFM MT5 下载 crypto 历史/tick，或导入 EA 导出的 crypto symbol specs。",
-        ),
-        _checklist_item(
-            "hfm_crypto_simulation_profile",
-            "HFM crypto 模拟表现达标",
-            bool(hfm.get("simulationProfileQualified") or hfm.get("simulationQualified")),
-            "需要 ROI、Sharpe、最大回撤、交易笔数、爆仓次数字段过准入线。",
-        ),
-        _checklist_item(
-            "hfm_crypto_contract_spec",
-            "HFM crypto 合约规格可审查",
-            bool(hfm.get("executionSpecReady")),
-            "需要 brokerSymbol、contractSize、tickSize、tickValue、minLot、lotStep、maxLot。",
+            "需要 USDJPY deployment gate、tester/forward 和 runtime evidence 先过线。",
         ),
         _checklist_item(
             "usdjpy_live_candidate",
@@ -214,17 +195,11 @@ def _build_artifacts(
     operator_approval_json: str,
     write: bool,
     refresh_sources: bool,
-    moss_backtest_json: str,
-    hfm_simulation_profile_json: str,
-    hfm_contract_spec_json: str,
     extra_bases_roots: list[str],
 ) -> dict[str, dict[str, Any]]:
     kwargs = {
         "write": write,
         "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots,
     }
     approval_kwargs = {**kwargs, "operator_approval_json": operator_approval_json}
@@ -261,10 +236,8 @@ def build_sim_to_live_automation_pipeline(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
+    **_retired_inputs: Any,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     extra_roots = extra_bases_roots or []
@@ -278,9 +251,6 @@ def build_sim_to_live_automation_pipeline(
         operator_approval_json=operator_approval_json,
         write=write,
         refresh_sources=refresh_sources,
-        moss_backtest_json=moss_backtest_json,
-        hfm_simulation_profile_json=hfm_simulation_profile_json,
-        hfm_contract_spec_json=hfm_contract_spec_json,
         extra_bases_roots=extra_roots,
     )
     stages = [
@@ -341,7 +311,7 @@ def build_sim_to_live_automation_pipeline(
     next_action = (
         "进入单独 execution adapter 代码评审；流水线本身仍不会写 MT5 请求文件。"
         if ready_for_adapter_review
-        else "HFM/BTC 数据面、审批、dry-run、preflight 和 request contract 已具备；仅剩执行模式闸门，当前仍不会写订单。"
+        else "USDJPY 外汇数据面、审批、dry-run、preflight 和 request contract 已具备；仅剩执行模式闸门，当前仍不会写订单。"
         if data_plane_pipeline_ready and execution_mode_only_blocked
         else failed.get("nextRequiredActionZh") or _next_action_from_checklist(checklist, "继续补齐当前阶段所需证据。")
     )
@@ -385,9 +355,6 @@ def build_sim_to_live_automation_pipeline(
         "operatorApprovalProvidedReviewPacketHash": approval_evidence.get("providedReviewPacketHash", ""),
         "operatorApprovalBoundToReviewPacket": bool(approval_evidence.get("approvalBoundToReviewPacket")),
         "evidenceInputs": {
-            "mossBacktestJson": moss_backtest_json,
-            "hfmSimulationProfileJson": hfm_simulation_profile_json,
-            "hfmContractSpecJson": hfm_contract_spec_json,
             "extraBasesRootCount": len(extra_roots),
         },
         "stages": stages,
@@ -518,7 +485,7 @@ def read_sim_to_live_automation_pipeline(runtime_dir: Path) -> dict[str, Any]:
         "evidenceChecklist": checklist,
         "blockers": blockers,
         "nextRequiredActionZh": (
-            "HFM/BTC 数据面、审批、dry-run、preflight 和 request contract 已具备；仅剩执行模式闸门，当前仍不会写订单。"
+            "USDJPY 外汇数据面、审批、dry-run、preflight 和 request contract 已具备；仅剩执行模式闸门，当前仍不会写订单。"
             if data_plane_pipeline_ready and execution_mode_only_blocked
             else failed.get("nextRequiredActionZh") or _next_action_from_checklist(checklist, "运行 build 写入最新流水线证据。")
         ),

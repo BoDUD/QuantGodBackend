@@ -22,7 +22,7 @@ class ParamLabRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
-            tester = root / "tester"
+            tester = repo / "runtime" / "HFM_MT5_Tester_Isolated"
             runtime = tester / "MQL5" / "Files"
             output = runtime / "agent" / "QuantGod_ChampionTesterForwardParamLabStatus.json"
             plan_path = runtime / "agent" / "QuantGod_ChampionTesterForwardRequest.json"
@@ -73,8 +73,8 @@ class ParamLabRunnerTests(unittest.TestCase):
                 from_date="2026.03.05",
                 to_date="2026.06.03",
                 terminal_timeout_seconds=5,
-                login="186054398",
-                server="HFMarketsGlobal-Live12",
+                login="90000001",
+                server="SyntheticBroker-Demo",
                 run_terminal=False,
                 authorized_strategy_tester=False,
                 allow_outside_window=False,
@@ -97,7 +97,7 @@ class ParamLabRunnerTests(unittest.TestCase):
             root = Path(tmp)
             repo = root / "repo"
             live_runtime = root / "live" / "MQL5" / "Files"
-            tester = root / "tester"
+            tester = repo / "runtime" / "HFM_MT5_Tester_Isolated"
             output = tester / "MQL5" / "Files" / "agent" / "QuantGod_ForexLive12RsiTesterParamLabStatus.json"
             plan_path = tester / "MQL5" / "Files" / "agent" / "QuantGod_ForexLive12RsiTesterRequest.json"
             lock_path = tester / "MQL5" / "Files" / "QuantGod_AutoTesterWindow.lock.json"
@@ -145,8 +145,8 @@ class ParamLabRunnerTests(unittest.TestCase):
                     "livePilotMode": True,
                 },
                 "account": {
-                    "number": 186054398,
-                    "server": "HFMarketsGlobal-Live12",
+                    "number": 90000001,
+                    "server": "SyntheticBroker-Demo",
                     "margin": 0,
                 },
                 "symbols": [],
@@ -186,8 +186,8 @@ class ParamLabRunnerTests(unittest.TestCase):
                 from_date="2026.03.05",
                 to_date="2026.06.03",
                 terminal_timeout_seconds=5,
-                login="186054398",
-                server="HFMarketsGlobal-Live12",
+                login="90000001",
+                server="SyntheticBroker-Demo",
                 run_terminal=True,
                 authorized_strategy_tester=True,
                 allow_outside_window=True,
@@ -242,21 +242,21 @@ class ParamLabRunnerTests(unittest.TestCase):
             source = root / "source"
             tester = root / "tester"
             (source / "Config").mkdir(parents=True)
-            (source / "Bases" / "HFMarketsGlobal-Live12").mkdir(parents=True)
+            (source / "Bases" / "SyntheticBroker-Demo").mkdir(parents=True)
             (tester / "Config").mkdir(parents=True)
-            (tester / "Bases" / "HFMarketsGlobal-Live12" / "symbols").mkdir(parents=True)
+            (tester / "Bases" / "SyntheticBroker-Demo" / "symbols").mkdir(parents=True)
             (source / "terminal64.exe").write_text("terminal", encoding="ascii")
             (source / "Config" / "accounts.dat").write_bytes(b"account-context")
             (source / "Config" / "servers.dat").write_bytes(b"servers")
             (tester / "Config" / "servers.dat").write_bytes(b"servers")
-            (tester / "Bases" / "HFMarketsGlobal-Live12" / "symbols" / "selected-186054398.dat").write_bytes(b"selected")
+            (tester / "Bases" / "SyntheticBroker-Demo" / "symbols" / "selected-90000001.dat").write_bytes(b"selected")
 
             status = build_status(
                 mode="PREFLIGHT_ONLY_NO_SENSITIVE_COPY",
                 source_root=source,
                 tester_root=tester,
-                login="186054398",
-                server="HFMarketsGlobal-Live12",
+                login="90000001",
+                server="SyntheticBroker-Demo",
                 sensitive_copy_allowed=False,
             )
 

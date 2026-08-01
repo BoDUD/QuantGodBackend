@@ -34,8 +34,8 @@ def build_live_config_proposal(runtime_dir: Path, write: bool = False) -> Dict[s
         "generatedAtIso": generated,
         "proposalId": proposal_id,
         "symbol": FOCUS_SYMBOL,
-        "status": "PROPOSAL_READY_FOR_AUTONOMOUS_GOVERNANCE" if actionable else "NO_CONFIG_CHANGE_REQUIRED",
-        "statusZh": "已生成待自主治理门评估的参数提案" if actionable else "暂无足够证据修改实盘参数",
+        "status": "PROPOSAL_READY_FOR_OPERATOR_REVIEW" if actionable else "NO_CONFIG_CHANGE_REQUIRED",
+        "statusZh": "已生成待人工审核的 Shadow 参数提案" if actionable else "暂无足够证据修改实盘参数",
         "changeCount": len(actionable),
         "expectedImpact": _impact_summary(actionable, "expectedImpact"),
         "riskDelta": _impact_summary(actionable, "riskDelta"),
@@ -53,10 +53,10 @@ def build_live_config_proposal(runtime_dir: Path, write: bool = False) -> Dict[s
             }
             for item in actionable
         ],
-        "autoApplyAllowed": "stage_gated",
+        "autoApplyAllowed": "shadow_only",
         "requiresAutonomousGovernance": True,
         "completedByAgent": True,
-        "autoAppliedByAgent": bool(actionable),
+        "autoAppliedByAgent": False,
         "requiresReplayEvidence": True,
         "requiresShadowValidation": True,
         "safety": READ_ONLY_SAFETY,

@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .release_readiness_refresh import read_release_readiness_refresh
 from .schema import (
     LIVE_EXECUTION_LANE_SELECTOR_SCHEMA_VERSION,
     SAFETY,
@@ -176,42 +175,6 @@ def _lane_profit(profit_target: dict[str, Any], lane_id: str) -> dict[str, Any]:
     }
 
 
-def _btc_tpsl_candidate(runtime: Path) -> dict[str, Any]:
-    report = _read_json(runtime / "agent" / "QuantGod_TpSlOptimizerReport.json")
-    btc = _safe_dict(report.get("btcCryptoCfd"))
-    pick = _safe_dict(btc.get("finalAdvisoryPick"))
-    if not pick:
-        return {"status": "BTC_TPSL_FINAL_PICK_MISSING", "candidateFound": False}
-    metrics = _safe_dict(pick.get("fullWindowMetrics"))
-    params = _safe_dict(pick.get("params")) or _safe_dict(pick.get("parameters"))
-    return {
-        "status": "BTC_TPSL_FINAL_PICK_READY",
-        "candidateFound": True,
-        "strategyId": pick.get("strategyId") or "",
-        "policy": btc.get("finalAdvisoryPickPolicy") or "",
-        "reasonZh": btc.get("finalAdvisoryPickReasonZh") or "",
-        "params": params,
-        "tpSlSummary": pick.get("tpSlSummary") or {
-            "bias": params.get("bias"),
-            "takeProfitPriceMove": params.get("takeProfitPriceMove"),
-            "stopLossPriceMove": params.get("stopLossPriceMove"),
-            "maxHoldBars": params.get("maxHoldBars"),
-            "cooldownBars": params.get("cooldownBars"),
-        },
-        "metrics": {
-            "pnlUsd": metrics.get("pnlUsd"),
-            "sharpe": metrics.get("sharpe"),
-            "maxDrawdownPct": metrics.get("maxDrawdownPct"),
-            "tradeCount": metrics.get("tradeCount"),
-            "liquidationCount": metrics.get("liquidationCount"),
-        },
-        "validWindowCount": pick.get("validWindowCount"),
-        "windowCount": pick.get("windowCount"),
-        "orderSendAllowed": False,
-        "mt5OrderSendAllowed": False,
-    }
-
-
 def _forex_lane(dashboard: dict[str, Any], profit_target: dict[str, Any], dashboard_path: Path) -> dict[str, Any]:
     runtime = _safe_dict(dashboard.get("runtime"))
     account = _safe_dict(dashboard.get("account"))
@@ -298,45 +261,6 @@ def _forex_lane(dashboard: dict[str, Any], profit_target: dict[str, Any], dashbo
     }
 
 
-def _crypto_lane(runtime: Path, release_readiness: dict[str, Any], profit_target: dict[str, Any]) -> dict[str, Any]:
-    file_blockers = _safe_list(release_readiness.get("fileEvidenceBlockers"))
-    release_summary = _safe_dict(release_readiness.get("executionReleaseGateSummary"))
-    activation_summary = _safe_dict(release_readiness.get("executionActivationGateSummary"))
-    profit = _lane_profit(profit_target, "btcCryptoCfd")
-    blockers = [
-        row for row in file_blockers if isinstance(row, dict)
-    ]
-    for code in _safe_list(release_summary.get("blockerCodes")):
-        blockers.append(_blocker(str(code), "执行 release token 未释放。", source="releaseGate"))
-    score = 0
-    score += 35 if profit["targetReached"] else 0
-    score += 20 if bool(release_readiness.get("ok")) else 0
-    score += 5 if activation_summary else 0
-    score -= 8 * len(file_blockers)
-    score -= 3 * int(release_summary.get("blocked") or 0)
-    return {
-        "laneId": "btcCryptoCfd",
-        "labelZh": "BTC / HFM Crypto CFD Live16",
-        "rankScore": max(score, 0),
-        "profitEvidence": profit,
-        "strategyCandidate": _btc_tpsl_candidate(runtime),
-        "runtimeSwitches": {
-            "canReleaseExecutionNow": bool(release_readiness.get("canReleaseExecutionNow")),
-            "orderSendAllowed": bool(release_readiness.get("orderSendAllowed")),
-            "mt5OrderSendAllowed": bool(release_readiness.get("mt5OrderSendAllowed")),
-            "releaseBlocked": int(release_summary.get("blocked") or 0),
-            "activationBlocked": int(activation_summary.get("blocked") or 0),
-        },
-        "primaryBlocker": release_readiness.get("primaryActionableBlocker") or (blockers[0] if blockers else {}),
-        "blockers": blockers[:12],
-        "nearestSafeActionZh": "BTC Live16 当前卡在 deployed preset/启动 ini 和 release token；只允许继续 disabled-first 审查，不改 preset、不写订单。",
-        "orderSendAllowed": False,
-        "mt5OrderSendAllowed": False,
-        "requestFilesWritten": False,
-        "brokerCallsMade": False,
-    }
-
-
 def build_live_execution_lane_selector(
     runtime_dir: Path,
     *,
@@ -350,11 +274,7 @@ def build_live_execution_lane_selector(
     profit_target = _read_json(Path(profit_target_json)) if profit_target_json else _read_json(runtime / "profit_target" / "QuantGod_ProfitTargetTracker.json")
     if not profit_target:
         profit_target = _read_json(Path.cwd() / "runtime" / "profit_target" / "QuantGod_ProfitTargetTracker.json")
-    release_readiness = read_release_readiness_refresh(runtime)
-    lanes = [
-        _forex_lane(dashboard, profit_target, dashboard_path),
-        _crypto_lane(runtime, release_readiness, profit_target),
-    ]
+    lanes = [_forex_lane(dashboard, profit_target, dashboard_path)]
     ranked = sorted(lanes, key=lambda row: float(row.get("rankScore") or 0), reverse=True)
     selected = ranked[0] if ranked else {}
     payload: dict[str, Any] = {
@@ -364,7 +284,7 @@ def build_live_execution_lane_selector(
         "runtimeDir": str(runtime),
         "primaryDashboardPath": str(dashboard_path),
         "status": "LANE_SELECTOR_REVIEW_ONLY",
-        "statusZh": "双车道择优已刷新；只读展示最接近执行的 lane。",
+        "statusZh": "外汇车道只读评审已刷新。",
         "selectedLaneId": selected.get("laneId") or "",
         "selectedLaneLabelZh": selected.get("labelZh") or "",
         "selectedLanePrimaryBlocker": selected.get("primaryBlocker") or {},

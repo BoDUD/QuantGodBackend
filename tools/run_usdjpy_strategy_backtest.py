@@ -89,19 +89,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "sample":
         return emit(build_sample(runtime_dir, overwrite=args.overwrite))
     if args.command == "sync-klines":
-        return emit(
-            sync_historical_klines(
-                runtime_dir,
-                months=args.months,
-                lookback_days=args.lookback_days,
-                timeframes=args.timeframes.split(","),
-                symbol=args.symbol,
-                terminal_path=args.terminal_path,
-                full_refresh=args.full_refresh,
-                max_bars_per_timeframe=args.max_bars_per_timeframe,
-                max_latest_lag_hours=args.max_latest_lag_hours,
-            )
+        payload = sync_historical_klines(
+            runtime_dir,
+            months=args.months,
+            lookback_days=args.lookback_days,
+            timeframes=args.timeframes.split(","),
+            symbol=args.symbol,
+            terminal_path=args.terminal_path,
+            full_refresh=args.full_refresh,
+            max_bars_per_timeframe=args.max_bars_per_timeframe,
+            max_latest_lag_hours=args.max_latest_lag_hours,
         )
+        emit(payload)
+        return 0 if payload.get("ok") else 2
     if args.command == "run":
         return emit(run_backtest(runtime_dir, load_strategy(args.strategy_json), write=True if args.write else True))
     if args.command == "walk-forward":

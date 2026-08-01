@@ -156,13 +156,6 @@ def _approval_requirements(packet: dict[str, Any]) -> list[dict[str, Any]]:
             "reasonZh": "即使候选通过，也必须先观察 dry-run 计划和执行反馈，不直接开真钱。",
         },
     ]
-    if "hfmCryptoCfd" in candidates:
-        requirements.append({
-            "id": "hfm_contract_spec_ack",
-            "labelZh": "确认 HFM crypto 合约规格",
-            "required": True,
-            "reasonZh": "必须确认 broker symbol、contract size、tick value、lot step、spread、swap/funding 和周末跳空规则。",
-        })
     return requirements
 
 
@@ -221,9 +214,6 @@ def build_live_operator_approval_draft(
     *,
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -232,12 +222,9 @@ def build_live_operator_approval_draft(
             runtime_dir,
             write=write,
             refresh_sources=refresh_sources,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
-        if refresh_sources or moss_backtest_json or hfm_simulation_profile_json or hfm_contract_spec_json or extra_bases_roots
+        if refresh_sources or extra_bases_roots
         else read_live_execution_review_packet(runtime_dir)
     )
     packet_hash = _approval_packet_hash(packet)
@@ -311,9 +298,6 @@ def build_live_operator_approval_evidence_review(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -321,9 +305,6 @@ def build_live_operator_approval_evidence_review(
         runtime_dir,
         write=bool(write and refresh_sources),
         refresh_sources=refresh_sources,
-        moss_backtest_json=moss_backtest_json,
-        hfm_simulation_profile_json=hfm_simulation_profile_json,
-        hfm_contract_spec_json=hfm_contract_spec_json,
         extra_bases_roots=extra_bases_roots or [],
     )
     packet_hash = str(draft.get("reviewPacketHash") or "")
@@ -385,7 +366,6 @@ def build_live_operator_approval_evidence_review(
             "kill_switch_ack": "killSwitchAck",
             "credentials_external_ack": "credentialsExternalAck",
             "dry_run_first_ack": "dryRunFirstAck",
-            "hfm_contract_spec_ack": "hfmContractSpecAck",
         }.get(requirement_id, requirement_id)
         passed = bool(
             approval_payload
@@ -500,9 +480,6 @@ def build_dry_run_live_execution_plan(
     *,
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -511,21 +488,15 @@ def build_dry_run_live_execution_plan(
             runtime_dir,
             write=write,
             refresh_sources=refresh_sources,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
-        if refresh_sources or moss_backtest_json or hfm_simulation_profile_json or hfm_contract_spec_json or extra_bases_roots
+        if refresh_sources or extra_bases_roots
         else read_live_execution_review_packet(runtime_dir)
     )
     approval = build_live_operator_approval_draft(
         runtime_dir,
         write=write,
         refresh_sources=refresh_sources,
-        moss_backtest_json=moss_backtest_json,
-        hfm_simulation_profile_json=hfm_simulation_profile_json,
-        hfm_contract_spec_json=hfm_contract_spec_json,
         extra_bases_roots=extra_bases_roots or [],
     )
     packet_hash = _safe_dict(approval).get("reviewPacketHash") or _approval_packet_hash(packet)

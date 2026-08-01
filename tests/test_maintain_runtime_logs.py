@@ -16,6 +16,28 @@ SPEC.loader.exec_module(runtime_logs)
 
 
 class RuntimeLogMaintenanceTests(unittest.TestCase):
+    def test_collision_fallback_archives_are_numbered_and_recognized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_dir = Path(tmp) / "archive"
+            archive_dir.mkdir()
+            stamp = "20260802T021500JST"
+
+            first_log = archive_dir / f"agent_v25_screen.{stamp}.log.gz"
+            first_log.touch()
+            numbered_log = runtime_logs._unique_archive_path(archive_dir, "agent_v25_screen", stamp)
+            self.assertEqual(numbered_log.name, f"agent_v25_screen.{stamp}.1.log.gz")
+            self.assertTrue(runtime_logs._is_archived_log(numbered_log))
+
+            first_jsonl = archive_dir / f"execution__feedback.{stamp}.jsonl.gz"
+            first_jsonl.touch()
+            numbered_jsonl = runtime_logs._unique_jsonl_archive_path(
+                archive_dir,
+                "execution__feedback",
+                stamp,
+            )
+            self.assertEqual(numbered_jsonl.name, f"execution__feedback.{stamp}.1.jsonl.gz")
+            self.assertTrue(runtime_logs._is_archived_jsonl(numbered_jsonl))
+
     def test_rotates_large_active_log_and_truncates_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime_root = Path(tmp) / "runtime"
@@ -43,7 +65,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
             runtime_root.mkdir(parents=True)
             legacy = runtime_root / "agent_v25_screen.20260512T1459JST.log"
             legacy.write_text("legacy\n" * 8, encoding="utf-8")
-            old_archive = archive_dir / "agent_v25_screen.20260510T1459JST.log.gz"
+            old_archive = archive_dir / "agent_v25_screen.20260510T1459JST.1.log.gz"
             archive_dir.mkdir(parents=True)
             with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
                 handle.write("expired\n")
@@ -143,7 +165,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
             runtime_root = Path(tmp) / "runtime"
             archive_dir = runtime_root / "jsonl_archive"
             archive_dir.mkdir(parents=True)
-            old_archive = archive_dir / "execution__QuantGod_LiveExecutionFeedback.20260510T1459JST.jsonl.gz"
+            old_archive = archive_dir / "execution__QuantGod_LiveExecutionFeedback.20260510T1459JST.1.jsonl.gz"
             new_archive = archive_dir / "evidence_os__QuantGod_LiveExecutionFeedback.20260511T1459JST.jsonl.gz"
             for archive in (old_archive, new_archive):
                 with gzip.open(archive, "wt", encoding="utf-8") as handle:

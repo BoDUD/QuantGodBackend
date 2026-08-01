@@ -100,10 +100,9 @@ def _dashboard_candidates(runtime_dir: Path) -> list[Path]:
         runtime_dir / "mac_import" / "mt5_files_snapshot" / "QuantGod_Dashboard.json",
         runtime_dir.parent / "Dashboard" / "QuantGod_Dashboard.json",
     ]
-    for env_name in ("QG_HFM_CRYPTO_RUNTIME_DIR", "QG_MT5_SECONDARY_FILES_DIR"):
-        raw = os.environ.get(env_name)
-        if raw:
-            candidates.append(Path(raw).expanduser() / "QuantGod_Dashboard.json")
+    secondary_files = os.environ.get("QG_MT5_SECONDARY_FILES_DIR")
+    if secondary_files:
+        candidates.append(Path(secondary_files).expanduser() / "QuantGod_Dashboard.json")
     secondary_root = os.environ.get("QG_MT5_SECONDARY_ROOT")
     if secondary_root:
         candidates.append(Path(secondary_root).expanduser() / "MQL5" / "Files" / "QuantGod_Dashboard.json")
@@ -227,11 +226,11 @@ def _symbol_rows(snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 def _sidecar_symbol_rows(runtime_dir: Path, snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    specs = _safe_dict(_safe_dict(snapshot).get("hfmCryptoSymbolSpecs"))
+    specs = _safe_dict(_safe_dict(snapshot).get("mt5SymbolSpecs"))
     rows.extend(row for row in _safe_list(specs.get("symbols")) if isinstance(row, dict))
     for path in (
-        Path(runtime_dir) / "hfm_crypto" / "QuantGod_HFMCryptoSymbolSpecs.json",
-        Path(runtime_dir) / "hfm_crypto" / "QuantGod_HFMCryptoContractSpecExport.json",
+        Path(runtime_dir) / "QuantGod_MT5SymbolSpecs.json",
+        Path(runtime_dir) / "QuantGod_MT5ContractSpecExport.json",
     ):
         if not path.exists() or not path.is_file():
             continue
@@ -252,16 +251,12 @@ def _sidecar_symbol_rows(runtime_dir: Path, snapshot: dict[str, Any] | None) -> 
     return unique
 
 
-def _hfm_crypto_runtime_probe_paths(runtime_dir: Path) -> list[Path]:
+def _secondary_mt5_runtime_probe_paths(runtime_dir: Path) -> list[Path]:
     runtime_dir = Path(runtime_dir)
-    roots: list[Path] = [
-        runtime_dir / "hfm_crypto",
-        runtime_dir,
-    ]
-    for env_name in ("QG_HFM_CRYPTO_RUNTIME_DIR", "QG_MT5_SECONDARY_FILES_DIR"):
-        raw = os.environ.get(env_name)
-        if raw:
-            roots.append(Path(raw).expanduser())
+    roots: list[Path] = [runtime_dir]
+    secondary_files = os.environ.get("QG_MT5_SECONDARY_FILES_DIR")
+    if secondary_files:
+        roots.append(Path(secondary_files).expanduser())
     secondary_root = os.environ.get("QG_MT5_SECONDARY_ROOT")
     if secondary_root:
         roots.append(Path(secondary_root).expanduser() / "MQL5" / "Files")
@@ -294,8 +289,7 @@ def _hfm_crypto_runtime_probe_paths(runtime_dir: Path) -> list[Path]:
 
     candidates: list[Path] = []
     for root in roots:
-        candidates.append(root / "QuantGod_HFMCryptoRuntimeProbe.json")
-        candidates.append(root / "hfm_crypto" / "QuantGod_HFMCryptoRuntimeProbe.json")
+        candidates.append(root / "QuantGod_MT5RuntimeProbe.json")
     seen: set[str] = set()
     unique: list[Path] = []
     for candidate in candidates:
@@ -318,7 +312,7 @@ def _runtime_probe_rank(row: dict[str, Any]) -> tuple[int, float, int]:
 
 def _runtime_probe_symbol_rows(runtime_dir: Path, snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    probe = _safe_dict(_safe_dict(snapshot).get("hfmCryptoRuntimeProbe"))
+    probe = _safe_dict(_safe_dict(snapshot).get("mt5RuntimeProbe"))
     for row in _safe_list(probe.get("symbols")):
         if isinstance(row, dict):
             rows.append({
@@ -327,7 +321,7 @@ def _runtime_probe_symbol_rows(runtime_dir: Path, snapshot: dict[str, Any] | Non
                 "_runtimeProbeFresh": True,
                 "_runtimeProbeAgeSeconds": 0.0,
             })
-    for path in _hfm_crypto_runtime_probe_paths(runtime_dir):
+    for path in _secondary_mt5_runtime_probe_paths(runtime_dir):
         if not path.exists() or not path.is_file():
             continue
         payload, _ = _read_json(path)
@@ -643,10 +637,8 @@ def build_live_runtime_preflight_probe(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
+    **_retired_inputs: Any,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     operator_approval_json, operator_approval_reuse = operator_approval_json_for_refresh(
@@ -657,9 +649,6 @@ def build_live_runtime_preflight_probe(
     should_rebuild = bool(
         refresh_sources
         or operator_approval_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     replay = (
@@ -668,9 +657,6 @@ def build_live_runtime_preflight_probe(
             write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
         if should_rebuild
@@ -682,9 +668,6 @@ def build_live_runtime_preflight_probe(
             write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
         if should_rebuild
@@ -762,7 +745,7 @@ def build_live_runtime_preflight_probe(
         status = "WAITING_EXECUTION_MODE_ACTIVATION"
         status_zh = "数据面预检已通过，等待执行模式闸门"
         next_required_action_zh = (
-            "HFM/BTC 数据面、账户、kill switch、tick、价差和风险边界已通过；"
+            "MT5 外汇数据面、账户、kill switch、tick、价差和风险边界已通过；"
             "仅剩 livePilotMode、readOnlyMode、executionEnabled、tradeAllowed 执行模式闸门，"
             "必须走单独 execution lane/live pilot 激活评审，当前仍不会写订单。"
         )

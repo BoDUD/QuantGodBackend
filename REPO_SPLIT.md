@@ -6,14 +6,13 @@
 
 - MT5/MQL5 engine、preset、tester 配置。
 - Node dashboard/API server。
-- Python tools、AI/Governance/ParamLab/HFM Crypto CFD/MT5 bridge。
+- Python tools、AI/Governance/ParamLab/MT5 bridge。
 - 后端 contract tests 与 CI guard。
 - 本地启动脚本和受保护的 MT5 live/shadow/backtest 工作流。
 
 ## 已迁出内容
 
 - `frontend/` → `BoDUD/QuantGodFrontend`
-- `cloudflare/` → `BoDUD/QuantGodInfra`
 - 完整 `docs/` → `BoDUD/QuantGodDocs`
 
 ## 构建联动

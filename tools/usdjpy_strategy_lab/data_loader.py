@@ -105,6 +105,40 @@ def first_json(runtime_dir: Path, *names: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def embedded_rsi_entry_diagnostics(runtime_dir: Path, symbol: str = FOCUS_SYMBOL) -> Optional[Dict[str, Any]]:
+    """Return the freshest embedded RSI diagnostic from an EA dashboard.
+
+    Runtime snapshots and dashboards can be published within the same filesystem
+    timestamp window. Selecting the freshest generic runtime snapshot first can
+    therefore hide a newer embedded diagnostic behind a snapshot that has no
+    diagnostic section. Scan dashboards directly so stale standalone evidence
+    cannot win merely because of candidate ordering.
+    """
+    candidates: List[Dict[str, Any]] = []
+    paths = [
+        *_candidate_paths(runtime_dir, "QuantGod_Dashboard.json"),
+        *_global_mt5_paths(runtime_dir, "QuantGod_Dashboard.json"),
+    ]
+    for path in paths:
+        dashboard = _read_json(path)
+        if not dashboard:
+            continue
+        source_symbol = dashboard.get("symbol") or dashboard.get("watchlist") or symbol
+        if not is_focus_symbol(source_symbol):
+            continue
+        embedded = dashboard.get("usdJpyRsiEntryDiagnostics")
+        if not isinstance(embedded, dict) or not embedded:
+            continue
+        result = dict(embedded)
+        result.setdefault("_source", "QuantGod_Dashboard.json.usdJpyRsiEntryDiagnostics")
+        result.setdefault("_dashboardFilePath", dashboard.get("_filePath") or str(path))
+        result.setdefault("_fileAgeSeconds", dashboard.get("_fileAgeSeconds"))
+        candidates.append(result)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: to_float(item.get("_fileAgeSeconds"), 999999.0))
+
+
 def _dashboard_fastlane_fallback(runtime_dir: Path) -> Optional[Dict[str, Any]]:
     dashboard = focus_runtime_snapshot(runtime_dir)
     if not dashboard:

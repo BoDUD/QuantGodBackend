@@ -486,40 +486,6 @@ def promotion_recommendations(version_gate: dict[str, Any], governance: dict[str
     return recommendations
 
 
-def hfm_crypto_summary(runtime_dir: Path) -> dict[str, Any]:
-    state = read_json(runtime_dir / "hfm_crypto" / "QuantGod_HFMCryptoCfdState.json")
-    if not state:
-        state = read_json(runtime_dir / "QuantGod_HFMCryptoCfdState.json")
-    local = state.get("localEvidence") if isinstance(state.get("localEvidence"), dict) else {}
-    moss = state.get("mossBacktestProfile") if isinstance(state.get("mossBacktestProfile"), dict) else {}
-    metrics = moss.get("metrics") if isinstance(moss.get("metrics"), dict) else {}
-    target_symbols = as_list(state.get("targetSymbols"))
-    detected_symbols = as_list(local.get("canonicalSymbols"))
-    status = first(state.get("status"), default="WAITING_HFM_CRYPTO_BUILD")
-    summary = {
-        "status": status,
-        "statusZh": first(state.get("statusZh"), default="等待构建 HFM Crypto CFD 影子车道"),
-        "symbolEvidenceFound": bool(local.get("found")),
-        "targetSymbolCount": len(target_symbols),
-        "detectedSymbolCount": len(detected_symbols),
-        "mossProfileFound": bool(moss.get("profileFound")),
-        "mossRoiPct": metrics.get("roiPct"),
-        "mossSharpe": metrics.get("sharpe"),
-        "mossMaxDrawdownPct": metrics.get("maxDrawdownPct"),
-        "mossLiquidationCount": metrics.get("liquidationCount"),
-    }
-    return {
-        **summary,
-        "state": state,
-        "dailyReview": {
-            "summary": {**summary, "todoCount": 0},
-            "actionQueue": [],
-        },
-        "walletWriteAllowed": False,
-        "orderSendAllowed": False,
-        "hfmCryptoExecutionAllowed": False,
-    }
-
 
 def daily_tester_completed_count(param_status: dict[str, Any], now: datetime, max_actions: int) -> int:
     generated = generated_at(param_status)
@@ -703,7 +669,6 @@ def codex_review_queue(
     governance: dict[str, Any],
     auto_tester: dict[str, Any],
     recovery_summary: dict[str, Any],
-    hfm_crypto: dict[str, Any],
     mt5_risk: dict[str, Any],
     daily_iteration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -778,14 +743,6 @@ def codex_review_queue(
         })
         targets.add("code_or_data")
 
-    if clean(hfm_crypto.get("status")).upper() == "WAITING_HFM_CRYPTO_SYMBOLS":
-        reasons.append({
-            "code": "HFM_CRYPTO_SYMBOL_EVIDENCE_PENDING",
-            "target": "data",
-            "detail": "HFM Crypto CFD symbol evidence is not present in local MT5 Bases yet.",
-        })
-        targets.add("data")
-
     if mt5_risk.get("requiresCodexReview"):
         reasons.append({
             "code": "MT5_TRADE_PERMISSION_OR_ORDER_SEND_FAILURE",
@@ -857,6 +814,7 @@ def usdjpy_evolution_summary(runtime_dir: Path) -> dict[str, Any]:
     proposal_ready = proposal_status in {
         "PROPOSAL_READY_FOR_REVIEW",
         "PROPOSAL_READY_FOR_AUTONOMOUS_GOVERNANCE",
+        "PROPOSAL_READY_FOR_OPERATOR_REVIEW",
         "LIVE_CONFIG_PROPOSAL_READY",
         "TESTER_ONLY_READY",
     }
@@ -877,9 +835,9 @@ def usdjpy_evolution_summary(runtime_dir: Path) -> dict[str, Any]:
         "autoApplyAllowed": auto_apply_mode,
         "requiresAutonomousGovernance": bool(proposal.get("requiresAutonomousGovernance", False)),
         "completedByAgent": True,
-        "autoAppliedByAgent": bool(proposal_ready),
+        "autoAppliedByAgent": False,
         "summaryZh": (
-            "已生成待自主治理门评估的 USDJPY 参数提案；通过机器硬风控后只写受控 patch，不改源码或 live preset。"
+            "已生成待人工审核的 USDJPY Shadow 参数提案；当前不会自动写入或扩大任何 live scope。"
             if proposal_ready else
             "已生成 USDJPY tester-only 调参候选，等待回放和 shadow 验证。"
             if candidate_count > 0 else
@@ -893,7 +851,6 @@ def usdjpy_evolution_summary(runtime_dir: Path) -> dict[str, Any]:
 def daily_iteration_review(
     daily_pnl: dict[str, Any],
     deferred_action_queue: list[dict[str, Any]],
-    hfm_crypto: dict[str, Any],
     mt5_risk: dict[str, Any],
     max_actions: int,
     tester_tasks: list[dict[str, Any]] | None = None,
@@ -903,16 +860,6 @@ def daily_iteration_review(
     code_queue: list[dict[str, Any]] = []
     strategy_queue: list[dict[str, Any]] = []
     evidence_queue: list[dict[str, Any]] = []
-    if clean(hfm_crypto.get("status")).upper() == "WAITING_HFM_CRYPTO_SYMBOLS":
-        evidence_queue.append({
-            "type": "HFM_CRYPTO_SYMBOL_EVIDENCE",
-            "status": "WAITING_SYMBOL_EVIDENCE",
-            "safeMode": "shadow-only",
-            "recommendation": "登录 HFM/MT5 并让 BTC/ETH/SOL 等 crypto CFD 产生 history 或 tick 目录后再纳入影子研究。",
-            "orderSendAllowed": False,
-            "hfmCryptoExecutionAllowed": False,
-        })
-
     if as_int(daily_pnl.get("closedTrades")) > 0:
         net = as_float(daily_pnl.get("netUSC"))
         loss_rows = as_list(daily_pnl.get("lossByStrategySide"))
@@ -1155,7 +1102,6 @@ def build_completion_report(
     param_results: dict[str, Any],
     deferred_action_queue: list[dict[str, Any]],
     promotions: list[dict[str, Any]],
-    hfm_crypto: dict[str, Any],
     daily_iteration: dict[str, Any],
 ) -> dict[str, Any]:
     tester_tasks = completed_tester_report_tasks(param_status, param_results)
@@ -1210,24 +1156,6 @@ def build_completion_report(
             "impact": "不是前端漏做，而是今日 tester 预算已用满；下一轮自动继续。",
         })
 
-    if clean(hfm_crypto.get("status")).upper() == "WAITING_HFM_CRYPTO_SYMBOLS":
-        processed_items.append({
-            "code": "HFM_CRYPTO_SYMBOL_EVIDENCE_PENDING",
-            "status": "WAITING_SYMBOL_EVIDENCE",
-            "title": "HFM Crypto CFD symbol 证据待同步",
-            "result": hfm_crypto.get("statusZh", "等待构建 HFM Crypto CFD 影子车道"),
-            "impact": "HFM Crypto CFD 暂不参与任何执行，只等待本机 MT5 history/tick 证据。",
-        })
-        recommendations.append({
-            "priority": "watch",
-            "scope": "HFM Crypto CFD",
-            "title": "补齐 crypto CFD 本地 symbol 证据",
-            "recommendation": "先让 HFM/MT5 产生 crypto CFD history 或 tick 目录，再把 Moss 回测 profile 映射进 shadow 观察。",
-            "reason": "当前没有本机 HFM crypto symbol evidence；执行权限仍关闭。",
-            "safeMode": "shadow-only",
-            "autoApply": False,
-        })
-
     status = "ITERATION_REQUIRED" if daily_iteration.get("iterationRequired") else "COMPLETE_NO_ACTION"
     if deferred_action_queue and status == "COMPLETE_NO_ACTION":
         status = "COMPLETE_WITH_DEFERRED_BACKLOG"
@@ -1241,7 +1169,6 @@ def build_completion_report(
             "testerNoTradeCount": sum(1 for item in tester_tasks if as_int(item.get("closedTrades"), -1) == 0),
             "deferredCount": len(deferred_action_queue),
             "promotionReviewCount": len(promotions),
-            "hfmCryptoSymbolEvidenceFound": bool(hfm_crypto.get("symbolEvidenceFound")),
         },
         "processedItems": processed_items,
         "testerReports": tester_tasks[:8],
@@ -1314,7 +1241,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         ]
         action_queue = []
     promotions = promotion_recommendations(version_gate, governance)
-    hfm_crypto = hfm_crypto_summary(runtime_dir)
     mt5_risk = mt5_terminal_risk(runtime_dir, now)
     usdjpy_evolution = usdjpy_evolution_summary(runtime_dir)
     tester_summary = auto_tester.get("summary", {}) if isinstance(auto_tester.get("summary"), dict) else {}
@@ -1322,7 +1248,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
     daily_iteration = daily_iteration_review(
         daily_pnl,
         deferred_action_queue,
-        hfm_crypto,
         mt5_risk,
         max_actions,
         tester_tasks,
@@ -1335,7 +1260,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         param_results,
         deferred_action_queue,
         promotions,
-        hfm_crypto,
         daily_iteration,
     )
     codex_review = codex_review_queue(
@@ -1345,7 +1269,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         governance,
         auto_tester,
         recovery_summary,
-        hfm_crypto,
         mt5_risk,
         daily_iteration,
     )
@@ -1414,10 +1337,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
             "recoveryYellowCount": first(recovery_summary.get("riskYellowCount"), 0),
             "mt5TradeDisabledCount": mt5_risk["tradeDisabledCount"],
             "mt5InvestorModeCount": mt5_risk["investorModeCount"],
-            "hfmCryptoStatus": hfm_crypto["status"],
-            "hfmCryptoSymbolEvidenceFound": hfm_crypto["symbolEvidenceFound"],
-            "hfmCryptoDetectedSymbolCount": hfm_crypto["detectedSymbolCount"],
-            "hfmCryptoMossProfileFound": hfm_crypto["mossProfileFound"],
             "dailyIterationStatus": daily_iteration["status"],
             "dailyIterationRequired": daily_iteration["iterationRequired"],
             "usdJpyEvolutionStatus": usdjpy_evolution["status"],
@@ -1433,7 +1352,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
         "researchBacklogQueue": research_backlog_queue[:6],
         "strategyActions": strategy_actions,
         "promotionRecommendations": promotions,
-        "hfmCrypto": hfm_crypto,
         "usdJpyEvolution": usdjpy_evolution,
         "dailyIteration": daily_iteration,
         "completionReport": completion_report,
@@ -1474,8 +1392,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
             "TesterCanRun": str(bool(tester_summary.get("canRunTerminal"))).lower(),
             "Mt5InvestorModeCount": mt5_risk["investorModeCount"],
             "Mt5TradeDisabledCount": mt5_risk["tradeDisabledCount"],
-            "HfmCryptoStatus": hfm_crypto["status"],
-            "HfmCryptoDetectedSymbolCount": hfm_crypto["detectedSymbolCount"],
             "UsdJpyEvolutionStatus": usdjpy_evolution["status"],
             "UsdJpyParamCandidateCount": usdjpy_evolution["paramCandidateCount"],
             "CodexReviewRequired": str(codex_review["required"]).lower(),
@@ -1495,8 +1411,6 @@ def build_review(args: argparse.Namespace) -> dict[str, Any]:
             "TesterCanRun",
             "Mt5InvestorModeCount",
             "Mt5TradeDisabledCount",
-            "HfmCryptoStatus",
-            "HfmCryptoDetectedSymbolCount",
             "UsdJpyEvolutionStatus",
             "UsdJpyParamCandidateCount",
             "CodexReviewRequired",

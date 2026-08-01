@@ -8,7 +8,7 @@ This policy covers the QuantGod split repository workspace. The project is local
 
 - `QuantGodBackend`: backend API, MT5 bridge, AI, Governance, ParamLab, tests.
 - `QuantGodFrontend`: Vue operator workbench and API client.
-- `QuantGodInfra`: workspace automation, Cloudflare, deployment helpers.
+- `QuantGodInfra`: workspace automation and local deployment helpers.
 - `QuantGodDocs`: documentation, contracts, runbooks, phase status.
 
 ## Reporting
@@ -26,6 +26,13 @@ Report security issues privately to the repository owner. Do not publish exploit
 ## Secret handling
 
 Use local environment variables, local ignored files, or external secret stores. Never commit actual secrets or screenshots that reveal secrets. Rotate any credential that may have been exposed.
+
+The repository MT5 INI files use synthetic account fixtures. The macOS Shadow
+launcher may hydrate Login and Server only into its private `0600` runtime INI,
+from paired local environment values or the selected portable terminal's
+UTF-16LE `config/common.ini`. It never reads a password field into application
+state, never writes a password into the runtime INI, and rejects an unexpected
+server before any MT5 launch.
 
 ## Dependency and CI expectations
 

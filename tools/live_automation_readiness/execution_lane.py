@@ -39,7 +39,6 @@ def _blocker(code: str, reason_zh: str, value: Any = None) -> dict[str, Any]:
 
 def _approved_intents(plan: dict[str, Any], approved_lanes: set[str]) -> list[dict[str, Any]]:
     lane_aliases = {
-        "hfmCryptoCfd": "HFM_CRYPTO_CFD",
         "usdjpyMt5": "USDJPY_MT5",
     }
     approved_lane_codes = {lane_aliases.get(lane, lane) for lane in approved_lanes}
@@ -216,9 +215,6 @@ def build_live_execution_lane_spec(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -230,9 +226,6 @@ def build_live_execution_lane_spec(
     should_rebuild = bool(
         refresh_sources
         or operator_approval_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     approval_review = (
@@ -241,9 +234,6 @@ def build_live_execution_lane_spec(
             write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
         if should_rebuild
@@ -254,9 +244,6 @@ def build_live_execution_lane_spec(
             runtime_dir,
             write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
         if should_rebuild

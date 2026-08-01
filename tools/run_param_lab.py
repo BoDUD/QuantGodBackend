@@ -43,8 +43,8 @@ except ModuleNotFoundError:  # pragma: no cover - direct script fallback
 
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_HFM_ROOT = Path(r"C:\Program Files\HFM Metatrader 5")
-DEFAULT_RUNTIME_DIR = DEFAULT_HFM_ROOT / "MQL5" / "Files"
+DEFAULT_HFM_ROOT = DEFAULT_REPO_ROOT / "runtime" / "HFM_MT5_Tester_Isolated"
+DEFAULT_RUNTIME_DIR = DEFAULT_REPO_ROOT / "runtime"
 PLAN_NAME = "QuantGod_ParamOptimizationPlan.json"
 STATUS_NAME = "QuantGod_ParamLabStatus.json"
 AGENT_ARTIFACT_NAMES = {
@@ -85,8 +85,8 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Kill the Strategy Tester terminal child after this many seconds. 0 means no runner-level timeout.",
     )
-    parser.add_argument("--login", default="186054398")
-    parser.add_argument("--server", default="HFMarketsGlobal-Live12")
+    parser.add_argument("--login", default="90000001")
+    parser.add_argument("--server", default="SyntheticBroker-Demo")
     parser.add_argument("--run-terminal", action="store_true", help="Launch MT5 Strategy Tester for selected tasks.")
     parser.add_argument(
         "--authorized-strategy-tester",
@@ -213,6 +213,19 @@ def timeframe_to_period(timeframe: str) -> str:
 def wine_windows_path(path: Path) -> str:
     resolved = path.expanduser().resolve()
     return "Z:" + str(resolved).replace("/", "\\")
+
+
+def resolve_isolated_tester_root(repo_root: Path, candidate: Path) -> Path:
+    resolved_repo = repo_root.expanduser().resolve()
+    allowed_root = (resolved_repo / "runtime" / "HFM_MT5_Tester_Isolated").resolve()
+    resolved_candidate = candidate.expanduser().resolve()
+    try:
+        resolved_candidate.relative_to(allowed_root)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"ParamLab tester root must stay inside the canonical isolated root: {allowed_root}"
+        ) from exc
+    return resolved_candidate
 
 
 def mt5_terminal_command(
@@ -625,8 +638,8 @@ def update_plan_with_run(plan: dict[str, Any], status: dict[str, Any], plan_path
 
 
 def build_runner_status(args: argparse.Namespace) -> dict[str, Any]:
-    repo_root = Path(args.repo_root)
-    hfm_root = Path(args.hfm_root)
+    repo_root = Path(args.repo_root).expanduser().resolve()
+    hfm_root = resolve_isolated_tester_root(repo_root, Path(args.hfm_root))
     runtime_dir = Path(args.runtime_dir)
     plan_path = Path(args.plan) if args.plan else runtime_dir / PLAN_NAME
     output_path = Path(args.output) if args.output else runtime_dir / STATUS_NAME
@@ -673,15 +686,10 @@ def build_runner_status(args: argparse.Namespace) -> dict[str, Any]:
     source_synced = False
     binary_synced = False
     source_path = repo_root / "MQL5" / "Experts" / "QuantGod_MultiStrategy.mq5"
-    binary_path = repo_root / "MQL5" / "Experts" / "QuantGod_MultiStrategy.ex5"
     if source_path.exists():
         hfm_experts.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, hfm_experts / source_path.name)
         source_synced = True
-    if binary_path.exists():
-        hfm_experts.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(binary_path, hfm_experts / binary_path.name)
-        binary_synced = True
 
     candidates = candidate_by_id(plan)
     selected = select_tasks(plan, args.max_tasks, args.route, args.candidate_id, args.rank_mode)

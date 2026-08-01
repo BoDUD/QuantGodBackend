@@ -2,15 +2,30 @@ param(
     [string[]]$Symbols = @("EURUSDc", "USDJPYc"),
     [string]$FromDate = (Get-Date).AddMonths(-3).ToString("yyyy.MM.dd"),
     [string]$ToDate = (Get-Date).ToString("yyyy.MM.dd"),
-    [string]$Login = "186054398",
-    [string]$Server = "HFMarketsGlobal-Live12",
+    [string]$Login = "90000001",
+    [string]$Server = "SyntheticBroker-Demo",
+    [string]$TesterRoot = "",
     [switch]$RunTerminal
 )
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$hfmRoot = "C:\Program Files\HFM Metatrader 5"
+$repoRuntimeRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "runtime"))
+$expectedTesterRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRuntimeRoot "HFM_MT5_Tester_Isolated"))
+if ($TesterRoot) {
+    $requestedTesterRoot = [System.IO.Path]::GetFullPath($TesterRoot)
+    if (-not [string]::Equals($requestedTesterRoot, $expectedTesterRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "TesterRoot must be the repository-isolated tester root: $expectedTesterRoot"
+    }
+}
+[System.IO.Directory]::CreateDirectory($expectedTesterRoot) | Out-Null
+$resolvedRuntimeRoot = (Resolve-Path -LiteralPath $repoRuntimeRoot).Path.TrimEnd('\', '/')
+$hfmRoot = (Resolve-Path -LiteralPath $expectedTesterRoot).Path
+$requiredPrefix = $resolvedRuntimeRoot + [System.IO.Path]::DirectorySeparatorChar
+if (-not $hfmRoot.StartsWith($requiredPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Resolved tester root escapes repository runtime: $hfmRoot"
+}
 $hfmExperts = Join-Path $hfmRoot "MQL5\Experts"
 $hfmPresets = Join-Path $hfmRoot "MQL5\Presets"
 $hfmTesterProfiles = Join-Path $hfmRoot "MQL5\Profiles\Tester"
@@ -254,7 +269,7 @@ Ensure-Directory $hfmPresets
 Ensure-Directory $hfmTesterProfiles
 
 $syncedSource = Copy-IfExists (Join-Path $repoRoot "MQL5\Experts\QuantGod_MultiStrategy.mq5") (Join-Path $hfmExperts "QuantGod_MultiStrategy.mq5")
-$syncedBinary = Copy-IfExists (Join-Path $repoRoot "MQL5\Experts\QuantGod_MultiStrategy.ex5") (Join-Path $hfmExperts "QuantGod_MultiStrategy.ex5")
+$syncedBinary = $false
 
 $runs = @()
 foreach ($symbol in $Symbols) {

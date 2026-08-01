@@ -42,6 +42,17 @@ from tools.usdjpy_strategy_backtest.walk_forward import build_seed_walk_forward
 
 
 class USDJPYStrategyBacktestTests(unittest.TestCase):
+    def test_sqlite_connect_uses_wal_busy_timeout_and_foreign_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = connect(Path(tmp))
+            try:
+                self.assertEqual(conn.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
+                self.assertGreaterEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 60000)
+                self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+                self.assertEqual(conn.execute("PRAGMA synchronous").fetchone()[0], 1)
+            finally:
+                conn.close()
+
     def test_sqlite_connect_retries_transient_database_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch(
@@ -91,6 +102,14 @@ class USDJPYStrategyBacktestTests(unittest.TestCase):
             self.assertEqual(current["historyCoverage"]["primaryTimeframe"], "H1")
             self.assertEqual(current["latestReport"]["schema"], "quantgod.strategy_backtest.report.v1")
             self.assertEqual(current["qualityReport"]["schema"], "quantgod.strategy_backtest_quality.v1")
+            self.assertEqual(current["qualityReport"]["status"], "BLOCKED")
+            news_check = next(
+                row
+                for row in current["qualityReport"]["checks"]
+                if row["check"] == "HISTORICAL_NEWS_GATE_AUDIT"
+            )
+            self.assertFalse(news_check["passed"])
+            self.assertEqual(list((runtime_dir / "backtest").glob("*.tmp")), [])
             with connect(runtime_dir) as conn:
                 run_rows = conn.execute("SELECT COUNT(*) AS count FROM strategy_runs").fetchone()
                 self.assertGreaterEqual(int(run_rows["count"]), 1)

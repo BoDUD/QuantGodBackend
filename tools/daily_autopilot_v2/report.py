@@ -297,9 +297,9 @@ def _orchestration_summary(runtime_dir: Path) -> Dict[str, Any]:
     if latest:
         return latest
     return {
-        "ok": True,
+        "ok": False,
         "schema": "quantgod.daily_autopilot_v2_run.v1",
-        "status": "WAITING_FIRST_AGENT_CYCLE",
+        "status": "NOT_STARTED",
         "completedByAgent": False,
         "autoAppliedByAgent": False,
         "requiresAutonomousGovernance": True,
@@ -326,7 +326,6 @@ def _build_morning_plan(
     usd_deployment = _safe_dict(lanes.get("usdDeployment"))
     exposure_guard = _safe_dict(lanes.get("globalUsdJpyExposureGuard") or account_registry.get("globalExposureGuard"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     limits = _safe_dict(patch.get("limits"))
     stage = str(agent.get("executionStage") or agent.get("stage") or "SHADOW")
@@ -356,12 +355,6 @@ def _build_morning_plan(
             "summary": mt5_shadow.get("summary", {}),
             "topRoutes": _top_mt5_routes(mt5_shadow),
         },
-        "hfmCryptoShadowLane": {
-            "stage": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
-            "stageZh": hfm_crypto.get("stageZh", "等待 HFM crypto symbol 证据"),
-            "summary": hfm_crypto.get("summary", {}),
-            "reasonZh": hfm_crypto.get("reasonZh", "HFM Crypto CFD 只做影子研究，不触发 MT5 crypto 下单。"),
-        },
         "newsGate": {
             "mode": news_gate.get("mode", "SOFT"),
             "riskLevel": news_gate.get("riskLevel", "UNKNOWN"),
@@ -376,14 +369,14 @@ def _build_morning_plan(
         "todayForbiddenZh": [
             "未过 autonomous governance 的实盘扩展",
             "非 USDJPY 实盘",
-            "HFM Crypto CFD 未经单独评审的真钱执行",
             "高冲击新闻窗口入场",
             "快通道或 runtime 陈旧时入场",
             "固定 2 手下单",
         ],
-        "operatorApprovalRequired": False,
-        "unattendedLiveExpansionAllowed": True,
-        "liveScopeExpansionMode": "autonomous_governance_stage_gated",
+        "operatorApprovalRequired": True,
+        "unattendedLiveExpansionAllowed": False,
+        "liveExpansionAllowed": False,
+        "liveScopeExpansionMode": "operator_reviewed_future_lane",
     }
 
 
@@ -393,7 +386,6 @@ def _build_evening_review(agent: Dict[str, Any], lifecycle: Dict[str, Any], news
     usd_deployment = _safe_dict(lanes.get("usdDeployment"))
     exposure_guard = _safe_dict(lanes.get("globalUsdJpyExposureGuard"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     rollback = _safe_dict(patch.get("rollback"))
     blockers = [str(item) for item in _safe_list(rollback.get("hardBlockers"))]
@@ -409,8 +401,9 @@ def _build_evening_review(agent: Dict[str, Any], lifecycle: Dict[str, Any], news
             "rollbackReasons": blockers,
             "patchWritable": bool(agent.get("patchWritable")),
             "autoAppliedByAgent": bool(agent.get("autoAppliedByAgent")),
-            "operatorApprovalRequired": False,
-            "unattendedLiveExpansionAllowed": True,
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
             "liveMutationAllowed": False,
         },
         "accountLanes": {
@@ -424,12 +417,6 @@ def _build_evening_review(agent: Dict[str, Any], lifecycle: Dict[str, Any], news
             "rejectedCount": int(mt5_summary.get("rejected", 0) or 0),
             "routeCount": int(mt5_summary.get("routeCount", 0) or 0),
             "topRoutes": _top_mt5_routes(mt5_shadow),
-        },
-        "hfmCryptoShadowLane": {
-            "stage": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
-            "stageZh": hfm_crypto.get("stageZh", "等待 HFM crypto symbol 证据"),
-            "summary": hfm_crypto.get("summary", {}),
-            "riskContextOnly": True,
         },
         "newsGateReview": {
             "mode": news_gate.get("mode", "SOFT"),
@@ -483,8 +470,8 @@ def _ga_todo_items(ga: Dict[str, Any]) -> List[Dict[str, Any]]:
             "autoAppliedByAgent": ran,
             "requiresAutonomousGovernance": True,
             "summaryZh": (
-                "Elite 可无人审批进入 shadow/tester/paper-live-sim；"
-                "只有 autonomous governance 全通过后才允许扩大受控 live scope。"
+                "Elite 可自动进入 shadow/tester/paper-live-sim 研究阶段；"
+                "任何未来 live scope 都必须另行人工审核。"
             ),
         },
     ]
@@ -495,7 +482,6 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
     cent_live = _safe_dict(lanes.get("centLive"))
     usd_deployment = _safe_dict(lanes.get("usdDeployment"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     rollback = _safe_dict(patch.get("rollback"))
     rollback_triggered = bool(_safe_list(rollback.get("hardBlockers")))
@@ -508,7 +494,7 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
             "laneZh": "美分账户学习车道",
             "accountAlias": cent_live.get("accountAlias", "hfm_cent"),
             "accountMode": cent_live.get("accountMode", "cent"),
-            "status": "ROLLBACK" if rollback_triggered else ("MICRO_LIVE" if live_stage == "MICRO_LIVE" else "COMPLETED_BY_AGENT"),
+            "status": "ROLLBACK" if rollback_triggered else "PAPER_EVIDENCE_REVIEWED",
             "completedByAgent": True,
             "autoAppliedByAgent": auto_applied,
             "requiresAutonomousGovernance": True,
@@ -517,7 +503,7 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
             "metrics": metrics,
             "summaryZh": (
                 "Agent 已检查 USDJPY 美分账户学习车道；硬风控未通过则自动回滚，"
-                "证据全通过时可无人审批扩大受控 cent live scope。"
+                "当前仅生成 Shadow/ReadOnly 证据；未来实盘范围必须另行人工审核。"
             ),
         },
         {
@@ -534,9 +520,9 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
             "rollbackTriggered": False,
             "metrics": usd_deployment.get("promotionGate", {}),
             "summaryZh": (
-                "美元账户可以实盘，但只做严格部署；"
-                "OPPORTUNITY_ENTRY/SOFT_WIDE/新闻不确定时只 mirror，"
-                "STANDARD_ENTRY 且美分验证达标后进入 USD_MICRO_LIVE。"
+                "美元账户当前只做 PAPER_MIRROR；"
+                "OPPORTUNITY_ENTRY/SOFT_WIDE/新闻不确定时继续阻断，"
+                "STANDARD_ENTRY 且证据达标也只形成未来人工审核材料。"
             ),
         },
         {
@@ -552,21 +538,8 @@ def _agent_todo_items(agent: Dict[str, Any], lifecycle: Dict[str, Any], metrics:
             "metrics": _safe_dict(mt5_shadow.get("summary")),
             "summaryZh": (
                 "Agent 已复盘多策略 shadow 排名；强策略可进入 fast-shadow/tester-only，"
-                "并在 replay/walk-forward/硬风控全通过后无人审批晋级。"
+                "并在 replay/walk-forward/硬风控全通过后提交人工审核。"
             ),
-        },
-        {
-            "id": "hfm_crypto_shadow_lane_iteration",
-            "lane": "HFM_CRYPTO_CFD_SHADOW",
-            "laneZh": "HFM Crypto CFD 影子车道",
-            "status": "COMPLETED_BY_AGENT",
-            "completedByAgent": True,
-            "autoAppliedByAgent": False,
-            "requiresAutonomousGovernance": True,
-            "promotionDecision": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
-            "rollbackTriggered": False,
-            "metrics": _safe_dict(hfm_crypto.get("summary")),
-            "summaryZh": "Agent 已复盘 HFM Crypto CFD 影子资料；只做 symbol/Moss 回测映射，不触发 crypto 下单。",
         },
     ] + _ga_todo_items(ga)
 
@@ -625,7 +598,6 @@ def _build_daily_review(
 ) -> Dict[str, Any]:
     lanes = _safe_dict(lifecycle.get("lanes") or agent.get("lanes"))
     mt5_shadow = _safe_dict(lanes.get("mt5Shadow"))
-    hfm_crypto = _safe_dict(lanes.get("hfmCryptoShadow"))
     patch = _safe_dict(agent.get("currentPatch"))
     rollback = _safe_dict(patch.get("rollback"))
     rollback_triggered = bool(_safe_list(rollback.get("hardBlockers")))
@@ -655,12 +627,6 @@ def _build_daily_review(
             "summary": _safe_dict(mt5_shadow.get("summary")),
             "topRoutes": _top_mt5_routes(mt5_shadow),
         },
-        "hfmCryptoShadowLane": {
-            "stage": hfm_crypto.get("stage", "WAITING_SYMBOL_EVIDENCE"),
-            "stageZh": hfm_crypto.get("stageZh", "等待 HFM crypto symbol 证据"),
-            "summary": _safe_dict(hfm_crypto.get("summary")),
-            "riskContextOnly": True,
-        },
         "nextPhaseTodos": _next_phase_todos(),
         "gaReview": {
             "generation": ga.get("currentGeneration", 0),
@@ -676,7 +642,7 @@ def _build_daily_review(
         "executionConsistencyReview": consistency,
         "orchestrationRun": orchestration,
         "summaryZh": (
-            "每日复盘已由 Agent 自动完成：收集 USDJPY、MT5 shadow 和 HFM Crypto CFD 影子样本，"
+            "每日复盘已由 Agent 自动完成：收集 USDJPY 与 MT5 shadow 样本，"
             "计算指标、更新升降级/回滚状态，"
             "并记录 GA 是否使用生产级历史样本、parity 是否阻断晋级以及真实执行质量。"
         ),
@@ -688,17 +654,14 @@ def build_daily_autopilot_v2(
     *,
     repo_root: Path | None = None,
     write: bool = False,
-    hfm_crypto_runtime_dir: Path | str | None = None,
 ) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
-    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
     lifecycle = build_autonomous_lifecycle(
         runtime_dir,
         repo_root=repo_root,
         write=write,
-        hfm_crypto_runtime_dir=hfm_crypto_runtime,
     )
-    agent = build_agent_state(runtime_dir, write=write, hfm_crypto_runtime_dir=hfm_crypto_runtime)
+    agent = build_agent_state(runtime_dir, write=write)
     generated_at = utc_now_iso()
     metrics = _runtime_metrics(runtime_dir, agent)
     news_gate = _news_gate_summary(runtime_dir)
@@ -706,6 +669,27 @@ def build_daily_autopilot_v2(
     usd_deployment_gate = _usd_deployment_gate_summary(runtime_dir)
     ga = _ga_summary(runtime_dir)
     orchestration = _orchestration_summary(runtime_dir)
+    orchestration_steps = [
+        step
+        for step in _safe_list(orchestration.get("steps"))
+        if isinstance(step, dict)
+    ]
+    completed_step_count = sum(
+        1
+        for step in orchestration_steps
+        if str(step.get("status") or "").upper() == "COMPLETED_BY_AGENT"
+    )
+    orchestration_started = len(orchestration_steps) > 0
+    orchestration_completed = (
+        orchestration_started
+        and completed_step_count == len(orchestration_steps)
+        and orchestration.get("completedByAgent") is True
+    )
+    orchestration_status = (
+        "COMPLETED_BY_AGENT"
+        if orchestration_completed
+        else ("FAILED_RETRYABLE" if orchestration_started else "NOT_STARTED")
+    )
     consistency = _execution_consistency_review(runtime_dir)
     daily_todo = _build_daily_todo(agent, lifecycle, metrics, ga, orchestration, generated_at)
     daily_review = _build_daily_review(agent, lifecycle, metrics, ga, orchestration, consistency, generated_at)
@@ -717,7 +701,10 @@ def build_daily_autopilot_v2(
         "timestamp": generated_at,
         "symbol": FOCUS_SYMBOL,
         "runtimeDir": str(runtime_dir),
-        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
+        "status": orchestration_status,
+        "cycleStarted": orchestration_started,
+        "cycleStepCount": len(orchestration_steps),
+        "cycleCompletedStepCount": completed_step_count,
         "titleZh": "USDJPY 美分/美元双账户自动日报",
         "sloganZh": "实盘要窄，模拟要宽，升降级要快，回滚要硬。",
         "morningPlan": _build_morning_plan(agent, lifecycle, news_gate, spread_gate, usd_deployment_gate),
@@ -732,20 +719,21 @@ def build_daily_autopilot_v2(
         "gaReview": ga,
         "historyProductionStatus": ga.get("historyProductionStatus"),
         "nextPhaseTodos": _next_phase_todos(),
-        "completedByAgent": True,
+        "completedByAgent": orchestration_completed,
         "autoAppliedByAgent": bool(agent.get("autoAppliedByAgent")),
         "requiresAutonomousGovernance": True,
         "autonomousAgent": {
             "stage": agent.get("executionStage") or agent.get("stage"),
             "stageZh": agent.get("stageZh"),
             "patchWritable": bool(agent.get("patchWritable")),
-            "completedByAgent": True,
+            "completedByAgent": orchestration_completed,
             "autoAppliedByAgent": bool(agent.get("autoAppliedByAgent")),
             "requiresAutonomousGovernance": True,
-            "autoApplyAllowed": "stage_gated",
-            "operatorApprovalRequired": False,
-            "unattendedLiveExpansionAllowed": True,
-            "liveScopeExpansionMode": "autonomous_governance_stage_gated",
+            "autoApplyAllowed": "shadow_only",
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
+            "liveScopeExpansionMode": "operator_reviewed_future_lane",
         },
         "lanes": lifecycle.get("lanes"),
         "centAccount": lifecycle.get("centAccount"),
@@ -756,12 +744,12 @@ def build_daily_autopilot_v2(
             "closeAllowed": False,
             "cancelAllowed": False,
             "liveMutationAllowed": False,
-            "operatorApprovalRequired": False,
-            "unattendedLiveExpansionAllowed": True,
-            "liveScopeExpansionMode": "autonomous_governance_stage_gated",
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
+            "liveScopeExpansionMode": "operator_reviewed_future_lane",
             "livePresetMutationAllowed": False,
             "externalMarketRealMoneyAllowed": False,
-            "hfmCryptoExecutionAllowed": False,
             "telegramCommandExecutionAllowed": False,
             "deepSeekCanApproveLive": False,
         },

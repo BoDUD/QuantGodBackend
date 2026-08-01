@@ -1,7 +1,7 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const hfmCryptoCfdApiRoutes = require('./hfm_crypto_cfd_api_routes');
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -22,9 +22,6 @@ function safetyPayload() {
     closeAllowed: false,
     cancelAllowed: false,
     mt5OrderSendAllowed: false,
-    hfmCryptoExecutionAllowed: false,
-    copyTradeExecutionAllowed: false,
-    mossExecutionAllowed: false,
     livePresetMutationAllowed: false,
     liveExecutionCutoverAllowed: false,
   };
@@ -107,17 +104,34 @@ function repoRuntimeDir(ctx = {}) {
   return path.join(ctx.repoRoot || process.cwd(), 'runtime');
 }
 
-function resolveHfmScope(ctx = {}, url = new URL('/', 'http://127.0.0.1')) {
-  const scopedUrl = new URL(url.toString());
-  const requestedScope =
-    scopedUrl.searchParams.get('scope') ||
-    scopedUrl.searchParams.get('accountScope') ||
-    scopedUrl.searchParams.get('account') ||
-    '';
-  if (!requestedScope) {
-    scopedUrl.searchParams.set('scope', 'secondary');
-  }
-  return hfmCryptoCfdApiRoutes.resolveHfmCryptoRuntimeScope(ctx, scopedUrl);
+function resolveRuntimeScope(ctx = {}, url = new URL('/', 'http://127.0.0.1')) {
+  const requestedScope = String(
+    url.searchParams.get('scope') || url.searchParams.get('accountScope') || url.searchParams.get('account') || 'primary',
+  ).trim().toLowerCase();
+  const secondary = ['secondary', 'live16', 'hfm-live16', 'hfm_live16'].includes(requestedScope);
+  const candidates = [
+    ctx.secondaryRuntimeDir,
+    ctx.secondaryMt5FilesDir,
+    process.env.QG_MT5_SECONDARY_FILES_DIR,
+    process.env.QG_MT5_SECONDARY_ROOT ? path.join(process.env.QG_MT5_SECONDARY_ROOT, 'MQL5', 'Files') : '',
+    process.env.QG_MT5_SECONDARY_WINE_PREFIX
+      ? path.join(process.env.QG_MT5_SECONDARY_WINE_PREFIX, 'drive_c', 'Program Files', 'MetaTrader 5', 'MQL5', 'Files')
+      : '',
+    path.join(os.homedir(), 'Library', 'Application Support', 'net.metaquotes.wine.metatrader5-live16', 'drive_c', 'Program Files', 'MetaTrader 5', 'MQL5', 'Files'),
+  ].filter(Boolean);
+  return secondary
+    ? {
+        scope: 'secondary',
+        requestedScope,
+        accountLabel: 'HFM secondary MT5 forex',
+        runtimeDir: candidates.find((candidate) => fs.existsSync(candidate)) || '',
+      }
+    : {
+        scope: 'primary',
+        requestedScope,
+        accountLabel: 'HFM primary MT5 forex',
+        runtimeDir: ctx.defaultRuntimeDir || ctx.runtimeDir || process.env.QG_RUNTIME_DIR || process.env.QG_MT5_FILES_DIR || '',
+      };
 }
 
 function runtimeScopeMeta(runtimeScope = {}) {
@@ -139,7 +153,7 @@ function buildArgs(ctx, url, runtimeScope, write = true) {
     '--target-usd',
     String(targetUsd(url)),
   ];
-  if (runtimeScope.runtimeDir) args.push('--hfm-runtime-dir', runtimeScope.runtimeDir);
+  if (runtimeScope.runtimeDir) args.push('--mt5-runtime-dir', runtimeScope.runtimeDir);
   args.push('build');
   if (write) args.push('--write');
   return args;
@@ -162,11 +176,10 @@ async function handle(req, res, ctx = {}) {
   const requestUrl = req.url || '';
   const url = new URL(requestUrl, 'http://127.0.0.1');
   const pathname = url.pathname;
-  const runtimeScope = resolveHfmScope(ctx, url);
+  const runtimeScope = resolveRuntimeScope(ctx, url);
 
   if (req.method === 'GET' && (pathname === '/api/profit-target' || pathname === '/api/profit-target/status')) {
-    const write = truthyParam(url.searchParams.get('write'), true);
-    const payload = await runPythonJson(ctx.repoRoot, buildArgs(ctx, url, runtimeScope, write));
+    const payload = await runPythonJson(ctx.repoRoot, buildArgs(ctx, url, runtimeScope, false));
     sendJson(res, statusCodeFor(payload), withMeta(payload, requestUrl, runtimeScope));
     return;
   }

@@ -21,7 +21,7 @@ def _write_long_term_memory_sample(runtime: Path) -> None:
     for index in range(12):
         loss = index < 8
         side = "LONG" if index < 9 else "SHORT"
-        symbol = "BTCUSD" if index < 9 else "USDJPYc"
+        symbol = "EURUSD" if index < 9 else "USDJPYc"
         rows.append(
             {
                 "schema": "quantgod.ai_advisory_outcome.v1",
@@ -50,7 +50,6 @@ def _write_long_term_memory_sample(runtime: Path) -> None:
                 "openInterestChange": -0.3 if loss else 0.1,
                 "newsScore": -0.4 if loss else 0.1,
                 "smartMoneyScore": -0.25 if loss else 0.2,
-                "predictionMarketScore": 0.1,
                 "kronosScore": -0.45 if loss else 0.25,
                 "estimatedEV": 0.18,
                 "estimatedWinProbability": 0.62,
@@ -92,7 +91,7 @@ def _write_nested_entry_memory_sample(runtime: Path) -> None:
                 "exitType": "TAKE_PROFIT" if index >= 6 else "STOP_LOSS",
                 "entryContext": {
                     "entryTime": f"2026-06-03T00:{index:02d}:00Z",
-                    "symbol": "BTCUSD",
+                    "symbol": "EURUSD",
                     "side": "LONG",
                     "strategyVersion": "NESTED_MEMORY_V1",
                     "leverage": 2,
@@ -116,7 +115,6 @@ def _write_nested_entry_memory_sample(runtime: Path) -> None:
                         "oiChange": 0.12,
                         "news": 0.08,
                         "smartMoney": 0.21,
-                        "predictionMarket": 0.09,
                         "kronos": 0.31,
                     },
                     "estimates": {
@@ -197,7 +195,6 @@ def _write_proxy_entry_memory_sample(runtime: Path) -> None:
                         "oiChange": 0,
                         "news": 0.5,
                         "smartMoney": 0.5,
-                        "predictionMarket": 0.5,
                         "kronos": 0.5,
                     },
                     "estimates": {
@@ -305,7 +302,6 @@ def _write_bridged_history_context_sample(runtime: Path) -> None:
                         "oiChange": 0,
                         "news": 0,
                         "smartMoney": 0,
-                        "predictionMarket": 0,
                         "kronos": 0,
                     },
                     "estimates": {
@@ -530,7 +526,7 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             self.assertEqual(memory["tradeMemoryCount"], 12)
             entry = memory["entryMemory"][0]
             self.assertEqual(entry["tradeId"], "T-001")
-            self.assertEqual(entry["symbol"], "BTCUSD")
+            self.assertEqual(entry["symbol"], "EURUSD")
             self.assertEqual(entry["strategyVersion"], "ACE_MEMORY_V1")
             self.assertEqual(entry["factors"]["kronosScore"], -0.45)
             self.assertIn("breakout", entry["entryReasons"])
@@ -591,7 +587,7 @@ class CaseMemoryCandidateTests(unittest.TestCase):
             feedback = memory["entryFeedbackPolicy"]
             self.assertEqual(feedback["status"], "DEFENSE_MODE")
             self.assertTrue(feedback["defenseMode"]["enabled"])
-            self.assertTrue(any(item.get("symbol") == "BTCUSD" for item in feedback["symbolPenalties"]))
+            self.assertTrue(any(item.get("symbol") == "EURUSD" for item in feedback["symbolPenalties"]))
             self.assertTrue(any(item.get("side") == "LONG" for item in feedback["directionPenalties"]))
             self.assertTrue(any(item.get("factor") == "fundFlow" for item in feedback["fineFactorPenalties"]))
             self.assertTrue(any(rule["match"].get("adverseFactor") == "kronos" for rule in feedback["candidatePenaltyRules"]))
@@ -737,7 +733,7 @@ class CaseMemoryCandidateTests(unittest.TestCase):
 
             memory = report["longTermTradeMemory"]
             entry = memory["entryMemory"][0]
-            self.assertEqual(entry["symbol"], "BTCUSD")
+            self.assertEqual(entry["symbol"], "EURUSD")
             self.assertEqual(entry["strategyVersion"], "NESTED_MEMORY_V1")
             self.assertEqual(entry["compositeScore"], 0.78)
             self.assertEqual(entry["dataCoverageScore"], 0.91)

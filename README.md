@@ -6,12 +6,12 @@ The current production direction is narrow by design:
 
 ```text
 Live lane: USDJPYc / RSI_Reversal / LONG / cent account
-Shadow lanes: MT5 multi-strategy simulation and HFM Crypto CFD research
+Shadow lanes: MT5 forex multi-strategy simulation
 Agent: autonomous daily todo, daily review, promotion, demotion, and rollback
 Safety: machine hard guards remain mandatory
 ```
 
-This repository owns the backend data plane and MT5 integration. It does not own Vue source, Cloudflare deployment code, or the documentation hub.
+This repository owns the local backend data plane and MT5 integration. Runtime state remains local; Vue source and the documentation hub live in their own repositories.
 
 ## Repository Role
 
@@ -32,13 +32,12 @@ Related repositories:
 
 ## Current System Model
 
-QuantGod v2.5 is organized as three lanes:
+QuantGod v2.5 is organized as two non-executing lanes:
 
 | Lane | Scope | What it can do | What it cannot do |
 |---|---|---|---|
-| Live Lane | `USDJPYc / RSI_Reversal / LONG` | Cent-account micro live, limited live, autonomous rollback | USDJPY short, non-RSI live, non-USDJPY live |
-| MT5 Shadow Lane | USDJPY strategy pool | Multi-strategy shadow ranking, replay, tester-only validation | Steal the live route or mutate live preset directly |
-| HFM Crypto CFD Shadow Lane | HFM crypto symbols plus Moss backtest profile | Symbol evidence scan, Moss metric mapping, shadow-only follow research | MT5 crypto orders, wallet auth, live preset mutation |
+| Research Lane | USDJPY strategy pool | Local datasets, replay, GA, advisory policy and isolated tester preparation | Launch a normal MT5 terminal or mutate broker state |
+| MT5 Shadow Lane | USDJPY strategy pool | Read-only monitoring, shadow ranking and evidence export | Place, close, cancel or modify broker orders |
 
 DeepSeek may explain evidence and produce Chinese summaries. It cannot approve live execution, override hard gates, raise lot limits, or cancel rollback.
 
@@ -53,10 +52,10 @@ cd /Users/bowen/Desktop/Quard/QuantGodBackend
 
 The launcher starts the current v2.5 stack:
 
-- MT5 HFM LivePilot preset focused on `USDJPYc`.
+- MT5 HFM Shadow/ReadOnly preset focused on `USDJPYc`; legacy LivePilot-named templates are read-only compatibility files only.
 - Backend API at `http://127.0.0.1:8080`.
 - Frontend Vite workbench at `http://127.0.0.1:5173/vue/?workspace=mt5`.
-- Agent v2.5 loop for USDJPY live-loop, policy generation, EA dry-run, daily todo, daily review, and rollback evidence.
+- Agent v2.5 loop for USDJPY advisory policy generation, EA dry-run, daily todo, daily review, and rollback evidence.
 - USDJPY history sync remains enabled, and you can still privately lower MT5 bar caps on 16 GB Macs through `.env.local`.
 
 The launcher keeps the original full stack and supports local memory controls when you need them:
@@ -66,6 +65,15 @@ The launcher keeps the original full stack and supports local memory controls wh
 - USDJPY history max bars: `QG_USDJPY_HISTORY_MAX_BARS=300000`.
 - USDJPY history sync interval: `QG_USDJPY_HISTORY_INTERVAL_SECONDS=7200`.
 - Old `com.quantgod.*` LaunchAgents are stopped before startup to avoid duplicate backend/frontend/history/Agent loops.
+
+The tracked MT5 Shadow INI always keeps a synthetic fixture account. At local
+startup, `tools/hydrate_mt5_shadow_config.py` creates only the private
+`QuantGod_MT5_HFM_Shadow_mac.ini` runtime copy with mode `0600`. It accepts a
+numeric Login and the locked HFM Live12 server from the paired
+`QG_MT5_SHADOW_LOGIN` / `QG_MT5_SHADOW_SERVER` variables, or reads only those
+two fields from the already selected portable MT5 `config/common.ini`
+(UTF-16LE). Missing, partial, or mismatched identity evidence stops startup;
+password fields are neither accepted nor copied.
 
 For memory-constrained local machines, override privately in `.env.local`, for example:
 
@@ -157,7 +165,6 @@ The following boundaries are deliberate and should be treated as architectural c
 - Live lane is limited to `USDJPYc / RSI_Reversal / LONG`.
 - `QG_AUTO_MAX_LOT=2.0` is a ceiling, not a fixed position size.
 - MT5 Shadow strategies may rank, replay, and graduate through non-live stages, but cannot become live unless explicitly allowed by the Live Lane contract.
-- HFM Crypto CFD remains shadow-only until a separately reviewed execution lane exists.
 - Telegram is push-only; no Telegram command execution.
 - DeepSeek explains and summarizes; it does not approve execution.
 - Runtime stale, fastlane degraded, high-impact news windows, abnormal spread, daily loss, and loss streak gates cannot be bypassed by Agent or AI. Ordinary news is a soft risk modifier by default.

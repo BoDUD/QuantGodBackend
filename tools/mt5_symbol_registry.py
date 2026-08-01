@@ -27,25 +27,6 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import mt5_readonly_bridge  # noqa: E402
 
-try:  # noqa: E402
-    from tools.hfm_crypto_cfd.schema import HFM_CRYPTO_USD_CANONICALS
-except Exception:  # pragma: no cover - support direct script execution from tools/
-    try:
-        from hfm_crypto_cfd.schema import HFM_CRYPTO_USD_CANONICALS
-    except Exception:  # pragma: no cover - keep this standalone when copied outside repo
-        HFM_CRYPTO_USD_CANONICALS = (
-            "BTCUSD",
-            "ETHUSD",
-            "LTCUSD",
-            "XRPUSD",
-            "BCHUSD",
-            "ADAUSD",
-            "DOTUSD",
-            "SOLUSD",
-            "DOGEUSD",
-        )
-
-
 SAFETY = {
     "readOnly": True,
     "orderSendAllowed": False,
@@ -108,52 +89,6 @@ STATIC_SYMBOLS: tuple[dict[str, Any], ...] = (
     {"name": "EURPLN", "description": "Euro vs Polish Zloty", "path": "Forex\\Exotics"},
     {"name": "EURHUF", "description": "Euro vs Hungarian Forint", "path": "Forex\\Exotics"},
     {"name": "EURCZK", "description": "Euro vs Czech Koruna", "path": "Forex\\Exotics"},
-    # CFD classes QuantDinger exposes through the same MT5 symbol layer.
-    {"name": "XAUUSD", "description": "Gold vs US Dollar", "path": "Metals"},
-    {"name": "XAGUSD", "description": "Silver vs US Dollar", "path": "Metals"},
-    {"name": "XAUEUR", "description": "Gold vs Euro", "path": "Metals"},
-    {"name": "US30", "description": "Dow Jones 30 CFD", "path": "Indices"},
-    {"name": "US500", "description": "S&P 500 CFD", "path": "Indices"},
-    {"name": "USTEC", "description": "Nasdaq 100 CFD", "path": "Indices"},
-    {"name": "UK100", "description": "FTSE 100 CFD", "path": "Indices"},
-    {"name": "DE40", "description": "DAX 40 CFD", "path": "Indices"},
-    {"name": "JP225", "description": "Nikkei 225 CFD", "path": "Indices"},
-    {"name": "AU200", "description": "Australia 200 CFD", "path": "Indices"},
-    {"name": "BTCUSD", "description": "Bitcoin vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "ETHUSD", "description": "Ethereum vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "LTCUSD", "description": "Litecoin vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "XRPUSD", "description": "Ripple vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "ADAUSD", "description": "Cardano vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "BNBUSD", "description": "BNB vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "BCHUSD", "description": "Bitcoin Cash vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "SOLUSD", "description": "Solana vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "DOTUSD", "description": "Polkadot vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "LINKUSD", "description": "Chainlink vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "AAVEUSD", "description": "Aave vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "AVAXUSD", "description": "Avalanche vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "TRXUSD", "description": "Tron vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "FETUSD", "description": "Fetch vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "ICPUSD", "description": "Internet Computer vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "XLMUSD", "description": "Stellar Lumens vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "NEARUSD", "description": "NEAR Protocol vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "UNIUSD", "description": "Uniswap vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "ALGOUSD", "description": "Algo vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "APTUSD", "description": "Aptos vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "ATOMUSD", "description": "Cosmos vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "CRVUSD", "description": "Curve vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "FILUSD", "description": "Filecoin vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "FLOWUSD", "description": "Flow vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "THETAUSD", "description": "Theta Network vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "HBARUSD", "description": "Hedera vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "XTZUSD", "description": "Tezos vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "DOGEUSD", "description": "Dogecoin vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "GALAUSD", "description": "Gala vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "GRTUSD", "description": "The Graph vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "ETCUSD", "description": "Ethereum Classic vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "IMXUSD", "description": "Immutable vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "IOTAUSD", "description": "IOTA vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "SANDUSD", "description": "The Sandbox vs US Dollar CFD", "path": "Crypto CFD"},
-    {"name": "SHIBUSD", "description": "Shiba Inu vs US Dollar CFD", "path": "Crypto CFD"},
 )
 
 CURRENCY_CODES = (
@@ -194,10 +129,6 @@ METAL_ALIASES = {
     "SILVER": ("XAGUSD", "XAG", "USD"),
 }
 
-CRYPTO_PREFIXES = {
-    *HFM_CRYPTO_USD_CANONICALS,
-}
-
 INDEX_PREFIXES = (
     "US500",
     "SPX500",
@@ -231,7 +162,6 @@ LOT_SIZE_PROFILES = {
     "forex": {"standardLot": 100000, "minLot": 0.01, "lotStep": 0.01, "maxLot": 100.0, "contractUnit": "base_currency_units"},
     "metal_cfd": {"standardLot": 100, "minLot": 0.01, "lotStep": 0.01, "maxLot": 50.0, "contractUnit": "troy_ounces"},
     "index_cfd": {"standardLot": 1, "minLot": 0.1, "lotStep": 0.1, "maxLot": 100.0, "contractUnit": "index_contract"},
-    "crypto_cfd": {"standardLot": 1, "minLot": 0.01, "lotStep": 0.01, "maxLot": 100.0, "contractUnit": "coin_contract"},
     "energy_cfd": {"standardLot": 1000, "minLot": 0.01, "lotStep": 0.01, "maxLot": 100.0, "contractUnit": "barrel_or_contract"},
     "unknown": {"standardLot": 1, "minLot": 0.01, "lotStep": 0.01, "maxLot": 100.0, "contractUnit": "contract"},
 }
@@ -341,8 +271,6 @@ def market_type_from_category(category: Any) -> str:
         return "metal_cfd"
     if "index" in text:
         return "index_cfd"
-    if "crypto" in text:
-        return "crypto_cfd"
     if "energy" in text:
         return "energy_cfd"
     return text or "unknown"
@@ -364,7 +292,11 @@ def _static_symbol_catalog_cached() -> tuple[dict[str, Any], ...]:
 
 
 def static_symbol_catalog() -> list[dict[str, Any]]:
-    return [copy.deepcopy(row) for row in _static_symbol_catalog_cached()]
+    return [
+        copy.deepcopy(row)
+        for row in _static_symbol_catalog_cached()
+        if row.get("marketCategory") == "forex"
+    ]
 
 
 def infer_symbol_identity(row: dict[str, Any]) -> dict[str, Any]:
@@ -422,19 +354,6 @@ def infer_symbol_identity(row: dict[str, Any]) -> dict[str, Any]:
                 "mappingReason": "metal_alias",
             }
 
-    for prefix in CRYPTO_PREFIXES:
-        if compact.startswith(prefix):
-            return {
-                "canonicalSymbol": prefix,
-                "baseCurrency": prefix[:-3],
-                "quoteCurrency": prefix[-3:],
-                "assetClass": "Crypto CFD",
-                "marketCategory": "crypto_cfd",
-                "brokerSuffix": suffix_from_prefix(broker_symbol, prefix),
-                "confidence": 0.9,
-                "mappingReason": "crypto_prefix",
-            }
-
     for prefix in INDEX_PREFIXES:
         if compact.startswith(prefix):
             return {
@@ -474,10 +393,6 @@ def infer_symbol_identity(row: dict[str, Any]) -> dict[str, Any]:
     elif "index" in haystack or "indices" in haystack:
         asset_class = "Indices"
         market_category = "index_cfd"
-    elif "crypto" in haystack:
-        asset_class = "Crypto CFD"
-        market_category = "crypto_cfd"
-
     return {
         "canonicalSymbol": fallback,
         "baseCurrency": clean_text(row.get("currency_base", row.get("currencyBase"))),
@@ -593,7 +508,8 @@ def build_registry_from_symbols(
     query: str = "",
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    mappings = [normalize_symbol_row(dict(row)) for row in symbols if clean_text(row.get("name"))]
+    normalized = [normalize_symbol_row(dict(row)) for row in symbols if clean_text(row.get("name"))]
+    mappings = [row for row in normalized if row.get("marketCategory") == "forex"]
     mappings.sort(key=lambda row: (row["assetClass"], row["canonicalSymbol"], row["brokerSymbol"]))
     return {
         "ok": True,

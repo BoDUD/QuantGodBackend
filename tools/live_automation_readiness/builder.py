@@ -8,22 +8,14 @@ from typing import Any, Callable
 from .schema import SCHEMA_VERSION, SAFETY, assert_no_execution_flags, readiness_path, utc_now_iso
 
 try:
-    from tools.autonomous_lifecycle.hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
     from tools.usdjpy_autonomous_agent.promotion_gate import build_promotion_decision
     from tools.usdjpy_strategy_lab.policy_builder import build_usdjpy_policy
 except ModuleNotFoundError:  # pragma: no cover
-    from autonomous_lifecycle.hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
     from usdjpy_autonomous_agent.promotion_gate import build_promotion_decision
     from usdjpy_strategy_lab.policy_builder import build_usdjpy_policy
 
 
 USDJPY_SIM_STAGES = {"PAPER_LIVE_SIM", "MICRO_LIVE", "LIVE_LIMITED"}
-HFM_ROI_MIN_PCT = 0.0
-HFM_PNL_MIN_USD = 0.0
-HFM_SHARPE_MIN = 1.0
-HFM_MAX_DRAWDOWN_MAX_PCT = 15.0
-HFM_TRADE_COUNT_MIN = 20
-HFM_LIQUIDATION_MAX = 0
 _READINESS_BUILD_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
 
@@ -82,18 +74,10 @@ def _readiness_cache_key(
     runtime_dir: Path,
     *,
     refresh_sources: bool,
-    moss_backtest_json: str,
-    hfm_simulation_profile_json: str,
-    hfm_contract_spec_json: str,
-    extra_bases_roots: list[str],
 ) -> tuple[Any, ...]:
     return (
         str(runtime_dir.resolve()),
         bool(refresh_sources),
-        _path_fingerprint(moss_backtest_json),
-        _path_fingerprint(hfm_simulation_profile_json),
-        _path_fingerprint(hfm_contract_spec_json),
-        tuple(_dir_fingerprint(Path(root)) for root in extra_bases_roots),
         _dir_fingerprint(runtime_dir / "Bases"),
         _path_fingerprint(str(runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json")),
         _path_fingerprint(str(runtime_dir / "agent" / "QuantGod_AutonomousPromotionDecision.json")),
@@ -327,238 +311,14 @@ def _build_usdjpy_lane(
     }
 
 
-def _compact_local_evidence(local_evidence: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "found": bool(local_evidence.get("found")),
-        "canonicalSymbols": _safe_list(local_evidence.get("canonicalSymbols")),
-        "brokerSymbols": _safe_list(local_evidence.get("brokerSymbols")),
-        "findingCount": len(_safe_list(local_evidence.get("findings"))),
-    }
 
-
-def _compact_standalone_exporter(standalone_exporter: dict[str, Any]) -> dict[str, Any]:
-    bundle = _safe_dict(standalone_exporter.get("bundle"))
-    target = _safe_dict(standalone_exporter.get("target"))
-    output = _safe_dict(standalone_exporter.get("output"))
-    return {
-        "status": standalone_exporter.get("status"),
-        "statusZh": standalone_exporter.get("statusZh"),
-        "standaloneExporterReady": bool(standalone_exporter.get("standaloneExporterReady")),
-        "targetInstalledAndCompiled": bool(standalone_exporter.get("targetInstalledAndCompiled")),
-        "targetExpertInstalledAndCompiled": bool(standalone_exporter.get("targetExpertInstalledAndCompiled")),
-        "bundle": {
-            "stagedScriptPath": bundle.get("stagedScriptPath", ""),
-            "stagedExpertPath": bundle.get("stagedExpertPath", ""),
-        },
-        "target": {
-            "targetCompiledPath": target.get("targetCompiledPath", ""),
-            "targetExpertCompiledPath": target.get("targetExpertCompiledPath", ""),
-        },
-        "output": {
-            "expectedSpecsPath": output.get("expectedSpecsPath", ""),
-            "expectedSpecsRowCount": output.get("expectedSpecsRowCount", 0),
-            "expectedRatesSeriesCount": output.get("expectedRatesSeriesCount", 0),
-            "expectedRuntimeProbeLiveTickCount": output.get("expectedRuntimeProbeLiveTickCount", 0),
-        },
-        "blockers": _safe_list(standalone_exporter.get("blockers"))[:8],
-        "nextRequiredActionZh": standalone_exporter.get("nextRequiredActionZh"),
-        "safety": dict(SAFETY),
-    }
-
-
-def _hfm_metric_blockers(metrics: dict[str, Any], profile_found: bool) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    if not profile_found:
-        rows.append(_blocker("HFM_MOSS_BACKTEST_PROFILE_MISSING", "缺少 Moss/HFM crypto 回测资料，不能评估模拟表现。"))
-        return rows
-    pnl = _num(_first_metric(metrics, ("pnlUsd", "pnl", "profitUsd", "netUsd", "netProfitUsd", "realizedPnlUsd")))
-    roi = _num(metrics.get("roiPct"))
-    sharpe = _num(metrics.get("sharpe"))
-    max_drawdown = _num(metrics.get("maxDrawdownPct"))
-    trade_count = _int(metrics.get("tradeCount"))
-    liquidation_count = _int(metrics.get("liquidationCount"))
-    if pnl is None or pnl <= HFM_PNL_MIN_USD:
-        rows.append(_blocker("HFM_PNL_USD_NOT_POSITIVE", "HFM crypto 回测 USD pnl 未证明为正，不能计入 BTC/crypto 收益目标追踪。", pnl, f">{HFM_PNL_MIN_USD}"))
-    if roi is None or roi <= HFM_ROI_MIN_PCT:
-        rows.append(_blocker("HFM_ROI_NOT_POSITIVE", "HFM crypto 回测 ROI 未证明为正。", roi, f">{HFM_ROI_MIN_PCT}"))
-    if sharpe is None or sharpe < HFM_SHARPE_MIN:
-        rows.append(_blocker("HFM_SHARPE_LT_MIN", "HFM crypto 回测 Sharpe 未达准入线。", sharpe, HFM_SHARPE_MIN))
-    if max_drawdown is None or max_drawdown > HFM_MAX_DRAWDOWN_MAX_PCT:
-        rows.append(_blocker(
-            "HFM_MAX_DRAWDOWN_GT_MAX",
-            "HFM crypto 回测最大回撤超过准入线。",
-            max_drawdown,
-            HFM_MAX_DRAWDOWN_MAX_PCT,
-        ))
-    if trade_count is None or trade_count < HFM_TRADE_COUNT_MIN:
-        rows.append(_blocker("HFM_TRADE_COUNT_LT_MIN", "HFM crypto 回测交易样本不足。", trade_count, HFM_TRADE_COUNT_MIN))
-    if liquidation_count is None or liquidation_count > HFM_LIQUIDATION_MAX:
-        rows.append(_blocker("HFM_LIQUIDATION_COUNT_GT_MAX", "HFM crypto 回测出现爆仓或缺少爆仓字段。", liquidation_count, HFM_LIQUIDATION_MAX))
-    return rows
-
-
-def _build_hfm_crypto_lane(source: dict[str, Any]) -> dict[str, Any]:
-    lane = _safe_dict(source.get("payload"))
-    summary = _safe_dict(lane.get("summary"))
-    state = _safe_dict(lane.get("hfmCryptoCfdState"))
-    contract_spec_export = _safe_dict(state.get("contractSpecExport"))
-    execution_spec = _safe_dict(state.get("executionSpecReview"))
-    standalone_exporter = _safe_dict(state.get("standaloneExporterBundle"))
-    simulation_review = _safe_dict(state.get("simulationProfileReview"))
-    symbol_evidence = _safe_dict(state.get("symbolEvidence"))
-    broker_diagnostics = _safe_dict(symbol_evidence.get("brokerSymbolDiagnostics"))
-    state_blockers = [item for item in _safe_list(state.get("blockers")) if isinstance(item, dict)]
-    operator_checklist = [item for item in _safe_list(state.get("operatorChecklist")) if isinstance(item, dict)]
-    moss = _safe_dict(state.get("mossBacktestProfile"))
-    metrics = _safe_dict(moss.get("metrics"))
-    symbol_ready = bool(summary.get("symbolEvidenceFound"))
-    account_no_crypto_symbols = (
-        state.get("status") == "WAITING_HFM_ACCOUNT_CRYPTO_CFD_SYMBOLS"
-        or "HFM_MT5_ACCOUNT_NO_CRYPTO_CFD_SYMBOLS" in _blocker_codes(state_blockers)
-    )
-    execution_spec_ready = bool(execution_spec.get("readyForExecutionSpecReview"))
-    simulation_blockers = _safe_list(simulation_review.get("blockers"))
-    metric_blockers = [
-        item for item in simulation_blockers
-        if isinstance(item, dict)
-    ] or _hfm_metric_blockers(metrics, bool(summary.get("mossProfileFound")))
-    simulation_qualified = bool(symbol_ready and not metric_blockers)
-    review_blockers: list[dict[str, Any]] = []
-    if not source.get("ok"):
-        review_blockers.append(_blocker("HFM_CRYPTO_SOURCE_ERROR", "HFM crypto shadow lane 构建失败。", source.get("error")))
-    if not symbol_ready:
-        if account_no_crypto_symbols:
-            account_blocker = next(
-                (
-                    row
-                    for row in state_blockers
-                    if row.get("code") == "HFM_MT5_ACCOUNT_NO_CRYPTO_CFD_SYMBOLS"
-                ),
-                None,
-            )
-            _append_blocker_once(
-                review_blockers,
-                account_blocker
-                or _blocker(
-                    "HFM_MT5_ACCOUNT_NO_CRYPTO_CFD_SYMBOLS",
-                    "账号已授权并下发 symbol 清单，但当前 HFM 账号/服务器没有 crypto CFD symbol。",
-                ),
-            )
-        elif standalone_exporter.get("targetInstalledAndCompiled"):
-            review_blockers.append(_blocker(
-                "HFM_CRYPTO_STANDALONE_EXPORTER_READY_TO_RUN",
-                "独立只读 MT5 specs 导出脚本已安装并编译；需要在 MT5 Scripts 中运行一次生成 QuantGod_HFMCryptoSymbolSpecs.json。",
-                standalone_exporter.get("target", {}).get("targetCompiledPath", ""),
-            ))
-        elif standalone_exporter.get("standaloneExporterReady"):
-            review_blockers.append(_blocker(
-                "HFM_CRYPTO_STANDALONE_EXPORTER_READY_FOR_INSTALL",
-                "独立只读 MT5 specs 导出脚本已生成；需要安装、编译并运行一次。",
-                standalone_exporter.get("bundle", {}).get("stagedScriptPath", ""),
-            ))
-        _append_blocker_once(
-            review_blockers,
-            _blocker(
-                "HFM_CRYPTO_LOCAL_SYMBOL_EVIDENCE_MISSING",
-                "本机 HFM/MT5 尚未发现 crypto CFD symbol 历史或 tick 目录。",
-            ),
-        )
-    review_blockers.extend(metric_blockers)
-    if not execution_spec_ready:
-        review_blockers.append(_blocker(
-            "HFM_CRYPTO_EXECUTION_SPEC_REVIEW_REQUIRED",
-            "HFM crypto CFD 仍缺 MT5 crypto 合约规格证据、symbol 映射和风控限制审查。",
-        ))
-    else:
-        review_blockers.append(_blocker(
-            "HFM_CRYPTO_EXECUTION_LANE_REVIEW_REQUIRED",
-            "HFM crypto 合约规格已可审查，但真实 MT5 执行 lane 仍未单独设计和启用。",
-        ))
-    local_evidence = _safe_dict(state.get("localEvidence"))
-    compact_shadow_state = {
-        "status": state.get("status"),
-        "statusZh": state.get("statusZh"),
-        "targetSymbols": _safe_list(state.get("targetSymbols")),
-        "localEvidence": _compact_local_evidence(local_evidence),
-        "brokerSymbolCandidates": _safe_list(state.get("brokerSymbolCandidates"))[:32],
-        "mossBacktestProfile": {
-            "profileFound": bool(moss.get("profileFound")),
-            "metrics": metrics,
-        },
-        "contractSpecExport": contract_spec_export,
-        "simulationProfileReview": simulation_review,
-        "executionSpecReview": execution_spec,
-        "shadowPlan": _safe_dict(state.get("shadowPlan")),
-        "riskBoundary": _safe_dict(state.get("riskBoundary")),
-        "blockers": state_blockers[:16],
-        "sourceFiles": _safe_dict(state.get("sourceFiles")),
-    }
-    return {
-        "lane": "HFM_CRYPTO_CFD",
-        "laneZh": "HFM Crypto CFD 实盘候选",
-        "sourceStatus": {
-            "hfmCryptoShadowOk": bool(source.get("ok")),
-            "hfmCryptoShadowError": source.get("error"),
-        },
-        "simulationQualified": simulation_qualified,
-        "reviewCandidate": simulation_qualified,
-        "executionReady": False,
-        "status": lane.get("status"),
-        "statusZh": lane.get("statusZh"),
-        "symbolEvidenceFound": symbol_ready,
-        "detectedSymbolCount": summary.get("detectedSymbolCount", 0),
-        "accountNoCryptoSymbols": account_no_crypto_symbols,
-        "accountCryptoAvailability": {
-            "status": state.get("status"),
-            "statusZh": state.get("statusZh"),
-            "brokerSymbolDiagnostics": broker_diagnostics,
-            "operatorChecklist": operator_checklist,
-            "nextRequiredActionZh": state.get("nextRequiredActionZh"),
-        },
-        "mossProfileFound": bool(summary.get("mossProfileFound")),
-        "mossMetrics": metrics,
-        "simulationProfileQualified": bool(simulation_review.get("simulationQualified")),
-        "simulationProfileReview": simulation_review,
-        "contractSpecExportReady": bool(contract_spec_export.get("readyForContractSpecReviewInput")),
-        "contractSpecExport": contract_spec_export,
-        "standaloneExporterBundle": _compact_standalone_exporter(standalone_exporter),
-        "executionSpecReady": execution_spec_ready,
-        "executionSpecReview": execution_spec,
-        "thresholds": {
-            "roiPctMinExclusive": HFM_ROI_MIN_PCT,
-            "sharpeMin": HFM_SHARPE_MIN,
-            "maxDrawdownPctMax": HFM_MAX_DRAWDOWN_MAX_PCT,
-            "tradeCountMin": HFM_TRADE_COUNT_MIN,
-            "liquidationCountMax": HFM_LIQUIDATION_MAX,
-        },
-        "shadowLane": {
-            "status": lane.get("status"),
-            "statusZh": lane.get("statusZh"),
-            "summary": summary,
-            "hfmCryptoCfdState": compact_shadow_state,
-        },
-        "reviewBlockers": review_blockers,
-        "nextRequiredActionZh": (
-            state.get("nextRequiredActionZh")
-            if account_no_crypto_symbols
-            else
-            "合约规格已有证据；继续补独立 MT5 执行 lane 评审、kill switch、最大亏损和 operator approval。"
-            if simulation_qualified and execution_spec_ready
-            else "先补 HFM crypto 执行设计评审：broker symbol、合约规格、点差/滑点、最小仓、kill switch 和 MT5 订单请求格式。"
-            if simulation_qualified
-            else "先补 HFM crypto symbol 证据和可审计回测指标。"
-        ),
-        "safety": dict(SAFETY),
-    }
-
-
-def _global_blockers(usdjpy_lane: dict[str, Any], hfm_lane: dict[str, Any]) -> list[dict[str, Any]]:
+def _global_blockers(usdjpy_lane: dict[str, Any]) -> list[dict[str, Any]]:
     rows = [
         _blocker("EXECUTION_LANE_NOT_ENABLED", "当前系统只生成实盘自动化准入档案，不启用真实订单写入。"),
         _blocker("SEPARATE_REVIEW_REQUIRED", "需要单独评审 execution lane 才能从 readiness 进入真实 broker 执行。"),
     ]
-    if not usdjpy_lane.get("reviewCandidate") and not hfm_lane.get("reviewCandidate"):
-        rows.append(_blocker("NO_LANE_READY_FOR_REVIEW", "USDJPY MT5 与 HFM crypto CFD 当前都未达到实盘执行审查候选条件。"))
+    if not usdjpy_lane.get("reviewCandidate"):
+        rows.append(_blocker("NO_LANE_READY_FOR_REVIEW", "USDJPY MT5 当前未达到实盘执行审查候选条件。"))
     return rows
 
 
@@ -570,48 +330,39 @@ def _lane_blocker_codes(lane: dict[str, Any]) -> list[str]:
     return codes
 
 
-def _execution_review_summary(usdjpy_lane: dict[str, Any], hfm_lane: dict[str, Any]) -> dict[str, Any]:
+def _execution_review_summary(usdjpy_lane: dict[str, Any]) -> dict[str, Any]:
     review_lanes = [
         key
-        for key, lane in (("usdjpyMt5", usdjpy_lane), ("hfmCryptoCfd", hfm_lane))
+        for key, lane in (("usdjpyMt5", usdjpy_lane),)
         if lane.get("reviewCandidate")
     ]
     simulation_lanes = [
         key
-        for key, lane in (("usdjpyMt5", usdjpy_lane), ("hfmCryptoCfd", hfm_lane))
+        for key, lane in (("usdjpyMt5", usdjpy_lane),)
         if lane.get("simulationQualified")
     ]
     usdjpy_source = _safe_dict(usdjpy_lane.get("sourceStatus"))
     live12_fresh = bool(usdjpy_source.get("live12RuntimeHandoffFresh"))
-    hfm_execution_spec_ready = bool(hfm_lane.get("executionSpecReady"))
-    hfm_review_candidate = bool(hfm_lane.get("reviewCandidate"))
     usdjpy_blockers = _lane_blocker_codes(usdjpy_lane)
-    hfm_blockers = _lane_blocker_codes(hfm_lane)
     blocker_codes_by_lane = {
         "usdjpyMt5": usdjpy_blockers,
-        "hfmCryptoCfd": hfm_blockers,
         "global": ["EXECUTION_LANE_NOT_ENABLED", "SEPARATE_REVIEW_REQUIRED"],
     }
     blocker_codes = [
         *usdjpy_blockers[:6],
-        *hfm_blockers[:6],
         *blocker_codes_by_lane["global"],
     ]
     if not live12_fresh:
         blocker_codes_by_lane["global"].append("LIVE12_RUNTIME_NOT_FRESH")
         blocker_codes.append("LIVE12_RUNTIME_NOT_FRESH")
-    if hfm_review_candidate and hfm_execution_spec_ready:
-        status = "REVIEW_READY_EXECUTION_DISABLED"
-        status_zh = "可进入执行评审，但真实执行仍关闭"
-        next_action = "HFM/BTC 证据可进入单独 execution lane 评审；先补 disabled-first 执行包、kill switch、最大亏损和 release token，当前不写订单。"
-    elif simulation_lanes:
+    if simulation_lanes:
         status = "SIMULATION_READY_EXECUTION_BLOCKED"
         status_zh = "模拟证据已达标，执行链路仍阻塞"
         next_action = "继续补 execution lane 合同、runtime freshness、tester/forward 证据和 release token；当前不写订单。"
     else:
         status = "WAITING_STRATEGY_EVIDENCE"
         status_zh = "等待可审查策略证据"
-        next_action = "继续补外汇 tester/forward 与 BTC 多窗口复验，直到至少一个 lane 达到执行评审候选。"
+        next_action = "继续补外汇 tester/forward 复验，直到 USDJPY lane 达到执行评审候选。"
     return {
         "status": status,
         "statusZh": status_zh,
@@ -623,8 +374,6 @@ def _execution_review_summary(usdjpy_lane: dict[str, Any], hfm_lane: dict[str, A
         "canPromoteToLiveNow": False,
         "autoPromotionToLiveAllowed": False,
         "live12RuntimeFresh": live12_fresh,
-        "hfmCryptoExecutionSpecReady": hfm_execution_spec_ready,
-        "hfmCryptoReviewCandidate": hfm_review_candidate,
         "blockerCodesByLane": blocker_codes_by_lane,
         "primaryBlockerCodes": list(dict.fromkeys(blocker_codes))[:12],
         "nextRequiredActionZh": next_action,
@@ -636,19 +385,12 @@ def build_live_automation_readiness(
     *,
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
-    extra_bases_roots: list[str] | None = None,
+    **_retired_inputs: Any,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     cache_key = _readiness_cache_key(
         runtime_dir,
         refresh_sources=refresh_sources,
-        moss_backtest_json=moss_backtest_json,
-        hfm_simulation_profile_json=hfm_simulation_profile_json,
-        hfm_contract_spec_json=hfm_contract_spec_json,
-        extra_bases_roots=extra_bases_roots or [],
     )
     if not write and cache_key in _READINESS_BUILD_CACHE:
         return copy.deepcopy(_READINESS_BUILD_CACHE[cache_key])
@@ -673,22 +415,10 @@ def build_live_automation_readiness(
         "forex_live12_runtime_handoff",
         lambda: _build_forex_live12_runtime_handoff(runtime_dir, write=bool(write and refresh_sources)),
     )
-    hfm_source = _capture_source(
-        "hfm_crypto_shadow",
-        lambda: build_hfm_crypto_shadow_lane(
-            runtime_dir,
-            write=bool(write and refresh_sources),
-            moss_backtest_json=moss_backtest_json,
-            simulation_profile_json=hfm_simulation_profile_json,
-            contract_spec_json=hfm_contract_spec_json,
-            extra_bases_roots=extra_bases_roots or [],
-        ),
-    )
     usdjpy_lane = _build_usdjpy_lane(usdjpy_policy_source, promotion_source, usdjpy_handoff_source)
-    hfm_lane = _build_hfm_crypto_lane(hfm_source)
-    execution_summary = _execution_review_summary(usdjpy_lane, hfm_lane)
-    any_review_candidate = bool(usdjpy_lane.get("reviewCandidate") or hfm_lane.get("reviewCandidate"))
-    any_simulation_qualified = bool(usdjpy_lane.get("simulationQualified") or hfm_lane.get("simulationQualified"))
+    execution_summary = _execution_review_summary(usdjpy_lane)
+    any_review_candidate = bool(usdjpy_lane.get("reviewCandidate"))
+    any_simulation_qualified = bool(usdjpy_lane.get("simulationQualified"))
     if any_review_candidate:
         status = "READY_FOR_EXECUTION_REVIEW"
         status_zh = "可进入实盘执行审查"
@@ -710,13 +440,12 @@ def build_live_automation_readiness(
         "liveExecutionAllowed": False,
         "orderSendAllowed": False,
         "mt5OrderSendAllowed": False,
-        "reviewCandidateCount": int(usdjpy_lane.get("reviewCandidate")) + int(hfm_lane.get("reviewCandidate")),
-        "simulationQualifiedCount": int(usdjpy_lane.get("simulationQualified")) + int(hfm_lane.get("simulationQualified")),
+        "reviewCandidateCount": int(usdjpy_lane.get("reviewCandidate")),
+        "simulationQualifiedCount": int(usdjpy_lane.get("simulationQualified")),
         "executionReviewSummary": execution_summary,
         "nextRequiredActionZh": execution_summary.get("nextRequiredActionZh"),
         "lanes": {
             "usdjpyMt5": usdjpy_lane,
-            "hfmCryptoCfd": hfm_lane,
         },
         "approvalPacket": {
             "requiredBeforeLiveExecution": [
@@ -731,7 +460,7 @@ def build_live_automation_readiness(
             "writesPresets": False,
             "storesCredentials": False,
         },
-        "globalBlockers": _global_blockers(usdjpy_lane, hfm_lane),
+        "globalBlockers": _global_blockers(usdjpy_lane),
         "safety": dict(SAFETY),
     }
     assert_no_execution_flags(payload)

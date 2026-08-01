@@ -45,7 +45,6 @@ class USDJPYStrategyLabTests(unittest.TestCase):
                 "CENT_SMALL_LOT_SAMPLE_USD_PAPER_MIRROR",
             )
             self.assertIn("usdDeploymentGate", policy)
-            self.assertTrue(policy["accountLanePolicy"]["externalMarketRemoved"])
             self.assertGreaterEqual(policy["standardEntryCount"] + policy["opportunityEntryCount"], 1)
             self.assertGreaterEqual(policy["evidence"]["candidateSignalCount"], 1)
             output = runtime / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json"
@@ -623,7 +622,7 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertLessEqual(rsi_long["recommendedLot"], 0.10)
             self.assertIn("点差轻微偏宽", "；".join(rsi_long["reasons"]))
 
-    def test_usd_deployment_gate_allows_only_validated_standard_normal_spread(self):
+    def test_usd_deployment_gate_keeps_validated_evidence_in_paper_mirror(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
             sample_runtime(runtime, overwrite=True)
@@ -665,10 +664,13 @@ class USDJPYStrategyLabTests(unittest.TestCase):
 
             self.assertEqual(policy["topPolicy"]["entryMode"], ENTRY_STANDARD)
             self.assertEqual(policy["spreadGate"]["tier"], "NORMAL")
-            self.assertTrue(policy["usdDeploymentGate"]["liveAllowed"])
-            self.assertEqual(policy["usdDeploymentGate"]["targetStage"], "USD_MICRO_LIVE")
-            self.assertEqual(policy["usdDeploymentGate"]["recommendedLot"], 0.01)
-            self.assertEqual(policy["accountLanePolicy"]["usdDeploymentLiveAllowed"], True)
+            self.assertTrue(policy["usdDeploymentGate"]["evidenceEligibleForOperatorReview"])
+            self.assertFalse(policy["usdDeploymentGate"]["liveAllowed"])
+            self.assertEqual(policy["usdDeploymentGate"]["targetStage"], "USD_PAPER_MIRROR")
+            self.assertEqual(policy["usdDeploymentGate"]["recommendedLot"], 0.0)
+            self.assertFalse(policy["accountLanePolicy"]["usdDeploymentLiveAllowed"])
+            blocker_codes = {row["code"] for row in policy["usdDeploymentGate"]["blockers"]}
+            self.assertIn("ACTIVE_SHADOW_READONLY_CONTRACT", blocker_codes)
 
     def test_hard_wide_spread_still_blocks_all_live_entry(self):
         with tempfile.TemporaryDirectory() as tmp:

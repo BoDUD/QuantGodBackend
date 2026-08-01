@@ -12,7 +12,6 @@ except ModuleNotFoundError:  # pragma: no cover
 from .account_registry import mt5_account_registry
 from .cent_account_rules import cent_account_config
 from .ea_reproducibility import build_ea_reproducibility
-from .hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
 from .mt5_shadow_lane import build_mt5_shadow_lane
 
 
@@ -21,17 +20,14 @@ def build_autonomous_lifecycle(
     *,
     repo_root: Path | None = None,
     write: bool = False,
-    hfm_crypto_runtime_dir: Path | str | None = None,
 ) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
-    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
     cent = cent_account_config()
     account_registry = mt5_account_registry()
     accounts = account_registry.get("accounts") if isinstance(account_registry.get("accounts"), list) else []
     cent_lane = accounts[0] if len(accounts) > 0 and isinstance(accounts[0], dict) else {}
     usd_lane = accounts[1] if len(accounts) > 1 and isinstance(accounts[1], dict) else {}
     mt5_shadow = build_mt5_shadow_lane(runtime_dir, write=write)
-    hfm_crypto_shadow = build_hfm_crypto_shadow_lane(hfm_crypto_runtime, write=write)
     ea_repro = build_ea_reproducibility(runtime_dir, repo_root=repo_root, write=write)
     payload: Dict[str, Any] = {
         "ok": True,
@@ -39,7 +35,6 @@ def build_autonomous_lifecycle(
         "generatedAtIso": utc_now_iso(),
         "symbol": FOCUS_SYMBOL,
         "runtimeDir": str(runtime_dir),
-        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
         "sloganZh": "实盘要窄，模拟要宽，升降级要快，回滚要硬。",
         "singleSourceOfTruth": "USDJPY_LIVE_LOOP_WITH_AUTONOMOUS_LIFECYCLE",
         "centAccount": cent,
@@ -53,11 +48,14 @@ def build_autonomous_lifecycle(
                 "symbol": FOCUS_SYMBOL,
                 "strategy": "RSI_Reversal",
                 "direction": "LONG",
-                "allowedLiveStages": ["CENT_MICRO_LIVE", "CENT_LIMITED"],
-                "operatorApprovalRequired": False,
-                "unattendedLiveExpansionAllowed": True,
-                "liveScopeExpansionMode": "autonomous_governance_stage_gated",
-                "forbiddenZh": ["未过 autonomous governance 的实盘扩展", "非 USDJPY 实盘", "HFM Crypto CFD 未经单独评审的真钱执行"],
+                "enabled": False,
+                "mode": "SHADOW_READONLY",
+                "allowedLiveStages": [],
+                "operatorApprovalRequired": True,
+                "unattendedLiveExpansionAllowed": False,
+                "liveExpansionAllowed": False,
+                "liveScopeExpansionMode": "operator_reviewed_future_lane",
+                "forbiddenZh": ["未过 autonomous governance 的实盘扩展", "非 USDJPY 实盘"],
                 "maxLotIsCapNotFixed": True,
             },
             "centLive": {
@@ -79,20 +77,19 @@ def build_autonomous_lifecycle(
             },
             "globalUsdJpyExposureGuard": account_registry.get("globalExposureGuard", {}),
             "mt5Shadow": mt5_shadow,
-            "hfmCryptoShadow": hfm_crypto_shadow,
         },
         "eaReproducibility": ea_repro,
         "safety": {
             "requiresAutonomousGovernance": True,
-            "autoApplyAllowed": "stage_gated",
-            "operatorApprovalRequired": False,
-            "unattendedLiveExpansionAllowed": True,
-            "liveScopeExpansionMode": "autonomous_governance_stage_gated",
-            "patchWritable": True,
+            "autoApplyAllowed": "shadow_only",
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
+            "liveScopeExpansionMode": "operator_reviewed_future_lane",
+            "patchWritable": False,
             "liveMutationAllowed": False,
             "orderSendAllowed": False,
             "externalMarketRealMoneyAllowed": False,
-            "hfmCryptoExecutionAllowed": False,
             "deepSeekCanApproveLive": False,
             "telegramCommandExecutionAllowed": False,
         },

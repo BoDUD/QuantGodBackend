@@ -15,6 +15,7 @@ SHADOW_PRESET_PATH = ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_Shadow.set"
 SECONDARY_PRESET_PATH = ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_LiveSecondary.set"
 USD_DEPLOY_PRESET_PATH = ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_UsdDeployMicro.set"
 MAC_LAUNCHER_PATH = ROOT / "Start_QuantGod_mac.sh"
+SHADOW_HYDRATOR_PATH = ROOT / "tools" / "hydrate_mt5_shadow_config.py"
 
 USDJPY_SHADOW_ROUTES = (
     "USDJPY_TOKYO_RANGE_BREAKOUT",
@@ -138,28 +139,21 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("pilotStartupEntryGuardActive", text)
         self.assertIn("pilotStartupEntryGuardMode", text)
 
-    def test_route_live_switches_are_rechecked_at_order_send(self):
+    def test_order_entry_is_a_permanent_fail_closed_stub(self):
         text = EA_PATH.read_text(encoding="utf-8")
         self.assertIn("bool SendPilotMarketOrder(string symbol, int direction, double slPrice, double tpPrice, string strategyKey)", text)
-        self.assertIn('strategyKey == "MA_Cross"', text)
-        self.assertIn("if(!EnablePilotMA)", text)
-        self.assertIn("IsNonRsiLegacyPilotRoute(strategyKey) && !NonRsiLegacyLiveAuthorizationActive()", text)
-        self.assertIn("non-RSI legacy live authorization lock disabled", text)
-        self.assertIn("else if(!IsLegacyPilotRouteLiveEnabled(strategyKey))", text)
-        self.assertIn("legacy route live switch disabled", text)
+        order_stub = text.split("bool SendPilotMarketOrder", 1)[1].split("bool ClosePositionWithExecutionGuard", 1)[0]
+        self.assertIn("execution lane removed", order_stub)
+        self.assertIn("return false;", order_stub)
+        self.assertNotIn('strategyKey == "MA_Cross"', order_stub)
 
-    def test_live_trade_permissions_include_account_and_symbol_state(self):
+    def test_live_trade_permissions_permanently_report_removed_lane(self):
         text = EA_PATH.read_text(encoding="utf-8")
         self.assertIn("string LiveTradePermissionBlocker(string symbol)", text)
-        self.assertIn("ACCOUNT_TRADE_DISABLED_OR_INVESTOR_MODE", text)
-        self.assertIn("ACCOUNT_EXPERT_TRADE_DISABLED", text)
-        self.assertIn("SYMBOL_TRADE_MODE_", text)
-        self.assertIn("accountTradeAllowed", text)
-        self.assertIn("accountExpertTradeAllowed", text)
-        self.assertIn("focusSymbolTradeAllowed", text)
+        blocker = text.split("string LiveTradePermissionBlocker", 1)[1].split("bool IsUsdJpySymbol", 1)[0]
+        self.assertIn('return "EXECUTION_LANE_REMOVED";', blocker)
+        self.assertNotIn('return "";', blocker)
         self.assertIn("tradePermissionBlocker", text)
-        self.assertIn('tradeStatus = "ACCOUNT_TRADE_DISABLED";', text)
-        self.assertIn('tradeStatus = "SYMBOL_TRADE_DISABLED";', text)
         self.assertIn('tradeStatus = "STARTUP_GUARD";', text)
 
     def test_live_pilot_does_not_manage_manual_positions_by_default(self):
@@ -171,13 +165,12 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("ManualSafetyCloseOnMaxLoss=false", preset_text)
         self.assertIn("if(IsPilotManagedPosition(comment, magic))", ea_text)
 
-    def test_order_send_blocks_investor_mode_before_broker_rejection(self):
+    def test_order_send_never_reaches_broker_permission_evaluation(self):
         text = EA_PATH.read_text(encoding="utf-8")
-        self.assertIn("string permissionBlocker = LiveTradePermissionBlocker(symbol);", text)
-        self.assertIn("pilot order blocked: trade permission disabled", text)
-        self.assertIn("accountTradeAllowed=", text)
-        self.assertIn("accountExpertTradeAllowed=", text)
-        self.assertIn("symbolTradeMode=", text)
+        order_stub = text.split("bool SendPilotMarketOrder", 1)[1].split("bool ClosePositionWithExecutionGuard", 1)[0]
+        self.assertIn("broker mutation blocked permanently", order_stub)
+        self.assertNotIn("AccountInfoInteger", order_stub)
+        self.assertNotIn("SymbolInfoInteger", order_stub)
 
     def test_non_rsi_legacy_routes_need_second_live_authorization_key(self):
         text = EA_PATH.read_text(encoding="utf-8")
@@ -212,10 +205,13 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("PilotRequireStrategyCommentForManagedPosition=true", text)
         self.assertIn("PilotLotSize=0.01", text)
 
-    def test_live_preset_is_downshifted_to_usdjpy_rsi_iteration(self):
+    def test_legacy_live_preset_is_readonly_usdjpy_iteration_compatibility(self):
         text = LIVE_PRESET_PATH.read_text(encoding="utf-8")
-        self.assertIn("DashboardBuild=QuantGod-v3.17-mt5-startup-entry-guard", text)
+        self.assertIn("DashboardBuild=QuantGod-v3.17-shadow-readonly-compat", text)
         self.assertIn("Watchlist=USDJPY", text)
+        self.assertIn("ShadowMode=true", text)
+        self.assertIn("ReadOnlyMode=true", text)
+        self.assertIn("EnablePilotAutoTrading=false", text)
         self.assertIn("EnablePilotStartupEntryGuard=true", text)
         self.assertIn("PilotStartupEntryGuardMode=FAST_WARMUP", text)
         self.assertIn("PilotStartupEntryMinWaitMinutes=5", text)
@@ -223,7 +219,7 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("PilotStartupEntryFastWarmupMinutes=5", text)
         self.assertIn("PilotStartupEntryFastWarmupM1Bars=2", text)
         self.assertIn("EnablePilotMA=false", text)
-        self.assertIn("EnablePilotRsiH1Live=true", text)
+        self.assertIn("EnablePilotRsiH1Live=false", text)
         self.assertIn("EnablePilotBBH1Live=false", text)
         self.assertIn("EnableNonRsiLegacyLiveAuthorization=false", text)
         self.assertIn("NonRsiLegacyLiveAuthorizationTag=", text)
@@ -293,7 +289,7 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("Symbol=USDJPYc", start_text)
         self.assertNotIn("Symbol=EURUSD", start_text)
 
-    def test_mac_launcher_defaults_to_usdjpy_live_and_agent_v25(self):
+    def test_mac_launcher_defaults_to_usdjpy_shadow_and_agent_v25(self):
         config_text = SHADOW_CONFIG_PATH.read_text(encoding="utf-8")
         self.assertIn("AllowLiveTrading=0", config_text)
         self.assertIn("Symbol=USDJPYc", config_text)
@@ -308,8 +304,11 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
             self.assertIn(switch, preset_text)
 
         launcher_text = MAC_LAUNCHER_PATH.read_text(encoding="utf-8")
-        self.assertIn('MT5_START_MODE="${QG_MT5_START_MODE:-live}"', launcher_text)
-        self.assertIn('MT5_LIVE_LAUNCH_ALLOWED="${QG_MT5_LIVE_LAUNCH_ALLOWED:-1}"', launcher_text)
+        self.assertIn('MT5_START_MODE="${QG_MT5_START_MODE:-shadow}"', launcher_text)
+        self.assertIn("shadow|off)", launcher_text)
+        self.assertIn('assert_shadow_readonly_ea_source "$EA_SOURCE"', launcher_text)
+        self.assertNotIn("QG_MT5_LIVE_LAUNCH_ALLOWED", launcher_text)
+        self.assertNotIn("QG_MT5_SECONDARY_ENABLED", launcher_text)
         self.assertIn("QG_FOCUS_SYMBOL", launcher_text)
         self.assertIn("QG_AUTOMATION_SYMBOLS", launcher_text)
         self.assertIn("QG_ACCOUNT_MODE", launcher_text)
@@ -324,36 +323,28 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("QG_MT5_PYTHON_BIN", launcher_text)
         self.assertIn("QG_MT5_MAX_BARS", launcher_text)
         self.assertIn("patch_ini_section_key", launcher_text)
-        self.assertIn('patch_ini_section_key "$target_config" "Charts" "MaxBars" "$max_bars"', launcher_text)
-        self.assertIn('prepare_live_config "$MT5_LIVE_CONFIG" "$MT5_START_SYMBOL" "$QG_MT5_MAX_BARS"', launcher_text)
-        self.assertIn('patch_ini_section_key "$MT5_SHADOW_CONFIG" "Charts" "MaxBars" "$QG_MT5_MAX_BARS"', launcher_text)
+        self.assertIn("tools/hydrate_mt5_shadow_config.py", launcher_text)
+        self.assertIn('--target "$MT5_SHADOW_CONFIG"', launcher_text)
+        self.assertIn('--common-ini "$MT5_ROOT/config/common.ini"', launcher_text)
+        self.assertIn('--max-bars "$QG_MT5_MAX_BARS"', launcher_text)
         self.assertIn("terminal.ini", launcher_text)
         self.assertIn("QG_USDJPY_HISTORY_SYNC_ENABLED", launcher_text)
         self.assertIn("QG_USDJPY_HISTORY_MAX_LAG_HOURS", launcher_text)
         self.assertIn("MT5_SHADOW_SCREEN", launcher_text)
-        self.assertIn("MT5_LIVE_SCREEN", launcher_text)
-        self.assertIn("MT5_SECONDARY_SCREEN", launcher_text)
-        self.assertIn('MT5_SECONDARY_ENABLED="${QG_MT5_SECONDARY_ENABLED:-0}"', launcher_text)
-        self.assertIn("QG_MT5_SECONDARY_WINE_PREFIX", launcher_text)
-        self.assertIn("QG_MT5_SECONDARY_LOGIN", launcher_text)
-        self.assertIn("QG_MT5_SECONDARY_SERVER", launcher_text)
-        self.assertIn("QuantGod_MT5_HFM_LiveSecondary_mac.ini", launcher_text)
-        self.assertIn('MT5_SECONDARY_STAGE="${QG_MT5_SECONDARY_STAGE:-}"', launcher_text)
-        self.assertIn('resolve_usd_deployment_stage "USD_PAPER_MIRROR"', launcher_text)
-        self.assertIn('MT5_SECONDARY_DEFAULT_PRESET="QuantGod_MT5_HFM_UsdDeployMicro.set"', launcher_text)
-        self.assertIn('MT5_SECONDARY_DEFAULT_PRESET="QuantGod_MT5_HFM_LiveSecondary.set"', launcher_text)
-        self.assertIn('MT5_SECONDARY_ALLOW_LIVE_TRADING="${QG_MT5_SECONDARY_ALLOW_LIVE_TRADING:-$MT5_SECONDARY_DEFAULT_ALLOW_LIVE}"', launcher_text)
-        self.assertIn("prepare_live_config", launcher_text)
-        self.assertIn('patch_ini_section_key "$MT5_SECONDARY_CONFIG" "Experts" "AllowLiveTrading" "$MT5_SECONDARY_ALLOW_LIVE_TRADING"', launcher_text)
-        self.assertIn('patch_ini_section_key "$MT5_SECONDARY_CONFIG" "StartUp" "ExpertParameters" "$MT5_SECONDARY_PRESET_NAME"', launcher_text)
         self.assertIn("terminal64.exe /portable", launcher_text)
         self.assertIn("QuantGod_MT5_HFM_Shadow_mac.ini", launcher_text)
-        self.assertIn("QuantGod_MT5_HFM_LivePilot_mac.ini", launcher_text)
+        self.assertNotIn("QuantGod_MT5_HFM_LivePilot_mac.ini", launcher_text)
+        self.assertIn(
+            'cp MQL5/Presets/QuantGod_MT5_HFM_Shadow.set "$MT5_PRESETS/QuantGod_MT5_HFM_Shadow.set"',
+            launcher_text,
+        )
+        self.assertNotIn("rsync -a MQL5/Presets/", launcher_text)
         self.assertNotIn("Password=", launcher_text)
-        self.assertIn("AllowLiveTrading=0", launcher_text)
+        hydrator_text = SHADOW_HYDRATOR_PATH.read_text(encoding="utf-8")
+        self.assertIn('("Experts", "AllowLiveTrading", "0")', hydrator_text)
         self.assertTrue(
             launcher_text.rstrip().endswith(
-                'echo "Screens: $BACKEND_API_SCREEN, $FRONTEND_SCREEN, $AGENT_V25_SUPERVISOR_SCREEN, $AGENT_V25_SCREEN, $HISTORY_SYNC_SCREEN, $MT5_LIVE_SCREEN, $MT5_SECONDARY_SCREEN"'
+                'echo "Screens: $BACKEND_API_SCREEN, $FRONTEND_SCREEN, $AGENT_V25_SUPERVISOR_SCREEN, $AGENT_V25_SCREEN, $HISTORY_SYNC_SCREEN, $MT5_SHADOW_SCREEN"'
             )
         )
 
@@ -368,13 +359,14 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("PilotSoftMaxSpreadPips=2.7", text)
         self.assertIn("PilotHardMaxSpreadPips=3.0", text)
 
-    def test_usd_deploy_micro_preset_is_strict_standard_live(self):
+    def test_usd_deploy_micro_legacy_preset_is_readonly_compatibility(self):
         text = USD_DEPLOY_PRESET_PATH.read_text(encoding="utf-8")
-        self.assertIn("DashboardBuild=QuantGod-v3.17-mt5-usd-deploy-micro", text)
-        self.assertIn("ReadOnlyMode=false", text)
-        self.assertIn("EnablePilotAutoTrading=true", text)
+        self.assertIn("DashboardBuild=QuantGod-v3.17-shadow-readonly-compat", text)
+        self.assertIn("ShadowMode=true", text)
+        self.assertIn("ReadOnlyMode=true", text)
+        self.assertIn("EnablePilotAutoTrading=false", text)
         self.assertIn("EnablePilotRsiH1Candidate=true", text)
-        self.assertIn("EnablePilotRsiH1Live=true", text)
+        self.assertIn("EnablePilotRsiH1Live=false", text)
         self.assertIn("PilotLotSize=0.01", text)
         self.assertIn("PilotMaxSpreadPips=2.2", text)
         self.assertIn("PilotSoftMaxSpreadPips=2.2", text)

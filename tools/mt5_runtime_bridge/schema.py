@@ -165,9 +165,6 @@ def build_sample_snapshot(symbol: str = "USDJPYc", *, generated_at: str | None =
     base = 155.12 if "JPY" in clean_symbol.upper() else 1.0912
     if "XAU" in clean_symbol.upper() or "GOLD" in clean_symbol.upper():
         base = 2310.5
-    if "BTC" in clean_symbol.upper():
-        base = 65000.0
-
     def bars(step: float) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for index in range(8):

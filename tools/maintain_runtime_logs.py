@@ -33,8 +33,8 @@ DEFAULT_JSONL_ARCHIVE_MAX_MB = 512
 DEFAULT_JSONL_KEEP_LINES = 2000
 DEFAULT_JSONL_MIN_AGE_SECONDS = 0
 STATUS_FILE_NAME = "QuantGod_RuntimeLogMaintenanceStatus.json"
-ARCHIVED_LOG_RE = re.compile(r"^.+\.\d{8}T\d{4}(?:\d{2})?[A-Z]{0,5}\.log(?:\.gz)?$")
-ARCHIVED_JSONL_RE = re.compile(r"^.+\.\d{8}T\d{4}(?:\d{2})?[A-Z]{0,5}\.jsonl\.gz$")
+ARCHIVED_LOG_RE = re.compile(r"^.+\.\d{8}T\d{4}(?:\d{2})?[A-Z]{0,5}(?:\.\d+)?\.log(?:\.gz)?$")
+ARCHIVED_JSONL_RE = re.compile(r"^.+\.\d{8}T\d{4}(?:\d{2})?[A-Z]{0,5}(?:\.\d+)?\.jsonl\.gz$")
 
 
 def _tokyo_now() -> datetime:

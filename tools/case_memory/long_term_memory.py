@@ -67,7 +67,6 @@ ENTRY_COMPLETENESS_FIELDS = {
         "openInterestChange",
         "newsScore",
         "smartMoneyScore",
-        "predictionMarketScore",
         "kronosScore",
     ),
     "riskPlan": (
@@ -89,7 +88,6 @@ FINE_FACTOR_DEFS = {
     "openInterest": {"category": "factors", "field": "openInterestChange", "adverse": "lt", "threshold": -0.15},
     "news": {"category": "factors", "field": "newsScore", "adverse": "lt", "threshold": -0.15},
     "smartMoney": {"category": "factors", "field": "smartMoneyScore", "adverse": "lt", "threshold": -0.15},
-    "predictionMarket": {"category": "factors", "field": "predictionMarketScore", "adverse": "lt", "threshold": -0.15},
     "kronos": {"category": "factors", "field": "kronosScore", "adverse": "lt", "threshold": -0.15},
     "fundFlow": {"category": "entry", "field": "fundFlowScore", "adverse": "lt", "threshold": -0.15},
     "entryTiming": {"category": "entry", "field": "entryTimingScore", "adverse": "lt", "threshold": 0.45},
@@ -831,7 +829,7 @@ def _data_gap_counts(trades: List[Dict[str, Any]], losses: List[Dict[str, Any]])
         if _score_value(entry.get("professionalScore")) < 0.65:
             counts["LOW_PROFESSIONAL_SCORE"] += 1
         factors = entry.get("factors") if isinstance(entry.get("factors"), dict) else {}
-        for name in ("sentimentScore", "openInterestChange", "newsScore", "smartMoneyScore", "predictionMarketScore", "kronosScore"):
+        for name in ("sentimentScore", "openInterestChange", "newsScore", "smartMoneyScore", "kronosScore"):
             if factors.get(name) in (None, ""):
                 counts[f"MISSING_{name}"] += 1
         for factor, spec in FINE_FACTOR_DEFS.items():
@@ -1086,7 +1084,6 @@ def _bridged_history_entry_context(row: Dict[str, Any]) -> Dict[str, Any]:
             "oiChange": _history_score_or_default(row, 0.0, "openInterestChange", "oiChange", "openInterest"),
             "news": _history_score_or_default(row, 0.0, "newsScore", "news"),
             "smartMoney": _history_score_or_default(row, 0.0, "smartMoneyScore", "smartMoney"),
-            "predictionMarket": _history_score_or_default(row, 0.0, "predictionMarketScore", "predictionMarket"),
             "kronos": _history_score_or_default(row, 0.0, "kronosScore", "kronos"),
             "entryRegime": entry_regime,
             "exitRegime": exit_regime,
@@ -1464,7 +1461,6 @@ def _factor_snapshot(row: Dict[str, Any]) -> Dict[str, Any]:
         "openInterestChange": _score(row, "openInterestChange", "oiChange", "openInterest"),
         "newsScore": _score(row, "newsScore", "news"),
         "smartMoneyScore": _score(row, "smartMoneyScore", "smartMoney"),
-        "predictionMarketScore": _score(row, "predictionMarketScore", "predictionMarket"),
         "kronosScore": _score(row, "kronosScore", "kronos"),
     }
 

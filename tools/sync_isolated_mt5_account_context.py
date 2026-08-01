@@ -21,8 +21,8 @@ from typing import Any
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_ROOT = Path.home() / "Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/Program Files/MetaTrader 5"
 DEFAULT_TESTER_ROOT = DEFAULT_REPO_ROOT / "runtime" / "HFM_MT5_Tester_Isolated"
-DEFAULT_LOGIN = "186054398"
-DEFAULT_SERVER = "HFMarketsGlobal-Live12"
+DEFAULT_LOGIN = "90000001"
+DEFAULT_SERVER = "SyntheticBroker-Demo"
 
 
 def parse_args() -> argparse.Namespace:

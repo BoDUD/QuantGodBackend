@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -19,6 +22,9 @@ FORBIDDEN_KEYS = {
     "telegramcommandexecutionallowed",
     "webhookreceiverallowed",
     "brokerexecutionallowed",
+    "executionlaneexists",
+    "liveexpansionallowed",
+    "unattendedliveexpansionallowed",
     "writesmt5orderrequest",
     "writesmt5preset",
 }
@@ -48,9 +54,14 @@ def ledger_path(runtime_dir: str | Path) -> Path:
 
 def default_safety() -> Dict[str, Any]:
     return {
+        "mode": "SHADOW_READONLY",
         "localOnly": True,
         "automationChainOnly": True,
         "advisoryOnly": True,
+        "executionLaneExists": False,
+        "liveExpansionAllowed": False,
+        "unattendedLiveExpansionAllowed": False,
+        "operatorApprovalRequired": True,
         "telegramPushOnly": True,
         "doesNotPlaceOrders": True,
         "doesNotClosePositions": True,
@@ -69,6 +80,21 @@ def default_safety() -> Dict[str, Any]:
         "brokerExecutionAllowed": False,
         "walletIntegrationAllowed": False,
     }
+
+
+def atomic_write_json(target: str | Path, payload: Dict[str, Any]) -> None:
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def walk_payload(value: Any, path: str = "") -> Iterable[tuple[str, Any]]:
@@ -97,7 +123,19 @@ def validate_safe_payload(payload: Dict[str, Any]) -> None:
 def build_empty_status(runtime_dir: str | Path, symbols: list[str]) -> Dict[str, Any]:
     payload = {
         "schema": SCHEMA,
+        "cycleId": None,
+        "runStatus": "NOT_STARTED",
+        "startedAt": None,
+        "completedAt": None,
         "generatedAt": now_iso(),
+        "heartbeatAt": None,
+        "lastSuccessAt": None,
+        "nextDueAt": None,
+        "retryCount": 0,
+        "currentStep": "not_started",
+        "stepCount": 0,
+        "requiredStepCount": 0,
+        "requiredFailedCount": 0,
         "runtimeDir": str(runtime_dir),
         "symbols": symbols,
         "state": "NOT_RUN",

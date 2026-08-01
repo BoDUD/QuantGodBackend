@@ -281,7 +281,6 @@ def _legacy_shadow_proxy_context(row: dict[str, Any], event: dict[str, Any]) -> 
             "oiChange": 0.0,
             "news": 0.50,
             "smartMoney": 0.50,
-            "predictionMarket": 0.50,
             "kronos": 0.50,
         },
         "estimates": {
@@ -344,14 +343,12 @@ def _entry_context(row: dict[str, Any], event: dict[str, Any], source: str) -> d
             "resonanceCount": _first_non_empty(scores.get("resonanceCount"), _float(row, "resonanceCount", "resonance"), proxy_scores.get("resonanceCount")),
         },
         "factors": {
-            **factors,
             "atrPips": _first_non_empty(factors.get("atrPips"), _float(row, "atr", "ATR", "atr14", "atrPips"), proxy_factors.get("atrPips")),
             "trend": _first_non_empty(factors.get("trend"), _float(row, "trendScore", "trend"), proxy_factors.get("trend")),
             "sentiment": _first_non_empty(factors.get("sentiment"), _float(row, "sentimentScore", "sentiment"), proxy_factors.get("sentiment")),
             "oiChange": _first_non_empty(factors.get("oiChange"), _float(row, "openInterestChange", "oiChange", "openInterest"), proxy_factors.get("oiChange")),
             "news": _first_non_empty(factors.get("news"), _float(row, "newsScore", "news"), proxy_factors.get("news")),
             "smartMoney": _first_non_empty(factors.get("smartMoney"), _float(row, "smartMoneyScore", "smartMoney"), proxy_factors.get("smartMoney")),
-            "predictionMarket": _first_non_empty(factors.get("predictionMarket"), _float(row, "predictionMarketScore", "predictionMarket"), proxy_factors.get("predictionMarket")),
             "kronos": _first_non_empty(factors.get("kronos"), _float(row, "kronosScore", "kronos"), proxy_factors.get("kronos")),
         },
         "estimates": {
@@ -425,7 +422,7 @@ def _complete(row: dict[str, Any]) -> bool:
 def _entry_context_categories() -> dict[str, tuple[str, ...]]:
     return {
         "scores": ("totalScore", "dataCoverage", "proScore", "marketQuality", "entryTiming", "fundFlow", "executionRisk", "resonanceCount"),
-        "factors": ("atrPips", "trend", "sentiment", "oiChange", "news", "smartMoney", "predictionMarket", "kronos"),
+        "factors": ("atrPips", "trend", "sentiment", "oiChange", "news", "smartMoney", "kronos"),
         "estimates": ("ev", "winProbability", "riskReward", "positionScale"),
         "riskPlan": ("stopLossR", "targetR", "firstTakeProfitR", "secondTakeProfitR", "trailStartR", "givebackPct", "timeoutMinutes", "stopLossPips", "takeProfitPips"),
     }

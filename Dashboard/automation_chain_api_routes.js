@@ -23,8 +23,103 @@ function isAutomationChainPath(url) {
 
 function readJsonIfExists(filePath) {
   if (!fs.existsSync(filePath)) return null;
-  const text = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
-  return JSON.parse(text);
+  try {
+    const text = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+    return JSON.parse(text);
+  } catch (_) {
+    return null;
+  }
+}
+
+function automationStatus(latest, runtimeDir, symbols) {
+  if (!fs.existsSync(latest)) {
+    return {
+      schema: 'quantgod.automation_chain.v1',
+      cycleId: null,
+      runStatus: 'NOT_STARTED',
+      schedulerState: 'NOT_STARTED',
+      state: 'NOT_RUN',
+      stateZh: '尚未运行',
+      startedAt: null,
+      completedAt: null,
+      heartbeatAt: null,
+      lastSuccessAt: null,
+      nextDueAt: null,
+      retryCount: 0,
+      currentStep: 'not_started',
+      stepCount: 0,
+      runtimeDir,
+      symbols: symbols.split(',').map((x) => x.trim()).filter(Boolean),
+      freshness: { status: 'MISSING', ageSeconds: null, maxAgeSeconds: 900 },
+      missingEvidence: ['尚未生成自动化链路运行报告'],
+      blockedReasons: ['后台自动化调度尚未产生首个周期'],
+      nextAction: '检查 local-shadow automation supervisor 与周期日志',
+      safety: {
+        mode: 'SHADOW_READONLY',
+        advisoryOnly: true,
+        executionLaneExists: false,
+        orderSendAllowed: false,
+        liveExpansionAllowed: false,
+        unattendedLiveExpansionAllowed: false,
+        operatorApprovalRequired: true,
+        telegramCommandsAllowed: false,
+      },
+    };
+  }
+  const payload = readJsonIfExists(latest);
+  const stat = fs.statSync(latest);
+  if (!payload) {
+    return {
+      schema: 'quantgod.automation_chain.v1',
+      cycleId: null,
+      runStatus: 'FAILED',
+      schedulerState: 'CORRUPT',
+      state: 'FAILED',
+      stateZh: '自动化状态文件损坏',
+      runtimeDir,
+      symbols: symbols.split(',').map((x) => x.trim()).filter(Boolean),
+      freshness: { status: 'INVALID', ageSeconds: null, maxAgeSeconds: 900 },
+      missingEvidence: ['自动化链路状态无法解析'],
+      blockedReasons: ['AUTOMATION_STATUS_PARSE_FAILED'],
+      safety: {
+        mode: 'SHADOW_READONLY',
+        advisoryOnly: true,
+        executionLaneExists: false,
+        orderSendAllowed: false,
+        liveExpansionAllowed: false,
+        unattendedLiveExpansionAllowed: false,
+        operatorApprovalRequired: true,
+      },
+    };
+  }
+  const observedMs = Date.parse(payload?.heartbeatAt || payload?.completedAt || payload?.generatedAt || '') || stat.mtimeMs;
+  const ageSeconds = Math.max(0, (Date.now() - Math.min(observedMs, stat.mtimeMs)) / 1000);
+  const maxAgeSeconds = Number.parseInt(process.env.QG_AUTOMATION_STATUS_FRESH_SECONDS || '900', 10) || 900;
+  const fresh = ageSeconds <= maxAgeSeconds;
+  const blockedReasons = Array.isArray(payload?.blockedReasons) ? [...payload.blockedReasons] : [];
+  if (!fresh && !blockedReasons.includes('AUTOMATION_HEARTBEAT_STALE')) {
+    blockedReasons.unshift('AUTOMATION_HEARTBEAT_STALE');
+  }
+  return {
+    ...payload,
+    schedulerState: fresh ? (payload?.runStatus || payload?.state || 'UNKNOWN') : 'STALE',
+    freshness: {
+      status: fresh ? 'FRESH' : 'STALE',
+      ageSeconds,
+      maxAgeSeconds,
+      observedAt: new Date(observedMs).toISOString(),
+    },
+    blockedReasons,
+    safety: {
+      ...(payload?.safety || {}),
+      mode: 'SHADOW_READONLY',
+      executionLaneExists: false,
+      orderSendAllowed: false,
+      liveExpansionAllowed: false,
+      unattendedLiveExpansionAllowed: false,
+      operatorApprovalRequired: true,
+    },
+  };
 }
 
 function parseQuery(url) {
@@ -97,16 +192,7 @@ async function handle(req, res, ctx) {
 
   if (req.method === 'GET' && (pathname === '/api/automation-chain' || pathname === '/api/automation-chain/status')) {
     const latest = path.join(runtimeDir, 'automation', 'QuantGod_AutomationChainLatest.json');
-    const payload = readJsonIfExists(latest) || {
-      schema: 'quantgod.automation_chain.v1',
-      state: 'NOT_RUN',
-      stateZh: '尚未运行',
-      runtimeDir,
-      symbols: symbols.split(',').map((x) => x.trim()).filter(Boolean),
-      missingEvidence: ['尚未生成自动化链路运行报告'],
-      blockedReasons: ['请先运行 tools/run_automation_chain.py once 或 POST /api/automation-chain/run'],
-      safety: { advisoryOnly: true, orderSendAllowed: false, telegramCommandsAllowed: false },
-    };
+    const payload = automationStatus(latest, runtimeDir, symbols);
     sendJson(res, 200, { ok: true, endpoint: pathname, payload });
     return;
   }
@@ -142,4 +228,4 @@ async function handle(req, res, ctx) {
   sendJson(res, 404, { ok: false, endpoint: pathname, error: 'automation_chain_route_not_found' });
 }
 
-module.exports = { isAutomationChainPath, handle, sendError };
+module.exports = { automationStatus, isAutomationChainPath, handle, sendError };

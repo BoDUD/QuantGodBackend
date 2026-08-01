@@ -62,8 +62,9 @@ def _build_ea_runtime_patch_text(payload: Dict[str, Any]) -> str:
         "patchWritable": bool(payload.get("patchWritable")),
         "autoAppliedByAgent": bool(payload.get("autoAppliedByAgent")),
         "requiresAutonomousGovernance": bool(payload.get("requiresAutonomousGovernance")),
-        "operatorApprovalRequired": bool(payload.get("operatorApprovalRequired", False)),
+        "operatorApprovalRequired": bool(payload.get("operatorApprovalRequired", True)),
         "unattendedLiveExpansionAllowed": bool(payload.get("unattendedLiveExpansionAllowed")),
+        "liveExpansionAllowed": bool(payload.get("liveExpansionAllowed")),
         "liveMutationAllowed": bool(payload.get("liveMutationAllowed")),
         "orderSendAllowed": bool(safety.get("orderSendAllowed")),
         "livePresetMutationAllowed": bool(safety.get("livePresetMutationAllowed")),
@@ -86,13 +87,13 @@ def build_config_patch(runtime_dir: Path, *, write: bool = False) -> Dict[str, A
     decision = build_promotion_decision(runtime_dir, write=write)
     stage = decision.get("stage", STAGE_REJECTED)
     cent = cent_account_config()
-    allowed = stage in {STAGE_SHADOW_ONLY, STAGE_TESTER_ONLY, STAGE_PAPER_LIVE_SIM, STAGE_MICRO_LIVE, STAGE_LIVE_LIMITED}
+    allowed = stage in {STAGE_SHADOW_ONLY, STAGE_TESTER_ONLY, STAGE_PAPER_LIVE_SIM}
     changes: Dict[str, Any] = {}
     for item in decision.get("candidates") or []:
         if item.get("autonomousStage") in {STAGE_TESTER_ONLY, STAGE_PAPER_LIVE_SIM, STAGE_MICRO_LIVE, STAGE_LIVE_LIMITED}:
             changes.update(_changes_for_variant(str(item.get("variant") or "")))
     patch_writable = bool(allowed and changes and stage != ROLLBACK_PAUSED)
-    auto_applied = bool(patch_writable and stage in {STAGE_TESTER_ONLY, STAGE_PAPER_LIVE_SIM, STAGE_MICRO_LIVE, STAGE_LIVE_LIMITED})
+    auto_applied = False
     generated_at_iso = utc_now_iso()
     payload = {
         "ok": True,
@@ -106,14 +107,15 @@ def build_config_patch(runtime_dir: Path, *, write: bool = False) -> Dict[str, A
         "executionStage": stage,
         "stageZh": decision.get("stageZh"),
         "patchWritable": patch_writable,
-        "operatorApprovalRequired": False,
-        "unattendedLiveExpansionAllowed": True,
-        "liveScopeExpansionMode": "autonomous_governance_stage_gated",
+        "operatorApprovalRequired": True,
+        "unattendedLiveExpansionAllowed": False,
+        "liveExpansionAllowed": False,
+        "liveScopeExpansionMode": "operator_reviewed_future_lane",
         "liveMutationAllowed": False,
         "requiresAutonomousGovernance": True,
         "completedByAgent": True,
         "autoAppliedByAgent": auto_applied,
-        "autoApplyAllowed": "stage_gated",
+        "autoApplyAllowed": "shadow_only",
         "centAccount": cent,
         "changes": changes if allowed else {},
         "limits": {

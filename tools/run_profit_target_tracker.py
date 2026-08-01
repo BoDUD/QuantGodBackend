@@ -22,7 +22,7 @@ def emit(payload: dict) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="QuantGod read-only profit target tracker")
     parser.add_argument("--runtime-dir", default="runtime")
-    parser.add_argument("--hfm-runtime-dir", default="")
+    parser.add_argument("--mt5-runtime-dir", default="", help="optional secondary MT5 forex runtime")
     parser.add_argument("--report-runtime-dir", default="")
     parser.add_argument("--target-usd", type=float, default=50.0)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     runtime_dir = Path(args.runtime_dir).expanduser().resolve()
-    hfm_runtime_dir = Path(args.hfm_runtime_dir).expanduser().resolve() if args.hfm_runtime_dir else None
+    secondary_runtime_dir = Path(args.mt5_runtime_dir).expanduser().resolve() if args.mt5_runtime_dir else None
     report_runtime_dir = Path(args.report_runtime_dir).expanduser().resolve() if args.report_runtime_dir else None
     if args.command == "status":
         lookup_dir = report_runtime_dir or runtime_dir
@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "build":
         return emit(build_profit_target_tracker(
             runtime_dir,
-            hfm_runtime_dir=hfm_runtime_dir,
+            secondary_runtime_dir=secondary_runtime_dir,
             report_runtime_dir=report_runtime_dir,
             target_usd=args.target_usd,
             write=args.write,

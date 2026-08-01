@@ -127,7 +127,7 @@ def _risk_plan(top_policy: dict[str, Any]) -> dict[str, Any]:
 def _availability(context: dict[str, Any]) -> dict[str, Any]:
     groups = {
         "scores": ("totalScore", "dataCoverage", "proScore", "marketQuality", "entryTiming", "fundFlow", "executionRisk", "resonanceCount"),
-        "factors": ("atrPips", "trend", "sentiment", "oiChange", "news", "smartMoney", "predictionMarket", "kronos"),
+        "factors": ("atrPips", "trend", "sentiment", "oiChange", "news", "smartMoney", "kronos"),
         "estimates": ("ev", "winProbability", "riskReward", "positionScale"),
         "riskPlan": ("stopLossR", "targetR", "firstTakeProfitR", "secondTakeProfitR", "trailStartR", "givebackPct", "timeoutMinutes", "stopLossPips", "takeProfitPips"),
     }
@@ -210,7 +210,6 @@ def build_entry_context_feedback_event(
             "oiChange": None,
             "news": _news_score(news_gate if isinstance(news_gate, dict) else {}),
             "smartMoney": None,
-            "predictionMarket": None,
             "kronos": None,
         },
         "estimates": {

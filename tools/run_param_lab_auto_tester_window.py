@@ -106,8 +106,8 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Forwarded to run_param_lab.py; 0 keeps the runner's manual/full-run default.",
     )
-    parser.add_argument("--login", default="186054398")
-    parser.add_argument("--server", default="HFMarketsGlobal-Live12")
+    parser.add_argument("--login", default="90000001")
+    parser.add_argument("--server", default="SyntheticBroker-Demo")
     parser.add_argument("--now-iso", default="", help="Testing hook for guard evaluation.")
     parser.add_argument("--run-terminal", action="store_true", help="Attempt a guarded Strategy Tester run.")
     parser.add_argument(

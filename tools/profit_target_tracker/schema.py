@@ -24,18 +24,13 @@ SAFETY: dict[str, Any] = {
     "modifyAllowed": False,
     "mt5OrderSendAllowed": False,
     "eaOrderSendAllowed": False,
-    "hfmCryptoExecutionAllowed": False,
     "copyTradeExecutionAllowed": False,
-    "mossExecutionAllowed": False,
-    "hyperliquidExecutionAllowed": False,
-    "walletAuthorizationAllowed": False,
     "livePresetMutationAllowed": False,
     "telegramCommandExecutionAllowed": False,
     "webhookReceiverAllowed": False,
     "credentialStorageAllowed": False,
     "writesMt5Preset": False,
     "writesMt5OrderRequest": False,
-    "externalMarketRemoved": True,
 }
 
 

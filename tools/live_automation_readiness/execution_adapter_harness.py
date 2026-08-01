@@ -278,9 +278,6 @@ def build_execution_adapter_harness(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -294,9 +291,6 @@ def build_execution_adapter_harness(
         "operator_approval_json": operator_approval_json,
         "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots or [],
     }
     adapter = {**common, "request_json": request_json}
@@ -305,13 +299,13 @@ def build_execution_adapter_harness(
     sandbox = {} if should_rebuild else _read_existing_json(adapter_sandbox_review_path(runtime_dir))
     validator = {} if should_rebuild else _read_existing_json(adapter_contract_validator_path(runtime_dir))
     if not orchestrator:
-        orchestrator = build_sim_to_live_orchestrator(runtime_dir, **adapter) if should_rebuild or operator_approval_json or moss_backtest_json or hfm_simulation_profile_json or hfm_contract_spec_json or extra_bases_roots else read_sim_to_live_orchestrator(runtime_dir)
+        orchestrator = build_sim_to_live_orchestrator(runtime_dir, **adapter) if should_rebuild or operator_approval_json or extra_bases_roots else read_sim_to_live_orchestrator(runtime_dir)
     if not contract:
-        contract = build_mt5_order_request_contract(runtime_dir, **common) if should_rebuild or operator_approval_json or moss_backtest_json or hfm_simulation_profile_json or hfm_contract_spec_json or extra_bases_roots else read_mt5_order_request_contract(runtime_dir)
+        contract = build_mt5_order_request_contract(runtime_dir, **common) if should_rebuild or operator_approval_json or extra_bases_roots else read_mt5_order_request_contract(runtime_dir)
     if not sandbox:
-        sandbox = build_adapter_sandbox_review_bundle(runtime_dir, **common) if should_rebuild or operator_approval_json or moss_backtest_json or hfm_simulation_profile_json or hfm_contract_spec_json or extra_bases_roots else read_adapter_sandbox_review_bundle(runtime_dir)
+        sandbox = build_adapter_sandbox_review_bundle(runtime_dir, **common) if should_rebuild or operator_approval_json or extra_bases_roots else read_adapter_sandbox_review_bundle(runtime_dir)
     if not validator:
-        validator = build_adapter_contract_validator(runtime_dir, **adapter) if should_rebuild or operator_approval_json or moss_backtest_json or hfm_simulation_profile_json or hfm_contract_spec_json or extra_bases_roots else read_adapter_contract_validator(runtime_dir)
+        validator = build_adapter_contract_validator(runtime_dir, **adapter) if should_rebuild or operator_approval_json or extra_bases_roots else read_adapter_contract_validator(runtime_dir)
     requests, request_source, load_blockers = _load_request_rows(request_json, sandbox)
     requests = _align_sandbox_requests_with_contract(requests, request_source=request_source, contract=contract)
     validator_requests = _validated_requests_from_validator(validator)

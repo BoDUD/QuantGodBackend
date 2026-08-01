@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 from collections import namedtuple
+from datetime import datetime
 from pathlib import Path
 
 
@@ -170,6 +171,58 @@ class FakeMt5:
 
 
 class Mt5ReadOnlyBridgeTests(unittest.TestCase):
+    def test_connection_state_keeps_authorization_connectivity_and_freshness_independent(self):
+        legacy_terminal = bridge.ea_terminal_payload({"runtime": {"connected": True}}, None)
+        self.assertFalse(legacy_terminal["connected"])
+
+        account = {"login": 123456, "server": "Fake-Live"}
+        authorized_but_disconnected = bridge.build_connection_state(
+            runtime={"terminalConnected": False, "brokerConnected": False, "accountAuthorized": True},
+            terminal={"connected": False},
+            account=account,
+            snapshot_fresh=True,
+        )
+        self.assertTrue(authorized_but_disconnected["accountAuthorized"])
+        self.assertFalse(authorized_but_disconnected["terminalConnected"])
+        self.assertFalse(authorized_but_disconnected["brokerConnected"])
+        self.assertFalse(authorized_but_disconnected["operationalConnected"])
+        self.assertTrue(authorized_but_disconnected["snapshotFresh"])
+        self.assertFalse(authorized_but_disconnected["readReady"])
+
+        connected_but_stale = bridge.build_connection_state(
+            runtime={"terminalConnected": True, "brokerConnected": True, "accountAuthorized": True},
+            terminal={"connected": True},
+            account=account,
+            snapshot_fresh=False,
+        )
+        self.assertTrue(connected_but_stale["operationalConnected"])
+        self.assertFalse(connected_but_stale["snapshotFresh"])
+        self.assertFalse(connected_but_stale["readReady"])
+
+    def test_live_bridge_does_not_treat_authorized_account_as_connected_terminal(self):
+        fake = FakeMt5()
+        fake.terminal_info = lambda: TerminalInfo(
+            False,
+            True,
+            False,
+            "Fake HFM MT5",
+            "Fake Broker",
+            "C:\\MT5",
+            "C:\\MT5",
+            "C:\\Common",
+            65001,
+            100000,
+        )
+
+        payload = bridge.status_payload(fake)
+
+        self.assertEqual(payload["status"], "INITIALIZED")
+        self.assertTrue(payload["connection"]["accountAuthorized"])
+        self.assertFalse(payload["connection"]["terminalConnected"])
+        self.assertFalse(payload["connection"]["brokerConnected"])
+        self.assertFalse(payload["connection"]["operationalConnected"])
+        self.assertTrue(payload["snapshotFresh"])
+
     def test_safety_metadata_disallows_mutation(self):
         self.assertTrue(bridge.SAFETY["readOnly"])
         self.assertFalse(bridge.SAFETY["orderSendAllowed"])
@@ -207,16 +260,48 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
             "13094 /Library/Framewo /Library/Frameworks/Python.framework/Versions/3.10/"
             "Resources/Python.app/Contents/MacOS/Python tools/run_mac_agent_v25_maintenance.py "
             "--runtime-dir /Users/bowen/Desktop/Quard/QuantGodBackend/runtime "
-            "--hfm-crypto-runtime-dir /Users/bowen/Library/Application Support/"
+            "--secondary-runtime-dir /Users/bowen/Library/Application Support/"
             "net.metaquotes.wine.metatrader5-live16/drive_c/Program Files/MetaTrader 5/MQL5/Files"
         )
         live_terminal_row = (
             "17202 wine64-preloade /fake/wine64-preloader terminal64.exe /portable "
             "/config:C:\\qg\\QuantGod_MT5_HFM_LivePilot_mac.ini"
         )
+        mac_app_terminal_row = (
+            "59583 /Users/bowen/App /Users/bowen/Applications/MetaTrader 5.app/"
+            "Contents/SharedSupport/wine/bin/wine64-preloader "
+            "C:\\Program Files\\MetaTrader 5\\terminal64.exe /portable "
+            "/config:C:\\qg\\QuantGod_MT5_HFM_Shadow_mac.ini"
+        )
+        wine_helper_row = (
+            "59525 /Users/bowen/App /Users/bowen/Applications/MetaTrader 5.app/"
+            "Contents/SharedSupport/wine/bin/wine64-preloader C:\\windows\\system32\\services.exe"
+        )
+        screen_wrapper_row = (
+            "64807 SCREEN SCREEN -dmS quantgod-mt5-shadow-secondary env "
+            "WINEPREFIX=/tmp/mt5 /fake/wine64 terminal64.exe /portable"
+        )
+        login_wrapper_row = (
+            "64808 login login -pflq operator /usr/bin/env WINEPREFIX=/tmp/mt5 "
+            "/fake/wine64 terminal64.exe /portable"
+        )
 
         self.assertFalse(bridge.is_mt5_host_process_row(maintenance_row))
         self.assertTrue(bridge.is_mt5_host_process_row(live_terminal_row))
+        self.assertTrue(bridge.is_mt5_host_process_row(mac_app_terminal_row))
+        self.assertFalse(bridge.is_mt5_host_process_row(wine_helper_row))
+        self.assertFalse(bridge.is_mt5_host_process_row(screen_wrapper_row))
+        self.assertFalse(bridge.is_mt5_host_process_row(login_wrapper_row))
+
+    def test_mt5_process_cwd_matches_only_its_snapshot_instance(self):
+        primary_root = Path("/Users/operator/Library/Application Support/net.metaquotes.wine.metatrader5")
+        secondary_root = Path("/Users/operator/Library/Application Support/net.metaquotes.wine.metatrader5-live16")
+        primary_terminal = primary_root / "drive_c/Program Files/MetaTrader 5"
+        secondary_terminal = secondary_root / "drive_c/Program Files/MetaTrader 5"
+        secondary_dashboard = secondary_terminal / "MQL5/Files/QuantGod_Dashboard.json"
+
+        self.assertTrue(bridge.mt5_process_cwd_matches_snapshot(str(secondary_terminal), secondary_dashboard))
+        self.assertFalse(bridge.mt5_process_cwd_matches_snapshot(str(primary_terminal), secondary_dashboard))
 
     def test_snapshot_contract_with_fake_mt5(self):
         fake = FakeMt5()
@@ -264,9 +349,9 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         dashboard = {
             "watchlist": "USDJPYc",
             "account": {
-                "number": 186054398,
+                "number": 90000001,
                 "name": "Read Only",
-                "server": "HFMarketsGlobal-Live12",
+                "server": "SyntheticBroker-Demo",
                 "currency": "USC",
                 "balance": 10003.02,
                 "equity": 10003.02,
@@ -324,7 +409,7 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["mode"], "MT5_READONLY_BRIDGE_V1_EA_SNAPSHOT_FALLBACK")
         self.assertEqual(payload["status"], "EA_SNAPSHOT")
-        self.assertEqual(payload["account"]["login"], 186054398)
+        self.assertEqual(payload["account"]["login"], 90000001)
         self.assertEqual(payload["positions"]["count"], 1)
         self.assertEqual(payload["positions"]["items"][0]["volume"], 0.01)
         self.assertTrue(payload["quote"]["ok"])
@@ -335,7 +420,7 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
     def test_ea_snapshot_fallback_keeps_manual_non_focus_positions_without_fake_price(self):
         dashboard = {
             "watchlist": "USDJPYc",
-            "account": {"number": 186054398, "server": "HFMarketsGlobal-Live12", "currency": "USC"},
+            "account": {"number": 90000001, "server": "SyntheticBroker-Demo", "currency": "USC"},
             "runtime": {"terminalConnected": True},
             "market": {"symbol": "USDJPYc", "bid": 158.908, "ask": 158.911},
             "symbols": [{"symbol": "USDJPYc", "bid": 158.908, "ask": 158.911}],
@@ -379,7 +464,7 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
     def test_ea_snapshot_fallback_merges_standalone_usdjpy_rsi_diagnostics(self):
         dashboard = {
             "watchlist": "USDJPYc",
-            "account": {"number": 186054398, "server": "HFMarketsGlobal-Live12", "currency": "USC"},
+            "account": {"number": 90000001, "server": "SyntheticBroker-Demo", "currency": "USC"},
             "runtime": {"terminalConnected": True, "terminalTradeAllowed": True, "programTradeAllowed": True},
             "market": {"symbol": "USDJPYc", "bid": 156.24, "ask": 156.25, "tradeMode": "FULL"},
         }
@@ -481,15 +566,88 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot["orders"]["items"], [])
         self.assertEqual(snapshot["warning"], "ea_snapshot_stale_positions_and_orders_suppressed")
 
+    def test_touched_old_dashboard_remains_stale_from_embedded_writer_time(self):
+        old_runtime = os.environ.get("QG_RUNTIME_DIR")
+        old_max_age = os.environ.get("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS")
+        old_candidates = bridge.runtime_dir_candidates
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime = Path(tmp_dir)
+            dashboard_path = self.write_dashboard_with_trade_state(runtime, time.time())
+            dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
+            dashboard["timestamp"] = datetime.fromtimestamp(time.time() - 600).strftime("%Y.%m.%d %H:%M:%S")
+            dashboard_path.write_text(json.dumps(dashboard), encoding="utf-8")
+            os.utime(dashboard_path, None)
+            os.environ["QG_RUNTIME_DIR"] = tmp_dir
+            os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = "60"
+            bridge.runtime_dir_candidates = lambda: [runtime]
+            try:
+                snapshot = bridge.build_ea_snapshot_fallback(self.fallback_args("snapshot"))
+            finally:
+                bridge.runtime_dir_candidates = old_candidates
+                if old_runtime is None:
+                    os.environ.pop("QG_RUNTIME_DIR", None)
+                else:
+                    os.environ["QG_RUNTIME_DIR"] = old_runtime
+                if old_max_age is None:
+                    os.environ.pop("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS", None)
+                else:
+                    os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = old_max_age
+
+        self.assertEqual(snapshot["status"], "STALE_EA_SNAPSHOT")
+        self.assertFalse(snapshot["snapshotFresh"])
+        self.assertEqual(snapshot["source"]["freshnessBasis"], "oldest_writer_evidence")
+        self.assertEqual(snapshot["source"]["oldestEvidenceSource"], "dashboard_timestamp")
+        self.assertEqual(snapshot["positions"]["items"], [])
+
+    def test_old_timer_heartbeat_blocks_fresh_dashboard_mtime(self):
+        old_runtime = os.environ.get("QG_RUNTIME_DIR")
+        old_max_age = os.environ.get("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS")
+        old_candidates = bridge.runtime_dir_candidates
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime = Path(tmp_dir)
+            dashboard_path = self.write_dashboard_with_trade_state(runtime, time.time())
+            dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
+            dashboard["timestamp"] = datetime.now().strftime("%Y.%m.%d %H:%M:%S")
+            dashboard_path.write_text(json.dumps(dashboard), encoding="utf-8")
+            heartbeat_path = runtime / "QuantGod_MT5_TimerHeartbeat.txt"
+            heartbeat_path.write_text(
+                f"localTime={datetime.fromtimestamp(time.time() - 600).strftime('%Y.%m.%d %H:%M:%S')}\n",
+                encoding="utf-8",
+            )
+            os.utime(dashboard_path, None)
+            os.utime(heartbeat_path, None)
+            os.environ["QG_RUNTIME_DIR"] = tmp_dir
+            os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = "60"
+            bridge.runtime_dir_candidates = lambda: [runtime]
+            try:
+                snapshot = bridge.build_ea_snapshot_fallback(self.fallback_args("snapshot"))
+            finally:
+                bridge.runtime_dir_candidates = old_candidates
+                if old_runtime is None:
+                    os.environ.pop("QG_RUNTIME_DIR", None)
+                else:
+                    os.environ["QG_RUNTIME_DIR"] = old_runtime
+                if old_max_age is None:
+                    os.environ.pop("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS", None)
+                else:
+                    os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = old_max_age
+
+        self.assertEqual(snapshot["status"], "STALE_EA_SNAPSHOT")
+        self.assertFalse(snapshot["snapshotFresh"])
+        self.assertEqual(snapshot["source"]["oldestEvidenceSource"], "heartbeat_local_time")
+        self.assertIn("heartbeat_local_time", snapshot["source"]["evidenceSources"])
+
     def test_stale_ea_snapshot_reports_missing_terminal_process(self):
         old_runtime = os.environ.get("QG_RUNTIME_DIR")
         old_max_age = os.environ.get("QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS")
         old_detector = bridge.detect_mt5_host_process
+        old_candidates = bridge.runtime_dir_candidates
         with tempfile.TemporaryDirectory() as tmp_dir:
             runtime = Path(tmp_dir)
             self.write_dashboard_with_trade_state(runtime, time.time() - 600)
             os.environ["QG_RUNTIME_DIR"] = tmp_dir
             os.environ["QG_MT5_EA_SNAPSHOT_MAX_AGE_SECONDS"] = "60"
+            bridge.runtime_dir_candidates = lambda: [runtime]
             bridge.detect_mt5_host_process = lambda file_path: {
                 "status": "MISSING",
                 "terminalProcessDetected": False,
@@ -501,6 +659,7 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
                 snapshot = bridge.build_ea_snapshot_fallback(self.fallback_args("snapshot"))
             finally:
                 bridge.detect_mt5_host_process = old_detector
+                bridge.runtime_dir_candidates = old_candidates
                 if old_runtime is None:
                     os.environ.pop("QG_RUNTIME_DIR", None)
                 else:

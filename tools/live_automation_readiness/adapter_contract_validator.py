@@ -232,27 +232,18 @@ def build_adapter_contract_validator(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     should_rebuild = bool(
         refresh_sources
         or operator_approval_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     kwargs = {
         "operator_approval_json": operator_approval_json,
         "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots or [],
     }
     contract = build_mt5_order_request_contract(runtime_dir, **kwargs) if should_rebuild else read_mt5_order_request_contract(runtime_dir)

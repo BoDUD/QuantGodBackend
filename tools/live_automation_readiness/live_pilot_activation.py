@@ -205,7 +205,7 @@ def _live_pilot_file_evidence(runtime_dir: Path) -> dict[str, Any]:
     if deployed_values.get("EnableEARequestReaderReviewHarness") == "false":
         blockers.append(_blocker(
             "DEPLOYED_PRESET_EA_REQUEST_READER_OFF",
-            "当前部署 preset 未开启 EA request reader review harness，BTC/HFM crypto 不能消费 request。",
+            "当前部署 preset 未开启 EA request reader review harness，外汇 request review 路径保持关闭。",
             "false",
         ))
     return {
@@ -350,7 +350,7 @@ def _review_checklist(
             "no_broker_calls",
             "当前链路没有 broker 调用",
             harness.get("brokerCallsMade") is False and harness.get("adapterExecutionAllowed") is False,
-            "本阶段不允许 MT5、HFM、Moss 或 Hyperliquid 真实执行调用。",
+            "本阶段不允许 MT5 或 broker 真实执行调用。",
         ),
     ]
 
@@ -361,7 +361,7 @@ def _deployment_runbook() -> list[dict[str, Any]]:
             "phase": "evidence_lock",
             "labelZh": "锁定证据版本",
             "requiredBeforeLivePilot": True,
-            "actionZh": "把 filled HFM contract specs、simulation profile、operator approval、dashboard preflight hash 固定到同一个 review packet。",
+            "actionZh": "把 MT5 symbol specs、simulation profile、operator approval、dashboard preflight hash 固定到同一个 review packet。",
         },
         {
             "phase": "adapter_code_review",
@@ -408,116 +408,48 @@ def _runtime_proof(field: str, current: Any, expected: Any, reason_zh: str) -> d
     }
 
 
+
 def _review_only_preset_candidates(
     *,
+    file_evidence: dict[str, Any],
     preflight: dict[str, Any],
     validator: dict[str, Any],
     harness: dict[str, Any],
 ) -> list[dict[str, Any]]:
     dashboard = _safe_dict(preflight.get("dashboardSnapshot"))
-    trade_blocker = _safe_dict(dashboard.get("permissionLayers")).get("tradePermissionBlocker", "")
-    common_proof = [
-        _runtime_proof("readOnlyMode", dashboard.get("readOnlyMode"), False, "EA runtime 必须证明只读 fuse 已关闭。"),
-        _runtime_proof("livePilotMode", dashboard.get("livePilotMode"), True, "EnablePilotAutoTrading=true 且 ReadOnlyMode=false 后 livePilotMode 才能成立。"),
-        _runtime_proof("executionEnabled", dashboard.get("executionEnabled"), True, "dashboard executionEnabled 必须由 EA runtime 重新导出为 true。"),
-        _runtime_proof("tradeAllowed", dashboard.get("tradeAllowed"), True, "终端、账户、EA、symbol 与 read-only fuse 必须全部通过。"),
-        _runtime_proof("tradePermissionBlocker", trade_blocker, "", "不允许仍为 READ_ONLY_MODE 或其他交易阻塞码。"),
-        _runtime_proof("orderSendAllowed", False, False, "直到单独 execution lane 评审通过前，后端仍保持不写单。"),
-    ]
-    return [
-        {
-            "candidateId": "forex_mt5_usdjpy_rsi_micro_live_pilot_review_only",
-            "lane": "forexMt5",
-            "route": "USDJPY_RSI_REVERSAL_H1_MICRO_PILOT",
-            "status": "REVIEW_ONLY_CANDIDATE_READY_FOR_HUMAN_DIFF_REVIEW",
-            "statusZh": "外币 live pilot 候选配置已生成，仅供审查",
-            "sourcePresetFile": "MQL5/Presets/QuantGod_MT5_HFM_LiveSecondary.set",
-            "candidatePresetName": "QuantGod_MT5_HFM_LivePilot_USDJPY_RSI_REVIEW_ONLY.set",
-            "candidateFileWritten": False,
-            "writesMt5Preset": False,
-            "writesMt5OrderRequest": False,
-            "orderSendAllowed": False,
-            "canAttachNow": False,
-            "attachRequires": [
-                "human diff review",
-                "micro lot chosen by operator",
-                "fresh MT5 attach and dashboard proof",
-                "post-attach runtime preflight rerun",
-            ],
-            "candidateSettings": [
-                _candidate_setting("ReadOnlyMode", "true", "false", "解除 READ_ONLY_MODE，但仍保留 kill switch、spread、daily loss、position cap。"),
-                _candidate_setting("EnablePilotAutoTrading", "false", "true", "让 IsPilotLiveMode() 可成立。"),
-                _candidate_setting("Watchlist", "USDJPY", "USDJPY", "外币 pilot 只看 USDJPY。"),
-                _candidate_setting("EnablePilotRsiH1Live", "false", "true", "只打开已审查的 USDJPY RSI live 微型路线。"),
-                _candidate_setting("EnablePilotBBH1Live", "false", "false", "首轮不打开 BB live route。"),
-                _candidate_setting("EnablePilotMacdH1Live", "false", "false", "首轮不打开 MACD live route。"),
-                _candidate_setting("EnablePilotSRM15Live", "false", "false", "首轮不打开 SR live route。"),
-                _candidate_setting("PilotStartupEntryGuardMode", "H1_STRICT", "FAST_WARMUP", "降低启动入场延迟，但不绕过核心风险闸门。"),
-                _candidate_setting("PilotLotSize", "current", "operator-reviewed micro lot", "首次实盘只允许极小仓位。"),
-                _candidate_setting("EnableEARequestReaderReviewHarness", "false", "false", "外币 pilot 不启用 request reader。"),
-            ],
-            "expectedRuntimeProof": common_proof,
-            "mustRemainDisabled": [
-                "EnableNonRsiLegacyLiveAuthorization",
-                "EnablePilotBBH1Live",
-                "EnablePilotMacdH1Live",
-                "EnablePilotSRM15Live",
-                "EA request file consumption",
-                "MT5 OrderSend from review artifact",
-            ],
-        },
-        {
-            "candidateId": "btc_hfm_crypto_cfd_request_reader_live_pilot_review_only",
-            "lane": "btcCryptoCfd",
-            "route": "HFM_CRYPTO_CFD_REQUEST_READER_PILOT",
-            "status": "WAITING_REQUEST_READER_AND_BROKER_SEND_REVIEW",
-            "statusZh": "BTC/HFM crypto 候选配置已定义，但必须先完成 request reader 与 broker send 评审",
-            "sourcePresetFile": "MQL5/Presets/QuantGod_MT5_HFM_LiveSecondary.set",
-            "candidatePresetName": "QuantGod_MT5_HFM_LivePilot_BTC_CRYPTO_REVIEW_ONLY.set",
-            "candidateFileWritten": False,
-            "writesMt5Preset": False,
-            "writesMt5OrderRequest": False,
-            "orderSendAllowed": False,
-            "canAttachNow": False,
-            "attachRequires": [
-                "EA request reader review",
-                "broker OrderSend wrapper review",
-                "receipt reconciliation review",
-                "rollback and auto-disable review",
-                "fresh BTC tick dashboard proof",
-            ],
-            "candidateSettings": [
-                _candidate_setting("Watchlist", "USDJPY", "#BTCUSD or reviewed broker crypto symbol", "让 MT5 dashboard 输出 HFM crypto CFD 实时 tick。"),
-                _candidate_setting("ReadOnlyMode", "true", "false after broker-send review", "只有 request reader、receipt、OrderSend、rollback 全部审查后才可解除。"),
-                _candidate_setting("EnablePilotAutoTrading", "false", "true after broker-send review", "由 live pilot 总闸统一控制。"),
-                _candidate_setting("EnableEARequestReaderReviewHarness", "false", "reviewed staged enablement", "BTC/HFM crypto 必须走 request contract -> EA reader -> receipt 隔离路径。"),
-                _candidate_setting("EnablePilotRsiH1Live", "false", "false", "BTC 不复用 USDJPY RSI live route。"),
-                _candidate_setting("EnablePilotBBH1Live", "false", "false", "BTC 首轮不打开 BB live route。"),
-                _candidate_setting("EnablePilotMacdH1Live", "false", "false", "BTC 首轮不打开 MACD live route。"),
-                _candidate_setting("EnablePilotSRM15Live", "false", "false", "BTC 首轮不打开 SR live route。"),
-            ],
-            "implementationPrerequisites": [
-                "live_execution_adapter_write_path",
-                "ea_request_reader_consumption_path",
-                "broker_order_send_path",
-                "receipt_writer_and_reconciliation_path",
-                "rollback_and_auto_disable_path",
-            ],
-            "expectedRuntimeProof": common_proof + [
-                _runtime_proof("symbolNames", dashboard.get("symbolNames", []), "#BTCUSD", "dashboard 必须证明正在输出已审查 crypto broker symbol。"),
-                _runtime_proof("adapterContractValidation", validator.get("status", ""), "data-plane ready with execution lane review", "request/receipt 合同必须绑定当前 reviewPacketHash 和 runtimePreflightHash。"),
-                _runtime_proof("disabledHarness", harness.get("status", ""), "reviewed disabled harness", "禁用态 harness 必须继续证明当前无 request 文件写入和无 broker 调用。"),
-            ],
-            "mustRemainDisabled": [
-                "EA request file consumption before final review",
-                "receipt file writes before final review",
-                "MT5 OrderSend",
-                "Telegram/webhook execution",
-                "credential storage",
-                "live preset mutation from this artifact",
-            ],
-        },
-    ]
+    return [{
+        "candidateId": "usdjpy_forex_live_pilot_review_only",
+        "lane": "forexMt5",
+        "route": "USDJPY_RSI_H1_LIVE_PILOT",
+        "status": "WAITING_OPERATOR_AND_RUNTIME_REVIEW",
+        "statusZh": "USDJPY 外汇候选配置已定义，仍需人工与 runtime 评审",
+        "sourcePresetFile": "MQL5/Presets/QuantGod_MT5_HFM_LiveSecondary.set",
+        "candidatePresetName": "QuantGod_MT5_HFM_LivePilot_USDJPY_REVIEW_ONLY.set",
+        "candidateFileWritten": False,
+        "writesMt5Preset": False,
+        "writesMt5OrderRequest": False,
+        "orderSendAllowed": False,
+        "mt5OrderSendAllowed": False,
+        "canAttachNow": False,
+        "candidateSettings": [
+            _candidate_setting("Watchlist", _current_preset_value(file_evidence, "Watchlist", "USDJPY"), "USDJPY", "只保留 USDJPY 外汇 watchlist。"),
+            _candidate_setting("ReadOnlyMode", _current_preset_value(file_evidence, "ReadOnlyMode", "true"), "operator-reviewed false", "只有全部安全证据通过后才可人工审查解除。"),
+            _candidate_setting("EnablePilotAutoTrading", _current_preset_value(file_evidence, "EnablePilotAutoTrading", "false"), "operator-reviewed true", "由 live pilot 总闸统一控制。"),
+            _candidate_setting("EnablePilotRsiH1Live", _current_preset_value(file_evidence, "EnablePilotRsiH1Live", "false"), "operator-reviewed true", "只审查 USDJPY RSI H1 route。"),
+            _candidate_setting("EnableEARequestReaderReviewHarness", _current_preset_value(file_evidence, "EnableEARequestReaderReviewHarness", "false"), "false", "外汇 pilot 不启用 request reader。"),
+        ],
+        "implementationPrerequisites": [
+            "operator_approval_bound_to_review_packet",
+            "runtime_preflight_passed",
+            "kill_switch_and_permission_layers_passed",
+            "isolated_tester_forward_passed",
+        ],
+        "expectedRuntimeProof": [
+            _runtime_proof("symbolNames", dashboard.get("symbolNames", []), "USDJPY broker symbol", "dashboard 必须输出 USDJPY 实时 tick。"),
+            _runtime_proof("adapterContractValidation", validator.get("status", ""), "reviewed", "合同验证保持只读。"),
+            _runtime_proof("disabledHarness", harness.get("status", ""), "reviewed disabled harness", "harness 必须证明无 request 写入和无 broker 调用。"),
+        ],
+    }]
 
 
 def _candidate_safety_validation(candidates: list[dict[str, Any]]) -> dict[str, Any]:
@@ -588,7 +520,7 @@ def _render_review_only_candidate_text(candidate: dict[str, Any]) -> str:
             continue
         review_required = any(
             marker in value.lower()
-            for marker in ("operator", "review", "after broker-send", "#btcusd or")
+            for marker in ("operator", "review", "after broker-send")
         )
         prefix = "; REVIEW_REQUIRED " if review_required else ""
         lines.append(f"{prefix}{key}={value}")
@@ -703,238 +635,66 @@ def _diff_change(
     }
 
 
+
+
 def _review_only_preset_diff_package(
     *,
     file_evidence: dict[str, Any],
     candidates: list[dict[str, Any]],
-    approved_lanes: list[Any],
 ) -> dict[str, Any]:
-    source_preset_path = str(_safe_dict(file_evidence.get("deployedPreset")).get("path") or "")
-    startup_config_path = str(_safe_dict(file_evidence.get("startupConfig")).get("path") or "")
-    forex_candidate = next((row for row in candidates if row.get("lane") == "forexMt5"), {})
-    btc_candidate = next((row for row in candidates if row.get("lane") == "btcCryptoCfd"), {})
-    current_guard_mode = _current_preset_value(file_evidence, "PilotStartupEntryGuardMode", "H1_STRICT")
-    current_wait_next_bar = _current_preset_value(file_evidence, "PilotStartupEntryWaitNextH1Bar", "true")
-    current_lot = _current_preset_value(file_evidence, "PilotLotSize", "0.01")
-    forex_changes = [
-        _diff_change("ReadOnlyMode", _current_preset_value(file_evidence, "ReadOnlyMode", "true"), "false", "解除 EA read-only fuse；必须继续保留 kill switch、spread、daily loss、position cap。"),
-        _diff_change("EnablePilotAutoTrading", _current_preset_value(file_evidence, "EnablePilotAutoTrading", "false"), "true", "让 IsPilotLiveMode() 可成立。"),
-        _diff_change("Watchlist", _current_preset_value(file_evidence, "Watchlist", "USDJPY"), "USDJPY", "外币 pilot 只绑定当前审查的 USDJPY route。"),
-        _diff_change("EnablePilotRsiH1Live", _current_preset_value(file_evidence, "EnablePilotRsiH1Live", "false"), "true", "只开启 USDJPY RSI live 微型路线。"),
-        _diff_change("EnablePilotBBH1Live", _current_preset_value(file_evidence, "EnablePilotBBH1Live", "false"), "false", "首轮不打开 BB live route。"),
-        _diff_change("EnablePilotMacdH1Live", _current_preset_value(file_evidence, "EnablePilotMacdH1Live", "false"), "false", "首轮不打开 MACD live route。"),
-        _diff_change("EnablePilotSRM15Live", _current_preset_value(file_evidence, "EnablePilotSRM15Live", "false"), "false", "首轮不打开 SR live route。"),
-        _diff_change("PilotStartupEntryGuardMode", current_guard_mode, "FAST_WARMUP", "降低启动后的进场等待；仍不能绕过点差、新闻、kill switch、仓位和策略闸门。"),
-        _diff_change("PilotStartupEntryWaitNextH1Bar", current_wait_next_bar, "false", "配合 FAST_WARMUP 缩短首轮等待；入场仍由策略和风控共同确认。"),
-        _diff_change("PilotLotSize", current_lot, "operator-reviewed micro lot", "首次 live pilot 只允许人工审查后的极小仓位。"),
-        _diff_change("EnableEARequestReaderReviewHarness", _current_preset_value(file_evidence, "EnableEARequestReaderReviewHarness", "false"), "false", "外币 pilot 不启用 request reader。"),
-        _diff_change("AllowLiveTrading", _current_startup_value(file_evidence, "AllowLiveTrading", "0"), "operator-reviewed MT5 terminal/EA attach setting", "启动 ini 目前会让重启后继续关闭 live trading；这里只作为人工切换审查输入。"),
-    ]
-    btc_changes = [
-        _diff_change("Watchlist", _current_preset_value(file_evidence, "Watchlist", "USDJPY"), "#BTCUSD or reviewed broker crypto symbol", "让 MT5 dashboard 输出 HFM crypto CFD 实时 tick。"),
-        _diff_change("ReadOnlyMode", _current_preset_value(file_evidence, "ReadOnlyMode", "true"), "false after broker-send review", "BTC/HFM crypto 必须等 request reader、receipt、OrderSend、rollback 全部审查后才可解除。"),
-        _diff_change("EnablePilotAutoTrading", _current_preset_value(file_evidence, "EnablePilotAutoTrading", "false"), "true after broker-send review", "由 live pilot 总闸统一控制，但不能早于 broker-send 审查。"),
-        _diff_change("EnableEARequestReaderReviewHarness", _current_preset_value(file_evidence, "EnableEARequestReaderReviewHarness", "false"), "reviewed staged enablement", "BTC/HFM crypto 必须走 request contract -> EA reader -> receipt 隔离路径。"),
-        _diff_change("AllowLiveTrading", _current_startup_value(file_evidence, "AllowLiveTrading", "0"), "operator-reviewed MT5 terminal/EA attach setting", "终端级 live trading 必须由后续独立执行 lane 证明。"),
+    candidate = candidates[0] if candidates else {}
+    changes = [
+        _diff_change("Watchlist", _current_preset_value(file_evidence, "Watchlist", "USDJPY"), "USDJPY", "只保留 USDJPY 外汇 symbol。"),
+        _diff_change("ReadOnlyMode", _current_preset_value(file_evidence, "ReadOnlyMode", "true"), "operator-reviewed false", "必须保留人工复核与全部安全闸。"),
+        _diff_change("EnablePilotAutoTrading", _current_preset_value(file_evidence, "EnablePilotAutoTrading", "false"), "operator-reviewed true", "仅在独立激活评审后人工启用。"),
+        _diff_change("EnablePilotRsiH1Live", _current_preset_value(file_evidence, "EnablePilotRsiH1Live", "false"), "operator-reviewed true", "仅审查 USDJPY RSI H1 route。"),
+        _diff_change("EnableEARequestReaderReviewHarness", _current_preset_value(file_evidence, "EnableEARequestReaderReviewHarness", "false"), "false", "外汇 pilot 保持 request reader 关闭。"),
     ]
     return {
         "mode": "REVIEW_ONLY_PRESET_DIFF_PACKAGE_NO_FILE_WRITE",
-        "status": "READY_FOR_HUMAN_DIFF_REVIEW",
-        "statusZh": "已根据真实 Live16 ini/preset 生成待审查差异；未写入 MT5。",
-        "sourcePresetPath": source_preset_path,
-        "startupConfigPath": startup_config_path,
-        "approvedLanes": approved_lanes,
-        "candidateFileWritten": False,
+        "lane": "forexMt5",
+        "candidatePresetName": candidate.get("candidatePresetName"),
+        "changes": changes,
         "writesMt5Preset": False,
         "writesStartupConfig": False,
         "writesMt5OrderRequest": False,
-        "requestFilesWritten": False,
-        "brokerCallsMade": False,
         "orderSendAllowed": False,
-        "mt5OrderSendAllowed": False,
-        "restartWouldKeepExecutionDisabled": bool(file_evidence.get("restartWouldKeepExecutionDisabled")),
-        "blockingEvidence": _safe_list(file_evidence.get("blockingEvidence")),
-        "safetyRetained": [
-            "kill switch",
-            "spread gate",
-            "news/session gate",
-            "daily loss cap",
-            "position cap",
-            "account/server binding",
-            "symbol whitelist",
-            "receipt reconciliation before broker send",
-        ],
-        "mustStayOffInThisArtifact": [
-            "MT5 preset mutation",
-            "startup ini mutation",
-            "MT5 request file writes",
-            "EA request consumption",
-            "MT5 OrderSend",
-            "Telegram/webhook execution",
-            "credential storage",
-        ],
-        "laneDiffs": [
-            {
-                "lane": "forexMt5",
-                "candidatePresetName": forex_candidate.get("candidatePresetName", "QuantGod_MT5_HFM_LivePilot_USDJPY_RSI_REVIEW_ONLY.set"),
-                "canAttachNow": False,
-                "preferredFirstLivePilot": "only if forex runtime proof is reviewed after manual MT5 attach",
-                "changes": forex_changes,
-                "postAttachProofRequired": [
-                    "readOnlyMode=false",
-                    "livePilotMode=true",
-                    "executionEnabled=true",
-                    "tradeAllowed=true",
-                    "runtimeProbePassed=true",
-                ],
-            },
-            {
-                "lane": "btcCryptoCfd",
-                "candidatePresetName": btc_candidate.get("candidatePresetName", "QuantGod_MT5_HFM_LivePilot_BTC_CRYPTO_REVIEW_ONLY.set"),
-                "canAttachNow": False,
-                "preferredFirstLivePilot": "BTC has profit evidence, but needs broker-send lane review before attach",
-                "changes": btc_changes,
-                "implementationPrerequisites": _safe_list(btc_candidate.get("implementationPrerequisites")) or [
-                    "live_execution_adapter_write_path",
-                    "ea_request_reader_consumption_path",
-                    "broker_order_send_path",
-                    "receipt_writer_and_reconciliation_path",
-                    "rollback_and_auto_disable_path",
-                ],
-                "postAttachProofRequired": [
-                    "symbolNames contains reviewed crypto symbol",
-                    "request contract hash current",
-                    "receipt reconciliation review passed",
-                    "broker send wrapper reviewed",
-                ],
-            },
-        ],
-        "nextRequiredActionZh": "把这份 diff 作为单独执行 lane 审查输入；审查通过后再由人工挂载并重跑 runtime preflight。",
+        "canAttachNow": False,
     }
 
 
 def _preset_activation_package(
     *,
     runtime_dir: Path,
+    approval: dict[str, Any],
     preflight: dict[str, Any],
     validator: dict[str, Any],
     harness: dict[str, Any],
-    approval: dict[str, Any],
 ) -> dict[str, Any]:
-    dashboard = _safe_dict(preflight.get("dashboardSnapshot"))
-    account = _safe_dict(dashboard.get("account"))
-    approved_lanes = _safe_list(approval.get("approvedLanes") or preflight.get("approvedLanes"))
-    request_count = int(harness.get("plannedWriteCount") or validator.get("requestCount") or 0)
+    file_evidence = _live_pilot_file_evidence(runtime_dir)
     candidates = _review_only_preset_candidates(
+        file_evidence=file_evidence,
         preflight=preflight,
         validator=validator,
         harness=harness,
     )
-    file_evidence = _live_pilot_file_evidence(runtime_dir)
-    deployed_values = _safe_dict(_safe_dict(file_evidence.get("deployedPreset")).get("values"))
-    trade_permission_blocker = _safe_dict(dashboard.get("permissionLayers")).get("tradePermissionBlocker", "")
-    if not trade_permission_blocker and deployed_values.get("ReadOnlyMode") == "true":
-        trade_permission_blocker = "READ_ONLY_MODE"
     return {
-        "packageMode": "REVIEW_ONLY_PRESET_ACTIVATION_PACKAGE_NO_MUTATION",
-        "status": "PROFIT_TARGET_REACHED_PRESET_GATES_OFF",
-        "statusZh": "收益目标已过，待生成并人工装载 reviewed live pilot preset",
-        "writesMt5Preset": False,
-        "writesMt5OrderRequest": False,
-        "orderSendAllowed": False,
-        "accountContext": {
-            "accountNumber": account.get("number"),
-            "server": account.get("server", ""),
-            "currency": account.get("currency", ""),
-            "runtimeDir": preflight.get("runtimeDir", ""),
-        },
-        "approvedLanes": approved_lanes,
-        "currentRuntimeGateState": {
-            "readOnlyMode": dashboard.get("readOnlyMode"),
-            "livePilotMode": dashboard.get("livePilotMode"),
-            "executionEnabled": dashboard.get("executionEnabled"),
-            "tradeAllowed": dashboard.get("tradeAllowed"),
-            "tradeStatus": dashboard.get("tradeStatus", ""),
-            "tradePermissionBlocker": trade_permission_blocker,
-        },
-        "currentPresetEvidence": {
-            "presetFile": "MQL5/Presets/QuantGod_MT5_HFM_LiveSecondary.set",
-            "eaFile": "MQL5/Experts/QuantGod_MultiStrategy.mq5",
-            "actualStartupConfig": file_evidence["startupConfig"],
-            "actualDeployedPreset": file_evidence["deployedPreset"],
-            "fileEvidenceBlockers": file_evidence["blockingEvidence"],
-            "restartWouldKeepExecutionDisabled": file_evidence["restartWouldKeepExecutionDisabled"],
-            "blockingSettings": [
-                {"key": "ReadOnlyMode", "current": "true", "effectZh": "LiveTradePermissionBlocker 直接返回 READ_ONLY_MODE。"},
-                {"key": "EnablePilotAutoTrading", "current": "false", "effectZh": "IsPilotLiveMode() 不能为 true。"},
-                {"key": "EnablePilotRsiH1Live", "current": "false", "effectZh": "USDJPY RSI live route 关闭。"},
-                {"key": "EnablePilotBBH1Live", "current": "false", "effectZh": "BB live route 关闭。"},
-                {"key": "EnablePilotMacdH1Live", "current": "false", "effectZh": "MACD live route 关闭。"},
-                {"key": "EnablePilotSRM15Live", "current": "false", "effectZh": "SR live route 关闭。"},
-                {"key": "EnableEARequestReaderReviewHarness", "current": "false", "effectZh": "EA 不读取 request 文件，BTC/HFM crypto 只能做 specs/probe 审查。"},
-            ],
-        },
+        "mode": "REVIEW_ONLY_ACTIVATION_PACKAGE_NO_FILE_WRITE",
+        "approvedLanes": _safe_list(approval.get("approvedLanes") or preflight.get("approvedLanes")),
+        "liveRuntimeFileEvidence": file_evidence,
+        "reviewOnlyPresetCandidates": candidates,
+        "candidateSafetyValidation": _candidate_safety_validation(candidates),
         "reviewOnlyPresetDiffPackage": _review_only_preset_diff_package(
             file_evidence=file_evidence,
             candidates=candidates,
-            approved_lanes=approved_lanes,
         ),
-        "reviewedPresetChangePlan": [
-            {
-                "lane": "forexMt5",
-                "route": "USDJPY_RSI_REVERSAL_H1_MICRO_PILOT",
-                "recommendedOnlyAfterReview": True,
-                "changes": [
-                    {"key": "ReadOnlyMode", "from": "true", "to": "false", "whyZh": "解除 EA read-only fuse。"},
-                    {"key": "EnablePilotAutoTrading", "from": "false", "to": "true", "whyZh": "让 IsPilotLiveMode() 可成立。"},
-                    {"key": "EnablePilotRsiH1Live", "from": "false", "to": "true", "whyZh": "只打开已受 RSI live route 保护的最小外币 pilot。"},
-                    {"key": "PilotStartupEntryGuardMode", "from": "H1_STRICT", "to": "FAST_WARMUP", "whyZh": "降低启动后首次入场延迟，但不绕过点差、新闻、kill switch、仓位和策略闸门。"},
-                    {"key": "PilotLotSize", "from": "current", "to": "micro lot reviewed by operator", "whyZh": "首次实盘只允许极小仓位。"},
-                ],
-                "mustStayOff": [
-                    "EnableNonRsiLegacyLiveAuthorization",
-                    "EnablePilotBBH1Live",
-                    "EnablePilotMacdH1Live",
-                    "EnablePilotSRM15Live",
-                    "EnableEARequestReaderReviewHarness",
-                ],
-            },
-            {
-                "lane": "btcCryptoCfd",
-                "route": "HFM_CRYPTO_CFD_REQUEST_READER_PILOT",
-                "recommendedOnlyAfterReview": True,
-                "changes": [
-                    {"key": "Watchlist", "from": "USDJPY", "to": "#BTCUSD or reviewed broker crypto symbol", "whyZh": "让 MT5 dashboard 输出 crypto symbol 实时 tick。"},
-                    {"key": "ReadOnlyMode", "from": "true", "to": "false", "whyZh": "只有在 request reader、receipt 和 broker send 全部评审后才可解除。"},
-                    {"key": "EnablePilotAutoTrading", "from": "false", "to": "true", "whyZh": "由 live pilot 总闸统一控制。"},
-                    {"key": "EnableEARequestReaderReviewHarness", "from": "false", "to": "reviewed staged enablement", "whyZh": "BTC/HFM crypto 没有现成策略 live toggle，必须走 request contract -> EA reader -> receipt 的隔离路径。"},
-                ],
-                "mustStayOffUntilBrokerSendReview": [
-                    "EA request file consumption",
-                    "receipt file writes",
-                    "MT5 OrderSend",
-                    "Telegram/webhook execution",
-                    "credential storage",
-                ],
-            },
-        ],
-        "reviewOnlyPresetCandidateCount": len(candidates),
-        "reviewOnlyPresetCandidates": candidates,
-        "candidateSafetyValidation": _candidate_safety_validation(candidates),
-        "postAttachRuntimeProofRequired": [
-            {"field": "readOnlyMode", "expected": False},
-            {"field": "livePilotMode", "expected": True},
-            {"field": "executionEnabled", "expected": True},
-            {"field": "tradeAllowed", "expected": True},
-            {"field": "orderSendAllowed", "expected": False, "whyZh": "直到独立 execution lane 评审通过前，后端仍不允许写单。"},
-        ],
-        "adapterAndReceiptEvidence": {
-            "plannedRequestCount": request_count,
-            "reviewOnlyReceiptCount": int(harness.get("reviewOnlyReceiptCount") or 0),
-            "requestDirectory": harness.get("requestDirectoryTarget") or "runtime/agent/mt5_order_requests",
-            "receiptDirectory": harness.get("receiptDirectoryTarget") or "runtime/agent/mt5_order_receipts",
-        },
-        "liveRuntimeFileEvidence": file_evidence,
+        "candidateFileWritten": False,
+        "writesMt5Preset": False,
+        "writesStartupConfig": False,
+        "writesMt5OrderRequest": False,
+        "orderSendAllowed": False,
+        "mt5OrderSendAllowed": False,
+        "canAttachNow": False,
     }
 
 
@@ -954,10 +714,8 @@ def build_live_pilot_activation_review(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
+    **_retired_inputs: Any,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     should_rebuild = bool(refresh_sources or request_json)
@@ -970,18 +728,12 @@ def build_live_pilot_activation_review(
         "operator_approval_json": operator_approval_json,
         "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots or [],
     }
     adapter = {**common, "request_json": request_json}
     explicit_dependency_inputs = bool(
         should_rebuild
         or operator_approval_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     orchestrator = (

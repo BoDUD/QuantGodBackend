@@ -75,9 +75,6 @@ def build_live_promotion_controller(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -85,13 +82,10 @@ def build_live_promotion_controller(
     common_kwargs = {
         "write": write,
         "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_roots,
     }
     approval_kwargs = {**common_kwargs, "operator_approval_json": operator_approval_json}
-    should_rebuild = bool(write or refresh_sources or operator_approval_json or moss_backtest_json or hfm_simulation_profile_json or hfm_contract_spec_json or extra_roots)
+    should_rebuild = bool(write or refresh_sources or operator_approval_json or extra_roots)
     intake = build_live_evidence_intake(runtime_dir, **approval_kwargs) if should_rebuild else read_live_evidence_intake(runtime_dir)
     candidates = build_live_promotion_candidates(runtime_dir, **approval_kwargs) if should_rebuild else read_live_promotion_candidates(runtime_dir)
     eligible = _eligible_lanes(candidates)
@@ -158,7 +152,7 @@ def build_live_promotion_controller(
         "nextRequiredActionZh": (
             "等待人工审批 JSON，然后继续 dry-run replay、runtime preflight、request contract 和单独 adapter 代码评审。"
             if requested
-            else "继续补齐 HFM crypto symbol/spec/profile，或让 USDJPY deployment gate 先过线。"
+            else "继续补齐 USDJPY tester/runtime 证据，让 deployment gate 先过线。"
         ),
         "safety": dict(SAFETY),
     }

@@ -108,14 +108,14 @@ def check_secret_file_hygiene() -> None:
 
 def check_backend_split_boundaries() -> None:
     """Backend repo must not depend on checked-in frontend/infra source trees."""
-    forbidden_dirs = ("frontend", "cloudflare")
+    forbidden_dirs = ("frontend",)
     for dirname in forbidden_dirs:
         if (ROOT / dirname).exists():
             fail(f"backend split violation: {dirname}/ must not exist in QuantGodBackend")
 
     for rel in tracked_files():
         normalized = rel.replace("\\", "/")
-        if normalized.startswith(("frontend/", "cloudflare/")):
+        if normalized.startswith(("frontend/",)):
             fail(f"backend split violation: tracked split-out source file {rel}")
         if normalized.startswith("Dashboard/vue-dist/"):
             fail(f"backend split violation: tracked frontend build artifact {rel}")
@@ -127,9 +127,6 @@ def check_backend_split_boundaries() -> None:
             "tools/apply_phase1_full.py",
             "tools/apply_phase2_full.py",
             "tools/apply_phase3_full.py",
-            "Dashboard/cloud_sync_uploader.js",
-            "Dashboard/cloud_sync_uploader.ps1",
-            "Dashboard/quantgod_cloud_sync.example.json",
         }:
             fail(f"backend split violation: split-out helper must not be tracked here: {rel}")
 
@@ -158,18 +155,19 @@ def check_mql5_safety_guards() -> None:
         require_contains(ea, marker, label)
 
 
-def check_live_preset_defaults() -> None:
+def check_tracked_preset_is_shadow_readonly() -> None:
     live_preset = ROOT / "MQL5/Presets/QuantGod_MT5_HFM_LivePilot.set"
     check_expected_set_values(
         live_preset,
         {
-            "DashboardBuild": "QuantGod-v3.17-mt5-startup-entry-guard",
+            "DashboardBuild": "QuantGod-v3.17-shadow-readonly-compat",
             "Watchlist": "USDJPY",
-            "ShadowMode": "false",
-            "ReadOnlyMode": "false",
+            "ShadowMode": "true",
+            "ReadOnlyMode": "true",
+            "EnablePilotAutoTrading": "false",
             "EnablePilotMA": "false",
             "EnablePilotRsiH1Candidate": "true",
-            "EnablePilotRsiH1Live": "true",
+            "EnablePilotRsiH1Live": "false",
             "PilotRsiBlockSellInUptrend": "true",
             "PilotRsiRangeTightBuyOnly": "true",
             "EnablePilotBBH1Live": "false",
@@ -193,7 +191,7 @@ def main() -> None:
     check_required_backend_files()
     check_backend_split_boundaries()
     check_mql5_safety_guards()
-    check_live_preset_defaults()
+    check_tracked_preset_is_shadow_readonly()
     check_secret_file_hygiene()
     print("CI_GUARD_OK")
 

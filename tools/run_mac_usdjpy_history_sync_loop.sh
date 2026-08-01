@@ -45,11 +45,7 @@ resolve_runtime_dir() {
   fi
 }
 
-load_env_file "$REPO_ROOT/.env.local"
 load_env_file "$REPO_ROOT/.env.usdjpy.local"
-load_env_file "$REPO_ROOT/.env.auto.local"
-load_env_file "$REPO_ROOT/.env.telegram.local"
-load_env_file "$REPO_ROOT/.env.deepseek.local"
 
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export QG_FOCUS_SYMBOL="${QG_FOCUS_SYMBOL:-USDJPYc}"
@@ -99,15 +95,24 @@ history_sync_command() {
 }
 
 run_once() {
-  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] USDJPY historical kline sync start"
+  local operation_id started_at
+  operation_id="history-sync-$(date -u '+%Y%m%dT%H%M%SZ')-$$"
+  started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "[$started_at] USDJPY historical kline sync start operationId=$operation_id"
   echo "runtimeDir=$RUNTIME_DIR"
   echo "mt5FilesDir=$QG_MT5_FILES_DIR"
   echo "mt5TerminalPath=$QG_MT5_TERMINAL_PATH"
   echo "mt5PythonBin=$QG_MT5_PYTHON_BIN"
   echo "months=$QG_USDJPY_HISTORY_MONTHS timeframes=$QG_USDJPY_HISTORY_TIMEFRAMES symbol=$QG_USDJPY_MT5_SYMBOL maxLatestLagHours=$QG_USDJPY_HISTORY_MAX_LAG_HOURS"
-  history_sync_command || echo "USDJPY historical kline sync failed"
-  "$QG_MT5_PYTHON_BIN" tools/run_usdjpy_strategy_backtest.py --runtime-dir "$RUNTIME_DIR" quality || echo "USDJPY strategy backtest quality refresh failed"
-  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] USDJPY historical kline sync complete"
+  if ! history_sync_command; then
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] USDJPY historical kline sync failed operationId=$operation_id stage=sync-klines" >&2
+    return 1
+  fi
+  if ! "$QG_MT5_PYTHON_BIN" tools/run_usdjpy_strategy_backtest.py --runtime-dir "$RUNTIME_DIR" quality; then
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] USDJPY historical kline sync failed operationId=$operation_id stage=quality" >&2
+    return 1
+  fi
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] USDJPY historical kline sync complete operationId=$operation_id"
 }
 
 if [[ "$MODE" == "--once" ]]; then
@@ -115,7 +120,19 @@ if [[ "$MODE" == "--once" ]]; then
   exit 0
 fi
 
+failure_count=0
 while true; do
-  run_once
-  sleep "$QG_USDJPY_HISTORY_INTERVAL_SECONDS"
+  if run_once; then
+    failure_count=0
+    sleep "$QG_USDJPY_HISTORY_INTERVAL_SECONDS"
+    continue
+  fi
+  failure_count=$((failure_count + 1))
+  if (( failure_count >= 6 )); then
+    retry_delay=900
+  else
+    retry_delay=$((30 * (2 ** (failure_count - 1))))
+  fi
+  echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] history sync retry scheduled failureCount=$failure_count retryDelaySeconds=$retry_delay" >&2
+  sleep "$retry_delay"
 done

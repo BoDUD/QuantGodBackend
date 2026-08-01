@@ -5,10 +5,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from tools.hfm_crypto_cfd.builder import read_hfm_crypto_cfd_state
     from tools.profit_target_tracker.builder import build_profit_target_tracker, read_profit_target_tracker
 except ModuleNotFoundError:  # pragma: no cover - direct script fallback
-    from hfm_crypto_cfd.builder import read_hfm_crypto_cfd_state
     from profit_target_tracker.builder import build_profit_target_tracker, read_profit_target_tracker
 
 from .forex_live12_rsi_candidate_promotion_gate import (
@@ -48,7 +46,7 @@ TOP_BLOCKER_CODES = (
 )
 
 
-def _home_live16_runtime_dir() -> Path:
+def _secondary_mt5_runtime_dir() -> Path:
     return (
         Path.home()
         / "Library"
@@ -84,10 +82,10 @@ def _read_or_build_profit_tracker(runtime: Path, target_usd: float) -> dict[str,
     report = read_profit_target_tracker(runtime)
     if report.get("targetReached") or report.get("status") == "TARGET_REACHED":
         return report
-    hfm_runtime = _home_live16_runtime_dir()
+    secondary_runtime = _secondary_mt5_runtime_dir()
     return build_profit_target_tracker(
         runtime,
-        hfm_runtime_dir=hfm_runtime if hfm_runtime.exists() else None,
+        secondary_runtime_dir=secondary_runtime if secondary_runtime.exists() else None,
         report_runtime_dir=runtime,
         target_usd=target_usd,
         write=False,
@@ -97,7 +95,7 @@ def _read_or_build_profit_tracker(runtime: Path, target_usd: float) -> dict[str,
 def _lane_summaries(profit_tracker: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     lane_targets = _safe_dict(profit_tracker.get("laneTargets"))
-    for lane_id in ("forexMt5", "btcCryptoCfd"):
+    for lane_id in ("forexMt5",):
         lane = _safe_dict(lane_targets.get(lane_id))
         if not lane:
             continue
@@ -155,77 +153,6 @@ def _ranked_blockers(
     return ranked + extras[:10]
 
 
-def _crypto_summary(runtime: Path) -> dict[str, Any]:
-    state = read_hfm_crypto_cfd_state(runtime)
-    symbol_evidence = _safe_dict(state.get("symbolEvidence"))
-    profile = _safe_dict(state.get("simulationProfileReview"))
-    metrics = _safe_dict(profile.get("metrics"))
-    execution_spec = _safe_dict(state.get("executionSpecReview"))
-    return {
-        "status": state.get("status"),
-        "statusZh": state.get("statusZh"),
-        "symbolsFound": bool(symbol_evidence.get("found")),
-        "coveredBrokerSymbols": symbol_evidence.get("brokerSymbols") or execution_spec.get("coveredBrokerSymbols") or [],
-        "simulationQualified": bool(profile.get("simulationQualified")),
-        "strategyId": metrics.get("agentId"),
-        "pnlUsd": metrics.get("pnl") or metrics.get("pnlUsd"),
-        "sharpe": metrics.get("sharpe"),
-        "maxDrawdownPct": metrics.get("maxDrawdownPct"),
-        "tradeCount": metrics.get("tradeCount"),
-        "liquidationCount": metrics.get("liquidationCount"),
-        "orderSendAllowed": False,
-        "mt5OrderSendAllowed": False,
-    }
-
-
-def _btc_tpsl_candidate_summary(runtime: Path) -> dict[str, Any]:
-    report = _read_json(runtime / "agent" / "QuantGod_TpSlOptimizerReport.json")
-    btc = _safe_dict(report.get("btcCryptoCfd"))
-    pick = _safe_dict(btc.get("finalAdvisoryPick"))
-    if not pick:
-        return {
-            "status": "BTC_TPSL_FINAL_PICK_MISSING",
-            "statusZh": "BTC TP/SL 最终候选尚未生成",
-            "candidateFound": False,
-            "orderSendAllowed": False,
-            "mt5OrderSendAllowed": False,
-        }
-    metrics = _safe_dict(pick.get("fullWindowMetrics"))
-    params = _safe_dict(pick.get("params")) or _safe_dict(pick.get("parameters"))
-    return {
-        "status": "BTC_TPSL_FINAL_PICK_READY",
-        "statusZh": "BTC TP/SL 最终候选已纳入执行审查摘要",
-        "candidateFound": True,
-        "strategyId": pick.get("strategyId"),
-        "policy": btc.get("finalAdvisoryPickPolicy"),
-        "reasonZh": btc.get("finalAdvisoryPickReasonZh"),
-        "params": params,
-        "tpSlSummary": pick.get("tpSlSummary") or {
-            "bias": params.get("bias"),
-            "takeProfitPriceMove": params.get("takeProfitPriceMove"),
-            "stopLossPriceMove": params.get("stopLossPriceMove"),
-            "maxHoldBars": params.get("maxHoldBars"),
-            "cooldownBars": params.get("cooldownBars"),
-        },
-        "metrics": {
-            "pnlUsd": metrics.get("pnlUsd"),
-            "roiPct": metrics.get("roiPct"),
-            "sharpe": metrics.get("sharpe"),
-            "maxDrawdownPct": metrics.get("maxDrawdownPct"),
-            "tradeCount": metrics.get("tradeCount"),
-            "liquidationCount": metrics.get("liquidationCount"),
-        },
-        "windowCount": pick.get("windowCount"),
-        "validWindowCount": pick.get("validWindowCount"),
-        "blockers": pick.get("blockers") or [],
-        "targetTradeoff": btc.get("targetTradeoff") or {},
-        "middleWindowLeaders": btc.get("middleWindowLeaders") or {},
-        "focusedRetestQueue": btc.get("focusedRetestQueue") or [],
-        "orderSendAllowed": False,
-        "mt5OrderSendAllowed": False,
-        "writesMt5OrderRequest": False,
-    }
-
 
 def _ace_strategy_upgrade_summary(runtime: Path) -> dict[str, Any]:
     pack = _read_json(runtime / "agent" / "QuantGod_AceExecutionCandidatePack.json")
@@ -238,11 +165,6 @@ def _ace_strategy_upgrade_summary(runtime: Path) -> dict[str, Any]:
     live_upgrade_selection = _safe_dict(pack.get("liveUpgradeSelection"))
     replacement = _safe_dict(rsi.get("replacementPlan"))
     forex = _safe_dict(replacement.get("primaryForexAce")) or _safe_dict(pack.get("forexMt5"))
-    btc_replacement = (
-        _safe_dict(replacement.get("btcTargetMiddleQuality"))
-        or _safe_dict(replacement.get("btcBestMiddleQuality"))
-        or _safe_dict(_safe_dict(pack.get("btcCryptoCfd")).get("selectedDefault"))
-    )
     if not pack:
         return {
             "status": "ACE_EXECUTION_CANDIDATE_PACK_MISSING",
@@ -278,24 +200,13 @@ def _ace_strategy_upgrade_summary(runtime: Path) -> dict[str, Any]:
             "writesMt5OrderRequest": False,
             "writesLivePreset": False,
         },
-        "primaryReplacementLane": "forexMt5" if forex else ("btcCryptoCfd" if btc_replacement else None),
+        "primaryReplacementLane": "forexMt5" if forex else None,
         "primaryForexReplacement": {
             "seedId": forex.get("seedId"),
             "strategyId": forex.get("strategyId"),
             "status": forex.get("status"),
             "contenderTieBreakRequired": bool(forex.get("contenderTieBreakRequired")),
             "metrics": _safe_dict(forex.get("metrics")),
-        },
-        "btcReplacement": {
-            "strategyId": btc_replacement.get("strategyId"),
-            "role": btc_replacement.get("role"),
-            "validWindowCount": btc_replacement.get("validWindowCount"),
-            "windowCount": btc_replacement.get("windowCount"),
-            "fullWindowMetrics": _safe_dict(btc_replacement.get("fullWindowMetrics"))
-            or _safe_dict(btc_replacement.get("metrics")),
-            "middleThirdMetrics": _safe_dict(btc_replacement.get("middleThirdMetrics")),
-            "params": _safe_dict(btc_replacement.get("parameters"))
-            or _safe_dict(btc_replacement.get("params")),
         },
         "championForwardReview": {
             "status": champion_gate.get("status"),
@@ -627,8 +538,6 @@ def build_sim_target_execution_review_summary(
             "combinedTargetStatusZh": _safe_dict(profit_tracker.get("combinedTarget")).get("statusZh"),
             "laneSummaries": _lane_summaries(profit_tracker),
         },
-        "hfmCryptoCfdEvidence": _crypto_summary(runtime),
-        "btcTpSlExecutionCandidate": _btc_tpsl_candidate_summary(runtime),
         "aceStrategyUpgradeReview": _ace_strategy_upgrade_summary(runtime),
         "capacityExpansionEvidence": capacity,
         "executionReview": {

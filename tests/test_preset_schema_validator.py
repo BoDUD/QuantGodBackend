@@ -20,9 +20,6 @@ REQUIRED_KEYS = [
     "EnableUsdJpyTokyoBreakoutShadowResearch",
     "EnableUsdJpyNightReversionShadowResearch",
     "EnableUsdJpyH4PullbackShadowResearch",
-    "EnableHfmCryptoSpecExporter",
-    "HfmCryptoSpecExportSymbols",
-    "HfmCryptoSpecExportMaxSymbols",
     "PilotLotSize", "PilotMaxTotalPositions",
     "PilotMaxFloatingLossUSC", "PilotMaxRealizedLossDayUSC",
     "ReadOnlyMode", "ShadowMode",
@@ -41,7 +38,6 @@ NUMERIC_RANGES = {
     "PilotStartupEntryFastWarmupMinutes": (0, 30),
     "PilotStartupEntryFastWarmupM1Bars": (0, 10),
     "PilotNewsHighImpactPreBlockMinutes": (0, 180),
-    "HfmCryptoSpecExportMaxSymbols": (1, 500),
 }
 
 
@@ -83,8 +79,20 @@ class PresetSchemaValidatorTests(unittest.TestCase):
         watchlist = self.values.get("Watchlist", "").upper()
         self.assertIn("USDJPY", watchlist, "Live preset should include USDJPY")
 
+    def test_forex_preset_has_no_crypto_exporter_inputs(self):
+        banned = {"EnableHfmCryptoSpecExporter", "HfmCryptoSpecExportSymbols", "HfmCryptoSpecExportMaxSymbols"}
+        self.assertTrue(banned.isdisjoint(self.values))
+
     def test_startup_guard_mode_is_known(self):
         self.assertIn(self.values.get("PilotStartupEntryGuardMode"), {"H1_STRICT", "FAST_WARMUP", "BACKTEST_OFF"})
+
+    def test_shadow_presets_explicitly_disable_pilot_auto_trading(self):
+        presets = (REPO_ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_Shadow.set",)
+        for preset in presets:
+            text = preset.read_text(encoding="utf-8")
+            self.assertIn("ShadowMode=true", text)
+            self.assertIn("ReadOnlyMode=true", text)
+            self.assertIn("EnablePilotAutoTrading=false", text)
 
 
 if __name__ == "__main__":

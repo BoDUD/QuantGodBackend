@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .schema import build_empty_status, default_safety, latest_path, ledger_path, now_iso, run_path, validate_safe_payload
+from .schema import atomic_write_json, build_empty_status, default_safety, latest_path, ledger_path, now_iso, run_path, validate_safe_payload
 
 
 @dataclass
@@ -48,7 +52,7 @@ class AutomationChainRunner:
             ChainStep("entry_trigger", "P3-9 入场触发", [self.python_bin, self._script("run_entry_trigger_lab.py"), "--runtime-dir", runtime, "build", "--symbols", symbols], required=True),
             ChainStep("usdjpy_strategy_policy", "USDJPY 策略政策", [self.python_bin, self._script("run_usdjpy_strategy_lab.py"), "--runtime-dir", runtime, "build", "--write"], required=True),
             ChainStep("usdjpy_ea_dry_run", "USDJPY EA 干跑决策", [self.python_bin, self._script("run_usdjpy_strategy_lab.py"), "--runtime-dir", runtime, "dry-run", "--write"], required=True),
-            ChainStep("usdjpy_live_loop", "USDJPY 实盘恢复闭环", [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "once"], required=True),
+            ChainStep("usdjpy_live_loop", "USDJPY Shadow advisory 闭环", [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "once"], required=True),
             ChainStep("fastlane_quality_final", "P3-7 快通道质量收尾刷新", [self.python_bin, self._script("run_mt5_fastlane.py"), "--runtime-dir", runtime, "quality", "--symbols", symbols], required=False),
             ChainStep("strategy_parity", "P4-2 Strategy/Replay/EA parity", [self.python_bin, self._script("run_strategy_parity.py"), "--runtime-dir", runtime, "build", "--write"], required=False),
             ChainStep("entry_latency", "USDJPY 入场延迟归因", [self.python_bin, self._script("run_entry_latency.py"), "--runtime-dir", runtime, "build", "--write"], required=False),
@@ -115,6 +119,27 @@ class AutomationChainRunner:
         except Exception:
             return None
 
+    def _input_fingerprint(self) -> str:
+        evidence_paths = [
+            self.runtime_dir / "QuantGod_Dashboard.json",
+            self.runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json",
+            self.runtime_dir / "production_validation" / "QuantGod_ProductionEvidenceValidationReport.json",
+            self.runtime_dir / "ga_factory" / "QuantGod_GAFactoryState.json",
+        ]
+        rows = [f"symbols={self._symbols_arg()}", f"runtime={self.runtime_dir.resolve()}"]
+        for evidence_path in evidence_paths:
+            try:
+                stat = evidence_path.stat()
+                rows.append(f"{evidence_path.name}:{stat.st_size}:{stat.st_mtime_ns}")
+            except FileNotFoundError:
+                rows.append(f"{evidence_path.name}:missing")
+        return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+
+    def _next_due_at(self, generated_at: str) -> str:
+        interval = max(5, int(os.environ.get("QG_AUTOMATION_INTERVAL_SECONDS", "300")))
+        generated = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        return (generated + timedelta(seconds=interval)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     def _policy_file(self) -> Optional[Dict[str, Any]]:
         return self._read_json("adaptive", "QuantGod_USDJPYAutoExecutionPolicy.json")
 
@@ -163,6 +188,47 @@ class AutomationChainRunner:
             },
         }
 
+    def _history_production_readiness(self) -> Dict[str, Any]:
+        path = self.runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json"
+        if not path.exists():
+            return {
+                "ready": False,
+                "status": "MISSING",
+                "freshness": "MISSING",
+                "ageSeconds": None,
+                "maxAgeSeconds": 7200,
+            }
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            status = str(payload.get("productionStatus") or payload.get("status") or "UNKNOWN").upper()
+            max_age_seconds = max(60, int(os.environ.get("QG_HISTORY_STATUS_FRESH_SECONDS", "7200")))
+            age_seconds = max(0.0, time.time() - path.stat().st_mtime)
+            fresh = age_seconds <= max_age_seconds
+            history_target_satisfied = payload.get("historyTargetSatisfied")
+            freshness_ok = payload.get("freshnessOk")
+            explicit_failure = history_target_satisfied is False or freshness_ok is False
+            ready = fresh and status in {"PASS", "READY", "OK", "FRESH"} and not explicit_failure
+            return {
+                "ready": ready,
+                "status": status,
+                "freshness": "FRESH" if fresh else "STALE",
+                "ageSeconds": age_seconds,
+                "maxAgeSeconds": max_age_seconds,
+                "historyTargetSatisfied": history_target_satisfied,
+                "freshnessOk": freshness_ok,
+                "filePath": str(path),
+            }
+        except Exception as exc:
+            return {
+                "ready": False,
+                "status": "INVALID",
+                "freshness": "INVALID",
+                "ageSeconds": None,
+                "maxAgeSeconds": 7200,
+                "error": str(exc),
+                "filePath": str(path),
+            }
+
     def _dashboard_snapshot_covers_symbol(self, symbol: str) -> bool:
         path = self.runtime_dir / "QuantGod_Dashboard.json"
         if not path.exists():
@@ -197,7 +263,7 @@ class AutomationChainRunner:
             (self.runtime_dir / "adaptive" / "QuantGod_EntryTriggerPlan.json", "缺少 P3-9 入场触发计划"),
             (self.runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json", "缺少 USDJPY 策略政策"),
             (self.runtime_dir / "adaptive" / "QuantGod_USDJPYEADryRunDecision.json", "缺少 USDJPY EA 干跑决策"),
-            (self.runtime_dir / "live" / "QuantGod_USDJPYLiveLoopStatus.json", "缺少 USDJPY 实盘恢复闭环状态"),
+            (self.runtime_dir / "live" / "QuantGod_USDJPYLiveLoopStatus.json", "缺少 USDJPY Shadow advisory 闭环状态"),
         ]
         missing = [label for path, label in checks if not path.exists()]
         for symbol in self.symbols:
@@ -274,10 +340,10 @@ class AutomationChainRunner:
             return "BLOCKED_MISSING_EVIDENCE", "阻断：USDJPY 证据不完整"
         live_state = str((live_loop or {}).get("state") or "")
         live_state_zh = str((live_loop or {}).get("stateZh") or "")
-        if live_state == "READY_FOR_EXISTING_EA":
-            return "READY_FOR_EXISTING_EA", live_state_zh or "RSI 买入路线已恢复，等待 EA 自身信号"
+        if live_state == "SHADOW_ADVISORY_READY":
+            return "SHADOW_ADVISORY_READY", live_state_zh or "Shadow advisory 已就绪"
         if live_state == "POLICY_READY_PRESET_BLOCKED":
-            return "POLICY_READY_PRESET_BLOCKED", live_state_zh or "政策已就绪，但实盘 preset 尚未完全恢复"
+            return "POLICY_READY_PRESET_BLOCKED", live_state_zh or "政策已就绪，但 Shadow/ReadOnly preset 未通过"
         if live_state == "EVIDENCE_MISSING":
             return "BLOCKED_MISSING_EVIDENCE", live_state_zh or "证据链不完整，EA 不应自动入场"
         if live_state == "POLICY_BLOCKED":
@@ -355,6 +421,20 @@ class AutomationChainRunner:
         runtime = str(self.runtime_dir)
         symbols = self._symbols_arg()
         actions: List[Dict[str, Any]] = []
+        try:
+            ga_generation = int(float(ga_factory_summary.get("currentGeneration") or 0))
+        except (TypeError, ValueError):
+            ga_generation = 0
+        ga_elite_count = ga_factory_summary.get("eliteCount")
+        ga_no_elite_stop_generation = max(1, int(os.environ.get("QG_GA_NO_ELITE_STOP_GENERATION", "50")))
+        history_readiness = self._history_production_readiness()
+        ga_progression_paused = (
+            ga_factory_summary.get("available")
+            and (
+                not history_readiness.get("ready")
+                or (ga_elite_count == 0 and ga_generation >= ga_no_elite_stop_generation)
+            )
+        )
 
         if "market_data_ready" in failed_gap_set:
             actions.append(self._safe_iteration_action(
@@ -404,7 +484,7 @@ class AutomationChainRunner:
                     "生成当前信号方向影子策略种子",
                     28,
                     "EA 实时 RSI 已给出 SELL，但 SELL 侧因 live loss review 被降级，不能直接开闸，需要先为当前信号方向补齐影子/回测证据。",
-                    "用 Strategy JSON GA Factory 生成 USDJPY SHORT 影子/回测种子，验证方向一致性、动态止盈止损、样本质量和 live loss review 恢复条件；不改变实盘 preset，不写订单。",
+                    "用 Strategy JSON GA Factory 生成 USDJPY SHORT 影子/回测种子，验证方向一致性、动态止盈止损与样本质量；不改变 tracked preset，不写订单。",
                     [
                         [
                             self.python_bin,
@@ -436,7 +516,7 @@ class AutomationChainRunner:
                             "intent-plan",
                             "--write",
                             "--prompt",
-                            "USDJPY RSI_Reversal LONG 低风险影子策略，目标先证明本 lane 正收益，并与 BTC/crypto 合计达到 50 USD 后仍保持非负期望；信号 quorum 不足时减少追单，优先等待确认，回撤扩大就停手。",
+                            "USDJPY RSI_Reversal LONG 低风险影子策略，目标先证明本 lane 正收益并保持非负期望；信号 quorum 不足时减少追单，优先等待确认，回撤扩大就停手。",
                         ],
                         [self.python_bin, self._script("run_strategy_ga_factory.py"), "--runtime-dir", runtime, "build", "--write"],
                     ],
@@ -451,12 +531,16 @@ class AutomationChainRunner:
                 "刷新 Strategy/Replay/EA parity 证据",
                 32,
                 "GA 候选晋级需要最新 Strategy JSON、Python replay 和 MQL5 EA parity 证据；旧 parity 会把高分候选错误归类到缺证据 blocker。",
-                "在推进下一代 GA 前刷新 P4-2 parity，只更新审计证据，不改变实盘 preset，不写订单。",
+                "在推进下一代 GA 前刷新 P4-2 parity，只更新审计证据，不改变 tracked preset，不写订单。",
                 [[self.python_bin, self._script("run_strategy_parity.py"), "--runtime-dir", runtime, "build", "--write"]],
                 ["parity/QuantGod_StrategyParityReport.json", "evidence_os/QuantGod_StrategyParityReport.json", "promotionGate.status"],
             ))
 
-        if ga_factory_summary.get("available") and str(state or "").startswith("BLOCKED"):
+        if (
+            ga_factory_summary.get("available")
+            and str(state or "").startswith("BLOCKED")
+            and not ga_progression_paused
+        ):
             actions.append(self._safe_iteration_action(
                 "advance_ga_shadow_generation",
                 "推进 GA 影子下一代",
@@ -527,6 +611,21 @@ class AutomationChainRunner:
             "standardCount": policy_summary.get("standardCount", 0),
             "opportunityCount": policy_summary.get("opportunityCount", 0),
             "gaFactorySummary": ga_factory_summary,
+            "gaProgression": {
+                "paused": bool(ga_progression_paused),
+                "reasonCode": (
+                    "HISTORY_NOT_READY"
+                    if ga_factory_summary.get("available") and not history_readiness.get("ready")
+                    else "NO_ELITE_GENERATION_LIMIT"
+                    if ga_progression_paused
+                    else "ELIGIBLE_FOR_SHADOW_REVIEW"
+                ),
+                "currentGeneration": ga_generation,
+                "eliteCount": ga_elite_count,
+                "stopGeneration": ga_no_elite_stop_generation,
+                "requiresNewDataOrHypothesis": bool(ga_progression_paused),
+            },
+            "dataReadiness": {"historyProduction": history_readiness},
             "safety": {
                 "advisoryOnly": True,
                 "simulationOrShadowOnly": True,
@@ -653,8 +752,7 @@ class AutomationChainRunner:
         validate_safe_payload(payload)
         if write:
             target = self.runtime_dir / "automation" / "QuantGod_SafeIterationCycleLatest.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+            atomic_write_json(target, payload)
         return payload
 
     def _loop_measure(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -760,8 +858,7 @@ class AutomationChainRunner:
         validate_safe_payload(payload)
         if write:
             target = self.runtime_dir / "automation" / "QuantGod_SafeIterationLoopLatest.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+            atomic_write_json(target, payload)
         return payload
 
     def build_status(self) -> Dict[str, Any]:
@@ -774,6 +871,9 @@ class AutomationChainRunner:
 
     def run_once(self, send: bool = False, write: bool = True) -> Dict[str, Any]:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        cycle_id = f"cycle-{uuid.uuid4().hex}"
+        started_at = now_iso()
+        input_fingerprint = self._input_fingerprint()
         steps = [self._run_step(step) for step in self.build_steps(send=send)]
         missing = self._collect_missing_evidence()
         policy = self._policy_file()
@@ -793,9 +893,24 @@ class AutomationChainRunner:
         state, state_zh = self._status_from_live_loop(live_loop, policy_summary, failed_required, missing)
         top_level_blocked_reasons = self._top_level_blocked_reasons(state, blocked_reasons)
         safe_iteration_plan = self._safe_iteration_plan(entry_latency, live_loop, policy_summary, ga_factory_summary, state)
+        generated_at = now_iso()
+        run_status = "FAILED" if failed_required else "COMPLETED"
         report = {
             "schema": "quantgod.automation_chain.v1",
-            "generatedAt": now_iso(),
+            "cycleId": cycle_id,
+            "runStatus": run_status,
+            "startedAt": started_at,
+            "completedAt": generated_at,
+            "generatedAt": generated_at,
+            "heartbeatAt": generated_at,
+            "lastSuccessAt": generated_at if run_status == "COMPLETED" else None,
+            "nextDueAt": self._next_due_at(generated_at),
+            "retryCount": 0,
+            "currentStep": "completed" if run_status == "COMPLETED" else "failed",
+            "stepCount": len(steps),
+            "requiredStepCount": sum(1 for step in steps if step.get("required")),
+            "requiredFailedCount": len(failed_required),
+            "inputFingerprint": input_fingerprint,
             "runtimeDir": str(self.runtime_dir),
             "symbols": self.symbols,
             "singleSourceOfTruth": "USDJPY_LIVE_LOOP",
@@ -814,7 +929,7 @@ class AutomationChainRunner:
             "blockedReasons": [x for x in top_level_blocked_reasons if x],
             "shadowBlockedReasons": [x for x in blocked_reasons if x],
             "policySummary": policy_summary,
-            "topLiveEligiblePolicy": (live_loop or {}).get("topLiveEligiblePolicy") or (policy or {}).get("topLiveEligiblePolicy"),
+            "topAdvisoryPolicy": (live_loop or {}).get("topShadowPolicy") or (policy or {}).get("topShadowPolicy") or (policy or {}).get("topPolicy"),
             "topShadowPolicy": (live_loop or {}).get("topShadowPolicy") or (policy or {}).get("topShadowPolicy"),
             "dryRunDecision": dry_run,
             "liveLoopStatus": live_loop,
@@ -828,6 +943,9 @@ class AutomationChainRunner:
             "blockedCount": policy_summary["blockedCount"],
             "safety": default_safety(),
         }
+        report["outputFingerprint"] = hashlib.sha256(
+            json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         validate_safe_payload(report)
         if write:
             self.write_report(report)
@@ -836,9 +954,8 @@ class AutomationChainRunner:
     def write_report(self, report: Dict[str, Any]) -> None:
         target_dir = latest_path(self.runtime_dir).parent
         target_dir.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
-        latest_path(self.runtime_dir).write_text(text, encoding="utf-8")
-        run_path(self.runtime_dir).write_text(text, encoding="utf-8")
+        atomic_write_json(latest_path(self.runtime_dir), report)
+        atomic_write_json(run_path(self.runtime_dir), report)
         ledger = ledger_path(self.runtime_dir)
         exists = ledger.exists()
         with ledger.open("a", encoding="utf-8", newline="") as fh:

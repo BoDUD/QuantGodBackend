@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -23,6 +24,7 @@ from .schema import (
     AGENT_VERSION,
     FOCUS_SYMBOL,
     SAFETY_BOUNDARY,
+    atomic_write_json,
     backtest_cache_path,
     equity_path,
     history_sync_report_path,
@@ -163,7 +165,7 @@ def run_backtest(
 def write_outputs(runtime_dir: Path, report: Dict[str, Any], trades: List[Dict[str, Any]], equity: List[float]) -> None:
     root = runtime_dir / "backtest"
     root.mkdir(parents=True, exist_ok=True)
-    report_path(runtime_dir).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(report_path(runtime_dir), report)
 
     trade_fields = [
         "tradeId",
@@ -188,17 +190,16 @@ def write_outputs(runtime_dir: Path, report: Dict[str, Any], trades: List[Dict[s
         "newsLotMultiplier",
         "newsReasonZh",
     ]
-    with trades_path(runtime_dir).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=trade_fields)
-        writer.writeheader()
-        for row in trades:
-            writer.writerow({field: row.get(field, "") for field in trade_fields})
-
-    with equity_path(runtime_dir).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["index", "equityR"])
-        writer.writeheader()
-        for index, value in enumerate(equity, start=1):
-            writer.writerow({"index": index, "equityR": value})
+    _atomic_write_csv(
+        trades_path(runtime_dir),
+        trade_fields,
+        ({field: row.get(field, "") for field in trade_fields} for row in trades),
+    )
+    _atomic_write_csv(
+        equity_path(runtime_dir),
+        ["index", "equityR"],
+        ({"index": index, "equityR": value} for index, value in enumerate(equity, start=1)),
+    )
     with connect(runtime_dir) as conn:
         write_strategy_run(conn, report)
 
@@ -340,7 +341,22 @@ def _put_cached_backtest(runtime_dir: Path, cache_key: str, report: Dict[str, An
         "reasonZh": "Strategy JSON 回测缓存按策略指纹、历史覆盖、成本模型和历史新闻证据失效。",
         "safety": dict(SAFETY_BOUNDARY),
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(path, payload)
+
+
+def _atomic_write_csv(path: Path, fieldnames: List[str], rows: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _coverage_matrix_skipped(reason: str) -> Dict[str, Any]:
@@ -413,7 +429,7 @@ def _multi_strategy_coverage_matrix(bars_by_timeframe: Dict[str, List[Any]]) -> 
             "tradeRouteCount": len(trade_routes),
             "parityVectorRouteCount": sum(1 for row in rows if row.get("parityVectorPresent")),
         },
-        "reasonZh": "全部 USDJPY Strategy JSON 策略族已进入多策略回测覆盖矩阵；通过 shadow→replay→walk-forward→硬风控后可无人审批进入受控 live scope。",
+        "reasonZh": "全部 USDJPY Strategy JSON 策略族已进入多策略回测覆盖矩阵；通过 shadow→replay→walk-forward→硬风控后也只能形成待人工审核的实盘证据。",
     }
 
 

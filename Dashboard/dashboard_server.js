@@ -8,13 +8,13 @@ const automationChainApiRoutes = require('./automation_chain_api_routes');
 const usdjpyStrategyLabApiRoutes = require('./usdjpy_strategy_lab_api_routes');
 const caseMemoryApiRoutes = require('./case_memory_api_routes');
 const strategyGAFactoryApiRoutes = require('./strategy_ga_factory_api_routes');
-const hfmCryptoCfdApiRoutes = require('./hfm_crypto_cfd_api_routes');
 const liveAutomationReadinessApiRoutes = require('./live_automation_readiness_api_routes');
 const profitTargetTrackerApiRoutes = require('./profit_target_tracker_api_routes');
 const gaFactoryApiRoutes = require('./ga_factory_api_routes');
 const telegramGatewayOpsApiRoutes = require('./telegram_gateway_ops_api_routes');
 const productionEvidenceValidationApiRoutes = require('./production_evidence_validation_api_routes');
 const stateApiRoutes = require('./state_api_routes');
+const healthApiRoutes = require('./health_api_routes');
 const { readJsonFileCached, stringifyJson } = require('./api_perf_cache');
 const os = require('os');
 const { spawn } = require('child_process');
@@ -43,7 +43,7 @@ loadEnvFile(path.join(repoRoot, '.env'));
 
 const host = process.env.QG_DASHBOARD_HOST || '127.0.0.1';
 const port = Number.parseInt(process.env.QG_DASHBOARD_PORT || '8080', 10) || 8080;
-const latestDashboardFreshMs = Number.parseInt(process.env.QG_LATEST_DASHBOARD_FRESH_MS || '1800000', 10) || 1800000;
+const latestDashboardFreshMs = Number.parseInt(process.env.QG_LATEST_DASHBOARD_FRESH_MS || '180000', 10) || 180000;
 const pythonBin = process.env.QG_PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
 const configuredRuntimeDir = process.env.QG_RUNTIME_DIR
   || process.env.QG_MT5_FILES_DIR
@@ -103,7 +103,6 @@ const defaultRuntimeDir = resolveRuntimeDir();
 const mt5ReadonlyBridgeScript = path.join(repoRoot, 'tools', 'mt5_readonly_bridge.py');
 const mt5SymbolRegistryScript = path.join(repoRoot, 'tools', 'mt5_symbol_registry.py');
 const mt5BackendBacktestScript = path.join(repoRoot, 'tools', 'run_mt5_backend_backtest_loop.py');
-const mt5TradingClientScript = path.join(repoRoot, 'tools', 'mt5_trading_client.py');
 const mt5PendingWorkerScript = path.join(repoRoot, 'tools', 'mt5_pending_order_worker.py');
 const mt5PlatformStoreScript = path.join(repoRoot, 'tools', 'mt5_platform_store.py');
 const mt5AdaptiveControlScript = path.join(repoRoot, 'tools', 'mt5_adaptive_control_executor.py');
@@ -111,7 +110,6 @@ const paramLabAutoTesterScript = path.join(repoRoot, 'tools', 'run_param_lab_aut
 const dailyReviewScript = path.join(repoRoot, 'tools', 'build_daily_review.py');
 const mt5ReadonlyEndpoints = new Set(['status', 'account', 'positions', 'orders', 'symbols', 'quote', 'snapshot']);
 const mt5SymbolRegistryEndpoints = new Set(['registry', 'resolve', 'symbols']);
-const mt5TradingEndpoints = new Set(['status', 'profiles', 'save-profile', 'login', 'order', 'close', 'cancel']);
 const mt5PlatformEndpoints = new Set([
   'status',
   'operator',
@@ -214,6 +212,19 @@ function corsPreflightHeadersFor(req) {
 }
 
 const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const SECURITY_HEADERS = Object.freeze({
+  'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+});
+
+function applySecurityHeaders(res) {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    res.setHeader(name, value);
+  }
+}
 
 function isCsrfSafe(req) {
   if (CSRF_SAFE_METHODS.has((req.method || 'GET').toUpperCase())) {
@@ -248,12 +259,72 @@ function dashboardFreshnessRecoverySteps() {
   ];
 }
 
-function latestDashboardFreshness(stat, sourceFile = '') {
-  const ageMs = Math.max(0, Date.now() - Number(stat?.mtimeMs || 0));
+function parseLocalDashboardTimeMs(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})[.-](\d{2})[.-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (match) {
+    const parsed = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6]),
+    ).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function latestDashboardWriterEvidence(stat, sourceFile = '', payload = {}) {
+  const candidates = [];
+  if (Number.isFinite(Number(stat?.mtimeMs))) {
+    candidates.push({ source: 'file_mtime', timeMs: Number(stat.mtimeMs) });
+  }
+  const dashboardTimeMs = parseLocalDashboardTimeMs(payload?.timestamp);
+  if (dashboardTimeMs !== null) {
+    candidates.push({ source: 'dashboard_timestamp', timeMs: dashboardTimeMs });
+  }
+  const heartbeatFile = sourceFile
+    ? path.join(path.dirname(sourceFile), 'QuantGod_MT5_TimerHeartbeat.txt')
+    : '';
+  let heartbeatMtimeIso = '';
+  if (heartbeatFile && fs.existsSync(heartbeatFile)) {
+    try {
+      const heartbeatStat = fs.statSync(heartbeatFile);
+      const heartbeatText = fs.readFileSync(heartbeatFile, 'utf8');
+      const heartbeatLocalTime = heartbeatText.match(/^localTime=(.+?)\s*$/m)?.[1]?.trim() || '';
+      const heartbeatTimeMs = parseLocalDashboardTimeMs(heartbeatLocalTime);
+      candidates.push({ source: 'heartbeat_mtime', timeMs: heartbeatStat.mtimeMs });
+      if (heartbeatTimeMs !== null) {
+        candidates.push({ source: 'heartbeat_local_time', timeMs: heartbeatTimeMs });
+      }
+      heartbeatMtimeIso = heartbeatStat.mtime.toISOString();
+    } catch {
+      // The dashboard timestamp and mtime remain valid compatibility evidence.
+    }
+  }
+  const oldest = candidates.reduce(
+    (current, candidate) => (!current || candidate.timeMs < current.timeMs ? candidate : current),
+    null,
+  );
+  return {
+    effectiveTimeMs: oldest?.timeMs ?? 0,
+    oldestEvidenceSource: oldest?.source || '',
+    evidenceSources: candidates.map((candidate) => candidate.source),
+    dashboardTimestamp: String(payload?.timestamp || ''),
+    heartbeatMtimeIso,
+  };
+}
+
+function latestDashboardFreshness(stat, sourceFile = '', payload = {}) {
+  const writerEvidence = latestDashboardWriterEvidence(stat, sourceFile, payload);
+  const ageMs = Math.max(0, Date.now() - Number(writerEvidence.effectiveTimeMs || 0));
   const fresh = ageMs <= latestDashboardFreshMs;
   const checkedAtIso = new Date().toISOString();
   return {
-    mode: 'LATEST_DASHBOARD_MTIME_WATCH',
+    mode: 'LATEST_DASHBOARD_WRITER_EVIDENCE_WATCH',
     status: fresh ? 'FRESH_DASHBOARD_SNAPSHOT' : 'STALE_DASHBOARD_SNAPSHOT',
     statusZh: fresh ? 'MT5 dashboard 快照新鲜' : 'MT5 dashboard 快照已过期',
     checkedAtIso,
@@ -265,6 +336,11 @@ function latestDashboardFreshness(stat, sourceFile = '') {
     maxAgeSeconds: Math.round(latestDashboardFreshMs / 100) / 10,
     sourceFile,
     mtimeIso: stat?.mtime ? stat.mtime.toISOString() : '',
+    freshnessBasis: 'oldest_writer_evidence',
+    oldestEvidenceSource: writerEvidence.oldestEvidenceSource,
+    evidenceSources: writerEvidence.evidenceSources,
+    dashboardTimestamp: writerEvidence.dashboardTimestamp,
+    heartbeatMtimeIso: writerEvidence.heartbeatMtimeIso,
     blockers: fresh ? [] : ['live_dashboard_snapshot_stale'],
     nextActionZh: fresh
       ? '继续读取最新 MT5 dashboard。'
@@ -736,6 +812,7 @@ function buildMt5ReadonlyArgs(endpoint, parsedUrl) {
 }
 
 function secondaryMt5FilesDir() {
+  if (!secondaryMt5Enabled()) return '';
   const candidates = [
     process.env.QG_MT5_SECONDARY_FILES_DIR,
     process.env.QG_MT5_SECONDARY_ROOT
@@ -764,6 +841,12 @@ function secondaryMt5FilesDir() {
     )
   ].filter(Boolean);
   return candidates.find((candidate) => fs.existsSync(candidate)) || '';
+}
+
+function secondaryMt5Enabled() {
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.QG_MT5_SECONDARY_ENABLED || '').trim().toLowerCase()
+  );
 }
 
 function secondaryMt5RootDir() {
@@ -804,6 +887,81 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
   }
   const normalizedEndpoint = endpoint;
   const scope = options.scope === 'secondary' ? 'secondary' : 'primary';
+  if (scope === 'secondary' && !secondaryMt5Enabled()) {
+    const optionalPayload = {
+      ok: true,
+      status: 'DISABLED',
+      endpoint: normalizedEndpoint,
+      scope,
+      optional: true,
+      enabled: false,
+      snapshotFresh: true,
+      account: null,
+      runtime: {},
+      terminal: {
+        connected: false,
+        tradeAllowed: false,
+        dllsAllowed: false,
+        hostProcessStatus: 'DISABLED',
+        hostProcessDetected: false,
+        targetHostProcessDetected: false
+      },
+      hostProcess: {
+        status: 'DISABLED',
+        terminalProcessDetected: false,
+        targetProcessDetected: false,
+        matchingProcessCount: 0,
+        matchedTargetProcessCount: 0,
+        scanner: 'disabled'
+      },
+      positions: { count: 0, items: [], optional: true, enabled: false },
+      orders: { count: 0, items: [], optional: true, enabled: false },
+      symbols: { count: 0, items: [], optional: true, enabled: false },
+      _freshness: {
+        mode: 'MT5_OPTIONAL_SECONDARY_LANE',
+        status: 'DISABLED',
+        statusLabel: 'Optional secondary MT5 lane disabled',
+        statusZh: '可选第二 MT5 账号未启用',
+        fresh: true,
+        stale: false,
+        unconfirmed: false,
+        missing: false,
+        optional: true,
+        enabled: false,
+        ageSeconds: null,
+        maxAgeSeconds: null,
+        blockers: [],
+        nextAction: 'Set QG_MT5_SECONDARY_ENABLED=1 only after the secondary account is valid and its read-only EA writer is ready.',
+        nextActionZh: '第二账号为可选车道；账号重新有效并完成只读 EA 配置后，再显式启用。',
+        orderSendAllowed: false,
+        mt5OrderSendAllowed: false,
+        brokerCallsMade: false,
+        mutatesMt5: false
+      },
+      safety: {
+        readOnly: true,
+        orderSendAllowed: false,
+        closeAllowed: false,
+        cancelAllowed: false,
+        credentialStorageAllowed: false,
+        livePresetMutationAllowed: false,
+        mutatesMt5: false
+      },
+      _api: {
+        service: 'quantgod_dashboard_mt5_readonly_bridge',
+        endpoint: `/api/mt5-readonly-secondary/${normalizedEndpoint}`,
+        readOnly: true,
+        optional: true,
+        enabled: false,
+        orderSendAllowed: false,
+        closeAllowed: false,
+        cancelAllowed: false,
+        mutatesMt5: false
+      }
+    };
+    sendJson(res, 200, optionalPayload);
+    return;
+  }
   const extraEnv = mt5ReadonlyEnv(scope);
   if (extraEnv === null) {
     sendJson(res, 200, {
@@ -1086,9 +1244,9 @@ function buildParamLabAutoTesterArgs(options = {}) {
     '--max-tasks',
     String(maxTasks),
     '--login',
-    String(process.env.QG_MT5_LOGIN || process.env.QG_HFM_LOGIN || '186054398'),
+    String(process.env.QG_MT5_LOGIN || process.env.QG_HFM_LOGIN || '90000001'),
     '--server',
-    String(process.env.QG_MT5_SERVER || process.env.QG_HFM_SERVER || 'HFMarketsGlobal-Live12'),
+    String(process.env.QG_MT5_SERVER || process.env.QG_HFM_SERVER || 'SyntheticBroker-Demo'),
     '--from-date',
     dailyBounds.fromDate,
     '--to-date',
@@ -1354,112 +1512,6 @@ async function handleMt5BackendBacktest(req, res, forceRun = false) {
       mutatesMt5: false
     }
   });
-}
-
-function mt5TradingEndpointFromPath(pathPart) {
-  const base = pathPart.replace(/^\/api\/mt5-trading\/?/, '').replace(/^\/api\/mt5\/?/, '');
-  if (!base || base === 'status') return 'status';
-  if (base === 'profile') return 'save-profile';
-  if (base === 'account-profiles') return 'profiles';
-  const first = base.split('/').filter(Boolean)[0] || 'status';
-  return first === 'profile' ? 'save-profile' : first;
-}
-
-function buildMt5TradingArgs(endpoint) {
-  return ['--endpoint', endpoint, '--runtime-dir', defaultRuntimeDir];
-}
-
-async function handleMt5Trading(req, res, endpoint, extraPayload = {}) {
-  const normalized = endpoint === 'profile' ? 'save-profile' : endpoint;
-  if (!mt5TradingEndpoints.has(normalized)) {
-    sendJson(res, 404, {
-      ok: false,
-      status: 'NOT_FOUND',
-      endpoint: normalized,
-      error: 'unsupported_mt5_trading_endpoint',
-      supportedEndpoints: Array.from(mt5TradingEndpoints).sort(),
-      safety: {
-        readOnly: false,
-        dryRun: true,
-        orderSendAllowed: false,
-        closeAllowed: false,
-        cancelAllowed: false,
-        credentialStorageAllowed: false,
-        livePresetMutationAllowed: false,
-        auditLedgerRequired: true,
-        mutatesMt5: false
-      }
-    });
-    return;
-  }
-
-  try {
-    let payload = { ...extraPayload };
-    if (req.method === 'POST' || req.method === 'DELETE') {
-      const raw = await readRequestBody(req, 128 * 1024).catch(() => '');
-      payload = { ...safeJsonPayload(raw), ...payload };
-    }
-    const parsed = new URL(req.url || '/', `http://${host}:${port}`);
-    if (['1', 'true', 'yes'].includes(String(parsed.searchParams.get('dryRun') || '').toLowerCase())) {
-      payload.dryRun = true;
-    }
-    const result = ['status', 'profiles'].includes(normalized)
-      ? await runJsonPython(mt5TradingClientScript, buildMt5TradingArgs(normalized), 15000)
-      : await runJsonPythonPayload(mt5TradingClientScript, buildMt5TradingArgs(normalized), payload, 20000);
-    if (!result.ok) {
-      sendJson(res, 200, {
-        ok: false,
-        status: 'UNAVAILABLE',
-        endpoint: normalized,
-        error: result.stderr || result.reason || 'mt5_trading_bridge_failed',
-        detail: result,
-        safety: {
-          readOnly: false,
-          dryRun: true,
-          orderSendAllowed: false,
-          closeAllowed: false,
-          cancelAllowed: false,
-          credentialStorageAllowed: false,
-          livePresetMutationAllowed: false,
-          auditLedgerRequired: true,
-          mutatesMt5: false
-        }
-      });
-      return;
-    }
-    const body = result.payload && typeof result.payload === 'object' ? result.payload : {};
-    sendJson(res, 200, {
-      ...body,
-      _api: {
-        service: 'quantgod_dashboard_mt5_trading_bridge',
-        endpoint: `/api/mt5/${normalized}`,
-        script: mt5TradingClientScript,
-        readOnly: false,
-        guardedMutation: true,
-        auditLedgerRequired: true,
-        credentialStorageAllowed: false,
-        livePresetMutationAllowed: false
-      }
-    });
-  } catch (error) {
-    sendJson(res, 200, {
-      ok: false,
-      status: 'UNAVAILABLE',
-      endpoint: normalized,
-      error: error.message || String(error),
-      safety: {
-        readOnly: false,
-        dryRun: true,
-        orderSendAllowed: false,
-        closeAllowed: false,
-        cancelAllowed: false,
-        credentialStorageAllowed: false,
-        livePresetMutationAllowed: false,
-        auditLedgerRequired: true,
-        mutatesMt5: false
-      }
-    });
-  }
 }
 
 function buildMt5PendingWorkerArgs(parsedUrl, payloadPath = '') {
@@ -1862,6 +1914,9 @@ function sendStaticFile(target, res) {
 
 const server = http.createServer((req, res) => {
   const requestUrl = req.url || '/';
+  // Apply once at the request boundary so main routes, route modules, static
+  // files, preflight responses, and errors all inherit the same protections.
+  applySecurityHeaders(res);
 
   // Set CORS origin header early so it persists through writeHead in send/sendJson
   const origin = (req.headers.origin || '').replace(/\/+$/, '');
@@ -1886,6 +1941,13 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (healthApiRoutes.isHealthPath(requestUrl)) {
+    healthApiRoutes
+      .handle(req, res, { repoRoot, rootDir, defaultRuntimeDir })
+      .catch((error) => healthApiRoutes.sendError(res, 500, requestUrl, error));
+    return;
+  }
+
   if (usdjpyStrategyLabApiRoutes.isUSDJPYStrategyLabPath(requestUrl)) {
     usdjpyStrategyLabApiRoutes
       .handle(req, res, { repoRoot, rootDir, defaultRuntimeDir })
@@ -1902,12 +1964,6 @@ const server = http.createServer((req, res) => {
     strategyGAFactoryApiRoutes
       .handle(req, res, { repoRoot, rootDir, defaultRuntimeDir })
       .catch((error) => strategyGAFactoryApiRoutes.sendError(res, 500, requestUrl, error));
-    return;
-  }
-  if (hfmCryptoCfdApiRoutes.isHFMCryptoCfdPath(requestUrl)) {
-    hfmCryptoCfdApiRoutes
-      .handle(req, res, { repoRoot, rootDir, defaultRuntimeDir })
-      .catch((error) => hfmCryptoCfdApiRoutes.sendError(res, 500, requestUrl, error));
     return;
   }
   if (liveAutomationReadinessApiRoutes.isLiveAutomationReadinessPath(requestUrl)) {
@@ -1980,7 +2036,7 @@ const server = http.createServer((req, res) => {
       try {
         const { payload, stat } = readJsonFileCached(latestDashboard);
         const terminal = readMt5TerminalStatus();
-        const freshness = latestDashboardFreshness(stat, latestDashboard);
+        const freshness = latestDashboardFreshness(stat, latestDashboard, payload);
         const safePayload = withDashboardFreshnessOverlay(payload, freshness);
         sendJson(res, 200, withServiceMeta({
           ...safePayload,
@@ -2069,23 +2125,6 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && requestUrl.split('?')[0] === '/api/mt5-adaptive-control/run') {
     handleMt5AdaptiveControl(req, res, true);
-    return;
-  }
-  if ((req.method === 'GET' || req.method === 'POST') && (requestUrl.split('?')[0] === '/api/mt5-trading' || requestUrl.split('?')[0].startsWith('/api/mt5-trading/'))) {
-    const pathPart = requestUrl.split('?')[0];
-    const endpoint = pathPart === '/api/mt5-trading' ? 'status' : mt5TradingEndpointFromPath(pathPart);
-    handleMt5Trading(req, res, endpoint);
-    return;
-  }
-  if ((req.method === 'GET' || req.method === 'POST') && (requestUrl.split('?')[0] === '/api/mt5' || requestUrl.split('?')[0].startsWith('/api/mt5/'))) {
-    const pathPart = requestUrl.split('?')[0];
-    const endpoint = pathPart === '/api/mt5' ? 'status' : mt5TradingEndpointFromPath(pathPart);
-    handleMt5Trading(req, res, endpoint);
-    return;
-  }
-  if (req.method === 'DELETE' && requestUrl.split('?')[0].startsWith('/api/mt5/order/')) {
-    const ticket = path.basename(requestUrl.split('?')[0]);
-    handleMt5Trading(req, res, 'cancel', { ticket, orderTicket: ticket });
     return;
   }
   const vueTarget = safeResolveVue(req.url || '/');

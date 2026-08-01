@@ -17,27 +17,25 @@ def build_agent_state(
     runtime_dir: Path,
     *,
     write: bool = False,
-    hfm_crypto_runtime_dir: Path | str | None = None,
 ) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
-    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
     patch = build_config_patch(runtime_dir, write=write)
     decision = patch.get("sourceDecision") if isinstance(patch.get("sourceDecision"), dict) else {}
-    lifecycle = build_autonomous_lifecycle(runtime_dir, write=write, hfm_crypto_runtime_dir=hfm_crypto_runtime)
+    lifecycle = build_autonomous_lifecycle(runtime_dir, write=write)
     payload: Dict[str, Any] = {
         "ok": True,
         "schema": SCHEMA_STATE,
         "generatedAtIso": utc_now_iso(),
         "symbol": FOCUS_SYMBOL,
         "runtimeDir": str(runtime_dir),
-        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
         "stage": patch.get("stage"),
         "executionStage": patch.get("executionStage") or patch.get("stage"),
         "stageZh": patch.get("stageZh"),
         "patchWritable": patch.get("patchWritable"),
-        "operatorApprovalRequired": False,
-        "unattendedLiveExpansionAllowed": True,
-        "liveScopeExpansionMode": "autonomous_governance_stage_gated",
+        "operatorApprovalRequired": True,
+        "unattendedLiveExpansionAllowed": False,
+        "liveExpansionAllowed": False,
+        "liveScopeExpansionMode": "operator_reviewed_future_lane",
         "liveMutationAllowed": False,
         "completedByAgent": True,
         "autoAppliedByAgent": bool(patch.get("autoAppliedByAgent")),
@@ -48,8 +46,9 @@ def build_agent_state(
             "executionStage": patch.get("executionStage") or patch.get("stage"),
             "patchWritable": patch.get("patchWritable"),
             "autoAppliedByAgent": bool(patch.get("autoAppliedByAgent")),
-            "operatorApprovalRequired": False,
-            "unattendedLiveExpansionAllowed": True,
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
             "liveMutationAllowed": False,
         },
         "promotionDecision": decision,
@@ -59,7 +58,7 @@ def build_agent_state(
         "lanes": lifecycle.get("lanes"),
         "eaReproducibility": lifecycle.get("eaReproducibility"),
         "requiresAutonomousGovernance": True,
-        "autoApplyAllowed": "stage_gated",
+        "autoApplyAllowed": "shadow_only",
         "safety": HARD_SAFETY,
     }
     if write:

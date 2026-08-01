@@ -9,3 +9,14 @@ ignore = ["E501"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    "node_modules",
+    "runtime",
+    "Dashboard/vue-dist",
+    "Dashboard/vue-dist.previous-*",
+]

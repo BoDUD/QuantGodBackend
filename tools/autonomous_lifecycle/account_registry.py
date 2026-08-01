@@ -31,17 +31,20 @@ def _cent_lane() -> Dict[str, Any]:
         "lane": "CENT_EXPLORATION",
         "laneZh": "美分账户学习车道",
         "role": "exploration",
-        "purposeZh": "收集 USDJPY RSI_Reversal LONG 的真实小仓执行样本，允许快升快降级。",
+        "purposeZh": "收集 USDJPY RSI_Reversal LONG 的 Shadow/Paper 执行证据。",
         "allowedEntryModes": ["OPPORTUNITY_ENTRY", "STANDARD_ENTRY"],
-        "allowedStages": ["CENT_PAPER", "CENT_MICRO_LIVE", "CENT_LIMITED", "ROLLBACK"],
-        "defaultStage": _env_text("QG_CENT_DEFAULT_STAGE", "CENT_MICRO_LIVE"),
+        "allowedStages": ["CENT_PAPER", "ROLLBACK"],
+        "defaultStage": "CENT_PAPER",
+        "liveStages": [],
         "maxLot": max_lot,
         "riskPerTradeR": _env_float("QG_CENT_RISK_PER_TRADE_R", 0.25),
+        "stageLotMode": "PAPER_NOTIONAL_ONLY",
         "stageLot": {
-            "CENT_MICRO_LIVE": min(_env_float("QG_CENT_MICRO_LIVE_LOT", 0.05), max_lot),
+            "CENT_PAPER": 0.0,
+            "CENT_MICRO_LIVE": 0.0,
             "OPPORTUNITY_ENTRY": min(_env_float("QG_CENT_OPPORTUNITY_LOT", 0.10), max_lot),
             "STANDARD_ENTRY": min(_env_float("QG_CENT_STANDARD_LOT", 0.35), max_lot),
-            "CENT_LIMITED": max_lot,
+            "CENT_LIMITED": 0.0,
         },
         "sampleGoals": {
             "minCentLiveTradesForUsdMirror": _env_int("QG_USD_PROMOTION_MIN_CENT_TRADES", 20),
@@ -52,8 +55,6 @@ def _cent_lane() -> Dict[str, Any]:
 
 def _usd_lane() -> Dict[str, Any]:
     max_lot = min(max(_env_float("QG_USD_MAX_LOT", 0.10), 0.0), 1.0)
-    micro_lot = min(_env_float("QG_USD_MICRO_LIVE_LOT", 0.01), max_lot)
-    limited_lot = min(_env_float("QG_USD_LIMITED_LOT", 0.03), max_lot)
     return {
         "accountAlias": _env_text("QG_USD_ACCOUNT_ALIAS", "hfm_usd"),
         "accountMode": "standard_usd",
@@ -64,16 +65,16 @@ def _usd_lane() -> Dict[str, Any]:
         "purposeZh": "严格部署已被美分账户真实样本验证过的高质量结构；不参与探索。",
         "allowedEntryModes": ["STANDARD_ENTRY"],
         "paperMirrorEntryModes": ["OPPORTUNITY_ENTRY", "STANDARD_ENTRY"],
-        "allowedStages": ["USD_PAPER_MIRROR", "USD_MICRO_LIVE", "USD_LIMITED", "PAUSED", "ROLLBACK"],
-        "defaultStage": _env_text("QG_USD_DEFAULT_STAGE", "USD_PAPER_MIRROR"),
-        "liveStages": ["USD_MICRO_LIVE", "USD_LIMITED"],
+        "allowedStages": ["USD_PAPER_MIRROR", "PAUSED", "ROLLBACK"],
+        "defaultStage": "USD_PAPER_MIRROR",
+        "liveStages": [],
         "maxLot": max_lot,
         "riskPerTradeR": _env_float("QG_USD_RISK_PER_TRADE_R", 0.10),
         "stageLot": {
             "USD_PAPER_MIRROR": 0.0,
-            "USD_MICRO_LIVE": micro_lot,
-            "STANDARD_ENTRY": min(_env_float("QG_USD_STANDARD_LOT", 0.03), max_lot),
-            "USD_LIMITED": limited_lot,
+            "USD_MICRO_LIVE": 0.0,
+            "STANDARD_ENTRY": 0.0,
+            "USD_LIMITED": 0.0,
         },
         "deploymentRules": {
             "standardEntryOnly": True,
@@ -85,7 +86,7 @@ def _usd_lane() -> Dict[str, Any]:
             "symbol": "USDJPYc",
             "strategy": "RSI_Reversal",
             "direction": "LONG",
-            "reasonZh": "美元账户可以实盘，但只做 STANDARD_ENTRY / NORMAL 点差 / 无新闻风险的小仓部署。",
+            "reasonZh": "美元账户当前只做 PAPER_MIRROR；证据达标也不产生实盘执行许可。",
         },
         "promotionGate": {
             "centLiveTradesMin": _env_int("QG_USD_PROMOTION_MIN_CENT_TRADES", 20),
@@ -129,8 +130,12 @@ def mt5_account_registry() -> Dict[str, Any]:
             ],
         },
         "safety": {
-            "externalMarketRemoved": True,
             "mt5Only": True,
+            "shadowOnly": True,
+            "readOnlyMode": True,
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
             "orderSendAllowed": False,
             "livePresetMutationAllowed": False,
         },

@@ -44,21 +44,19 @@ def load_live_preset(repo_root: Path) -> dict[str, Any]:
             "found": False,
             "path": str(path),
             "ready": False,
-            "reasons": ["未找到 HFM live preset，无法确认实盘 EA 恢复状态"],
+            "reasons": ["未找到 legacy preset，无法确认 Shadow/ReadOnly 兼容状态"],
         }
     checks = {
         "watchlistUsdJpy": values.get("Watchlist") in {"USDJPY", "USDJPYc"},
-        "shadowOff": not set_bool(values, "ShadowMode", True),
-        "readOnlyOff": not set_bool(values, "ReadOnlyMode", True),
-        "autoTradingOn": set_bool(values, "EnablePilotAutoTrading", False),
-        "rsiLiveOn": set_bool(values, "EnablePilotRsiH1Live", False),
+        "shadowOn": set_bool(values, "ShadowMode", False),
+        "readOnlyOn": set_bool(values, "ReadOnlyMode", False),
+        "autoTradingOff": not set_bool(values, "EnablePilotAutoTrading", True),
+        "rsiLiveOff": not set_bool(values, "EnablePilotRsiH1Live", True),
         "maLiveOff": not set_bool(values, "EnablePilotMA", False),
         "bbLiveOff": not set_bool(values, "EnablePilotBBH1Live", False),
         "macdLiveOff": not set_bool(values, "EnablePilotMacdH1Live", False),
         "srLiveOff": not set_bool(values, "EnablePilotSRM15Live", False),
         "nonRsiAuthOff": not set_bool(values, "EnableNonRsiLegacyLiveAuthorization", False),
-        "maxPositionsTwo": set_float(values, "PilotMaxTotalPositions", 1.0) >= 2.0,
-        "manualIgnored": not set_bool(values, "PilotBlockManualPerSymbol", True),
     }
     failed = [key for key, ok in checks.items() if not ok]
     return {
@@ -71,9 +69,7 @@ def load_live_preset(repo_root: Path) -> dict[str, Any]:
         "maxEaPositions": int(set_float(values, "PilotMaxTotalPositions", 1.0)),
         "pilotLotSize": set_float(values, "PilotLotSize", 0.01),
         "maxFloatingLossUSC": set_float(values, "PilotMaxFloatingLossUSC", 30.0),
-        "rsiBuyRoutePreserved": set_bool(values, "EnablePilotRsiH1Live", False),
-        "allowedLiveRoute": "RSI_Reversal BUY",
-        "shadowRoutes": ["MA_Cross", "BB_Triple", "MACD_Divergence", "SR_Breakout"],
-        "reasons": ["preset 已允许 USDJPY RSI 买入路线"] if not failed else [f"preset 检查未通过：{', '.join(failed)}"],
+        "rsiBuyRoutePreserved": False,
+        "shadowRoutes": ["RSI_Reversal", "MA_Cross", "BB_Triple", "MACD_Divergence", "SR_Breakout"],
+        "reasons": ["legacy preset 已锁定 Shadow/ReadOnly，所有 live 开关关闭"] if not failed else [f"preset 检查未通过：{', '.join(failed)}"],
     }
-

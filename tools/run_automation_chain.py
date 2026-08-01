@@ -45,7 +45,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_once(args: argparse.Namespace) -> int:
     report = build_runner(args).run_once(send=args.send, write=not args.no_write)
     print_json(report)
-    return 0
+    return 0 if report.get("runStatus") == "COMPLETED" else 2
 
 
 def cmd_safe_iteration_cycle(args: argparse.Namespace) -> int:

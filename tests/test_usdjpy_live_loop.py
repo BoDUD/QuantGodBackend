@@ -16,10 +16,10 @@ def write_ready_preset(repo: Path) -> None:
     preset.write_text(
         "\n".join([
             "Watchlist=USDJPY",
-            "ShadowMode=false",
-            "ReadOnlyMode=false",
-            "EnablePilotAutoTrading=true",
-            "EnablePilotRsiH1Live=true",
+            "ShadowMode=true",
+            "ReadOnlyMode=true",
+            "EnablePilotAutoTrading=false",
+            "EnablePilotRsiH1Live=false",
             "EnablePilotMA=false",
             "EnablePilotBBH1Live=false",
             "EnablePilotMacdH1Live=false",
@@ -34,7 +34,7 @@ def write_ready_preset(repo: Path) -> None:
 
 
 class USDJPYLiveLoopTests(unittest.TestCase):
-    def test_ready_sample_reports_existing_ea_route_without_tool_execution(self):
+    def test_ready_sample_reports_shadow_advisory_without_execution_lane(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
             runtime = Path(tmp) / "runtime"
@@ -46,8 +46,17 @@ class USDJPYLiveLoopTests(unittest.TestCase):
             self.assertTrue(payload["presetReady"])
             self.assertTrue(payload["policyReady"])
             self.assertFalse(payload["safety"]["orderSendAllowedByTool"])
-            self.assertTrue(payload["safety"]["existingEaOwnsExecution"])
-            self.assertEqual(payload["intent"]["allowedLiveRoute"], "RSI_Reversal BUY")
+            self.assertFalse(payload["safety"]["existingEaOwnsExecution"])
+            self.assertFalse(payload["safety"]["executionLaneExists"])
+            self.assertFalse(payload["intent"]["executionLaneExists"])
+            self.assertNotIn("allowedLiveRoute", payload["intent"])
+            self.assertNotIn("allowed", payload["intent"]["topPolicy"])
+            self.assertTrue(payload["intent"]["topPolicy"]["researchOnly"])
+            self.assertFalse(payload["intent"]["topPolicy"]["executionAllowed"])
+            self.assertFalse(payload["intent"]["topPolicy"]["executionLaneExists"])
+            self.assertTrue(payload["policy"]["compatibility"]["researchOnly"])
+            self.assertFalse(payload["policy"]["compatibility"]["executionAllowed"])
+            self.assertFalse(payload["dryRun"]["compatibility"]["executionLaneExists"])
             self.assertEqual(payload["intent"]["schemaVersion"], 1)
             self.assertTrue((runtime / "live" / "QuantGod_USDJPYLiveLoopStatus.json").exists())
             self.assertTrue((runtime / "live" / "QuantGod_USDJPYLiveIntent.json").exists())
@@ -76,9 +85,9 @@ class USDJPYLiveLoopTests(unittest.TestCase):
                     "timestamp": "2026.05.06 01:40:21",
                     "watchlist": "USDJPYc",
                     "runtime": {
-                        "tradeStatus": "READY",
-                        "executionEnabled": True,
-                        "readOnlyMode": False,
+                        "tradeStatus": "SHADOW",
+                        "executionEnabled": False,
+                        "readOnlyMode": True,
                         "tickAgeSeconds": 2,
                     },
                     "market": {"bid": 157.762, "ask": 157.788, "spread": 2.6},
@@ -166,11 +175,12 @@ class USDJPYLiveLoopTests(unittest.TestCase):
             sample_runtime(runtime, overwrite=True)
             build_live_loop(root, runtime, write=True)
             daily = json.loads((runtime / "live" / "QuantGod_USDJPYDailyAutopilot.json").read_text(encoding="utf-8"))
-            self.assertIn("RSI", daily["allowedLiveRoute"])
+            self.assertIn("Shadow/ReadOnly", daily["advisoryRoute"])
             self.assertIn("买入", daily["topDirectionZh"])
             self.assertFalse(daily["safety"]["orderSendAllowedByTool"])
+            self.assertFalse(daily["safety"]["executionLaneExists"])
 
-    def test_shadow_top_strategy_does_not_block_live_rsi_buy_route(self):
+    def test_shadow_top_strategy_becomes_advisory_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
             runtime = Path(tmp) / "runtime"
@@ -194,8 +204,9 @@ class USDJPYLiveLoopTests(unittest.TestCase):
             payload = build_live_loop(root, runtime, write=True)
             self.assertEqual(payload["state"], STATE_READY)
             self.assertEqual(payload["topShadowPolicy"]["strategy"], "MA_Cross")
-            self.assertEqual(payload["topLiveEligiblePolicy"]["strategy"], "RSI_Reversal")
-            self.assertEqual(payload["intent"]["strategy"], "RSI_Reversal")
+            self.assertNotIn("topLiveEligiblePolicy", payload)
+            self.assertEqual(payload["intent"]["strategy"], "MA_Cross")
+            self.assertFalse(payload["intent"]["existingEaOwnsExecution"])
 
 
 if __name__ == "__main__":

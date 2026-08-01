@@ -392,154 +392,97 @@ def main(argv=None) -> int:
     build = sub.add_parser("build")
     build.add_argument("--write", action="store_true")
     build.add_argument("--refresh-sources", action="store_true")
-    build.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    build.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    build.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     build.add_argument("--extra-bases-root", action="append", default=[])
     review = sub.add_parser("review-packet")
     review.add_argument("--write", action="store_true")
     review.add_argument("--refresh-sources", action="store_true")
-    review.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    review.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    review.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     review.add_argument("--extra-bases-root", action="append", default=[])
     approval = sub.add_parser("approval-draft")
     approval.add_argument("--write", action="store_true")
     approval.add_argument("--refresh-sources", action="store_true")
-    approval.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    approval.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    approval.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     approval.add_argument("--extra-bases-root", action="append", default=[])
     approval_evidence = sub.add_parser("approval-evidence")
     approval_evidence.add_argument("--write", action="store_true")
     approval_evidence.add_argument("--refresh-sources", action="store_true")
     approval_evidence.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    approval_evidence.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    approval_evidence.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    approval_evidence.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     approval_evidence.add_argument("--extra-bases-root", action="append", default=[])
     plan = sub.add_parser("dry-run-plan")
     plan.add_argument("--write", action="store_true")
     plan.add_argument("--refresh-sources", action="store_true")
-    plan.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    plan.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    plan.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     plan.add_argument("--extra-bases-root", action="append", default=[])
     execution_lane = sub.add_parser("execution-lane-spec")
     execution_lane.add_argument("--write", action="store_true")
     execution_lane.add_argument("--refresh-sources", action="store_true")
     execution_lane.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    execution_lane.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    execution_lane.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    execution_lane.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     execution_lane.add_argument("--extra-bases-root", action="append", default=[])
     replay = sub.add_parser("dry-run-replay")
     replay.add_argument("--write", action="store_true")
     replay.add_argument("--refresh-sources", action="store_true")
     replay.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    replay.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    replay.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    replay.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     replay.add_argument("--extra-bases-root", action="append", default=[])
     preflight = sub.add_parser("runtime-preflight")
     preflight.add_argument("--write", action="store_true")
     preflight.add_argument("--refresh-sources", action="store_true")
     preflight.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    preflight.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    preflight.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    preflight.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     preflight.add_argument("--extra-bases-root", action="append", default=[])
     order_contract = sub.add_parser("order-request-contract")
     order_contract.add_argument("--write", action="store_true")
     order_contract.add_argument("--refresh-sources", action="store_true")
     order_contract.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    order_contract.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    order_contract.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    order_contract.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     order_contract.add_argument("--extra-bases-root", action="append", default=[])
     pipeline = sub.add_parser("pipeline")
     pipeline.add_argument("--write", action="store_true")
     pipeline.add_argument("--refresh-sources", action="store_true")
     pipeline.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    pipeline.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    pipeline.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    pipeline.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     pipeline.add_argument("--extra-bases-root", action="append", default=[])
     adapter_review = sub.add_parser("adapter-review")
     adapter_review.add_argument("--write", action="store_true")
     adapter_review.add_argument("--refresh-sources", action="store_true")
     adapter_review.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    adapter_review.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    adapter_review.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    adapter_review.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     adapter_review.add_argument("--extra-bases-root", action="append", default=[])
     evidence_intake = sub.add_parser("evidence-intake")
     evidence_intake.add_argument("--write", action="store_true")
     evidence_intake.add_argument("--refresh-sources", action="store_true")
     evidence_intake.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    evidence_intake.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    evidence_intake.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    evidence_intake.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     evidence_intake.add_argument("--extra-bases-root", action="append", default=[])
     promotion_candidates = sub.add_parser("promotion-candidates")
     promotion_candidates.add_argument("--write", action="store_true")
     promotion_candidates.add_argument("--refresh-sources", action="store_true")
     promotion_candidates.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    promotion_candidates.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    promotion_candidates.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    promotion_candidates.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     promotion_candidates.add_argument("--extra-bases-root", action="append", default=[])
     promotion_controller = sub.add_parser("promotion-controller")
     promotion_controller.add_argument("--write", action="store_true")
     promotion_controller.add_argument("--refresh-sources", action="store_true")
     promotion_controller.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    promotion_controller.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    promotion_controller.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    promotion_controller.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     promotion_controller.add_argument("--extra-bases-root", action="append", default=[])
     adapter_sandbox = sub.add_parser("adapter-sandbox")
     adapter_sandbox.add_argument("--write", action="store_true")
     adapter_sandbox.add_argument("--refresh-sources", action="store_true")
     adapter_sandbox.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    adapter_sandbox.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    adapter_sandbox.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    adapter_sandbox.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     adapter_sandbox.add_argument("--extra-bases-root", action="append", default=[])
     adapter_validator = sub.add_parser("adapter-contract-validator")
     adapter_validator.add_argument("--write", action="store_true")
     adapter_validator.add_argument("--refresh-sources", action="store_true")
     adapter_validator.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     adapter_validator.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    adapter_validator.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    adapter_validator.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    adapter_validator.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     adapter_validator.add_argument("--extra-bases-root", action="append", default=[])
     orchestrator = sub.add_parser("orchestrator")
     orchestrator.add_argument("--write", action="store_true")
     orchestrator.add_argument("--refresh-sources", action="store_true")
     orchestrator.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     orchestrator.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    orchestrator.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    orchestrator.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    orchestrator.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     orchestrator.add_argument("--extra-bases-root", action="append", default=[])
     adapter_harness = sub.add_parser("adapter-harness")
     adapter_harness.add_argument("--write", action="store_true")
     adapter_harness.add_argument("--refresh-sources", action="store_true")
     adapter_harness.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     adapter_harness.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    adapter_harness.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    adapter_harness.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    adapter_harness.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     adapter_harness.add_argument("--extra-bases-root", action="append", default=[])
     live_pilot_activation = sub.add_parser("live-pilot-activation-review")
     live_pilot_activation.add_argument("--write", action="store_true")
     live_pilot_activation.add_argument("--refresh-sources", action="store_true")
     live_pilot_activation.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     live_pilot_activation.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    live_pilot_activation.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    live_pilot_activation.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    live_pilot_activation.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     live_pilot_activation.add_argument("--extra-bases-root", action="append", default=[])
     receipt_reconciliation = sub.add_parser("receipt-reconciliation-review")
     receipt_reconciliation.add_argument("--write", action="store_true")
@@ -547,9 +490,6 @@ def main(argv=None) -> int:
     receipt_reconciliation.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     receipt_reconciliation.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     receipt_reconciliation.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    receipt_reconciliation.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    receipt_reconciliation.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    receipt_reconciliation.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     receipt_reconciliation.add_argument("--extra-bases-root", action="append", default=[])
     ea_request_reader = sub.add_parser("ea-request-reader-review")
     ea_request_reader.add_argument("--write", action="store_true")
@@ -559,9 +499,6 @@ def main(argv=None) -> int:
     ea_request_reader.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     ea_request_reader.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     ea_request_reader.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    ea_request_reader.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    ea_request_reader.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    ea_request_reader.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     ea_request_reader.add_argument("--extra-bases-root", action="append", default=[])
     live_cutover = sub.add_parser("live-execution-cutover-review")
     live_cutover.add_argument("--write", action="store_true")
@@ -571,9 +508,6 @@ def main(argv=None) -> int:
     live_cutover.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     live_cutover.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     live_cutover.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    live_cutover.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    live_cutover.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    live_cutover.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     live_cutover.add_argument("--extra-bases-root", action="append", default=[])
     live_impl = sub.add_parser("live-execution-implementation-spec")
     live_impl.add_argument("--write", action="store_true")
@@ -583,9 +517,6 @@ def main(argv=None) -> int:
     live_impl.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     live_impl.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     live_impl.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    live_impl.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    live_impl.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    live_impl.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     live_impl.add_argument("--extra-bases-root", action="append", default=[])
     live_adapter = sub.add_parser("live-execution-adapter-write-review")
     live_adapter.add_argument("--write", action="store_true")
@@ -595,9 +526,6 @@ def main(argv=None) -> int:
     live_adapter.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     live_adapter.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     live_adapter.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    live_adapter.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    live_adapter.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    live_adapter.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     live_adapter.add_argument("--extra-bases-root", action="append", default=[])
     ea_consumption = sub.add_parser("ea-request-consumption-review")
     ea_consumption.add_argument("--write", action="store_true")
@@ -607,9 +535,6 @@ def main(argv=None) -> int:
     ea_consumption.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     ea_consumption.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     ea_consumption.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    ea_consumption.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    ea_consumption.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    ea_consumption.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     ea_consumption.add_argument("--extra-bases-root", action="append", default=[])
     broker_send = sub.add_parser("broker-order-send-review")
     broker_send.add_argument("--write", action="store_true")
@@ -619,9 +544,6 @@ def main(argv=None) -> int:
     broker_send.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     broker_send.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     broker_send.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    broker_send.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    broker_send.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    broker_send.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     broker_send.add_argument("--extra-bases-root", action="append", default=[])
     rollback = sub.add_parser("live-execution-rollback-review")
     rollback.add_argument("--write", action="store_true")
@@ -631,9 +553,6 @@ def main(argv=None) -> int:
     rollback.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     rollback.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     rollback.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    rollback.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    rollback.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    rollback.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     rollback.add_argument("--extra-bases-root", action="append", default=[])
     release_refresh = sub.add_parser("release-readiness-refresh")
     release_refresh.add_argument("--write", action="store_true")
@@ -643,9 +562,6 @@ def main(argv=None) -> int:
     release_refresh.add_argument("--receipt-json", default=os.environ.get("QG_RECEIPT_JSON", ""))
     release_refresh.add_argument("--request-json", default=os.environ.get("QG_ADAPTER_REQUEST_JSON", ""))
     release_refresh.add_argument("--operator-approval-json", default=os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""))
-    release_refresh.add_argument("--moss-backtest-json", default=os.environ.get("QG_MOSS_BACKTEST_JSON", ""))
-    release_refresh.add_argument("--hfm-simulation-profile-json", default=os.environ.get("QG_HFM_CRYPTO_SIMULATION_PROFILE_JSON", ""))
-    release_refresh.add_argument("--hfm-contract-spec-json", default=os.environ.get("QG_HFM_CRYPTO_CONTRACT_SPEC_JSON", ""))
     release_refresh.add_argument("--extra-bases-root", action="append", default=[])
     release_minimal_diff = sub.add_parser("release-minimal-diff-review")
     release_minimal_diff.add_argument("--write", action="store_true")
@@ -785,9 +701,6 @@ def main(argv=None) -> int:
             runtime_dir,
             write=args.write,
             refresh_sources=args.refresh_sources,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "status":
@@ -797,9 +710,6 @@ def main(argv=None) -> int:
             runtime_dir,
             write=args.write,
             refresh_sources=args.refresh_sources,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "review-packet-status":
@@ -809,9 +719,6 @@ def main(argv=None) -> int:
             runtime_dir,
             write=args.write,
             refresh_sources=args.refresh_sources,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "approval-draft-status":
@@ -822,9 +729,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "approval-evidence-status":
@@ -834,9 +738,6 @@ def main(argv=None) -> int:
             runtime_dir,
             write=args.write,
             refresh_sources=args.refresh_sources,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "dry-run-plan-status":
@@ -847,9 +748,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "execution-lane-spec-status":
@@ -860,9 +758,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "dry-run-replay-status":
@@ -873,9 +768,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "runtime-preflight-status":
@@ -886,9 +778,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "order-request-contract-status":
@@ -899,9 +788,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "pipeline-status":
@@ -912,9 +798,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "adapter-review-status":
@@ -925,9 +808,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "evidence-intake-status":
@@ -938,9 +818,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "promotion-candidates-status":
@@ -951,9 +828,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "promotion-controller-status":
@@ -964,9 +838,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "adapter-sandbox-status":
@@ -978,9 +849,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "adapter-contract-validator-status":
@@ -992,9 +860,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "orchestrator-status":
@@ -1006,9 +871,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "adapter-harness-status":
@@ -1020,9 +882,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "live-pilot-activation-review-status":
@@ -1035,9 +894,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "receipt-reconciliation-review-status":
@@ -1052,9 +908,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "ea-request-reader-review-status":
@@ -1069,9 +922,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "live-execution-cutover-review-status":
@@ -1086,9 +936,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "live-execution-implementation-spec-status":
@@ -1103,9 +950,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "live-execution-adapter-write-review-status":
@@ -1120,9 +964,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "ea-request-consumption-review-status":
@@ -1137,9 +978,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "broker-order-send-review-status":
@@ -1154,9 +992,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "live-execution-rollback-review-status":
@@ -1171,9 +1006,6 @@ def main(argv=None) -> int:
             write=args.write,
             refresh_sources=args.refresh_sources,
             operator_approval_json=args.operator_approval_json,
-            moss_backtest_json=args.moss_backtest_json,
-            hfm_simulation_profile_json=args.hfm_simulation_profile_json,
-            hfm_contract_spec_json=args.hfm_contract_spec_json,
             extra_bases_roots=args.extra_bases_root,
         ))
     if args.command == "release-readiness-refresh-status":

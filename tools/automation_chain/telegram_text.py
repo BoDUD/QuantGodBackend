@@ -15,7 +15,7 @@ def build_automation_telegram_text(report: Dict[str, Any]) -> str:
     status = report.get("stateZh") or report.get("state") or "未知"
     symbols = ", ".join(report.get("symbols") or []) or "未指定"
     source = report.get("singleSourceOfTruth") or "USDJPY_LIVE_LOOP"
-    top_live = report.get("topLiveEligiblePolicy") or {}
+    top_advisory = report.get("topAdvisoryPolicy") or report.get("topShadowPolicy") or {}
     top_shadow = report.get("topShadowPolicy") or {}
     dry_run = report.get("dryRunDecision") or {}
     latency = report.get("entryLatencyReport") or {}
@@ -59,11 +59,11 @@ def build_automation_telegram_text(report: Dict[str, Any]) -> str:
         "",
         f"结论：{status}",
         f"品种：{symbols}",
-        f"主状态来源：{source}（USDJPY Strategy Lab + Live Loop）",
+        f"主状态来源：{source}（USDJPY Strategy Lab + Shadow advisory compatibility loop）",
         f"生成时间：{report.get('generatedAt', '')}",
         "",
-        "实盘恢复路线：",
-        f"- 实盘候选：{top_live.get('strategy', '暂无')}｜{top_live.get('direction', 'UNKNOWN')}｜{top_live.get('entryMode', 'UNKNOWN')}｜建议仓位 {top_live.get('recommendedLot', 0)}",
+        "Shadow advisory 路线：",
+        f"- 研究候选：{top_advisory.get('strategy', '暂无')}｜{top_advisory.get('direction', 'UNKNOWN')}｜{top_advisory.get('entryMode', 'UNKNOWN')}｜研究仓位参数 {top_advisory.get('recommendedLot', 0)}",
         f"- 影子第一名：{top_shadow.get('strategy', '暂无')}｜{top_shadow.get('direction', 'UNKNOWN')}｜{top_shadow.get('entryMode', 'UNKNOWN')}",
         f"- EA 干跑：{dry_run.get('decision', '暂无')}｜{dry_run.get('strategy', 'UNKNOWN')}｜{dry_run.get('direction', 'UNKNOWN')}",
         f"- 入场慢点：{latency_summary.get('stateZh', '暂无')}｜{latency_summary.get('primaryReasonZh', '')}",
@@ -91,5 +91,5 @@ def build_automation_telegram_text(report: Dict[str, Any]) -> str:
         "当前阻断项：",
         _items(blocked, 8),
         "",
-        "安全边界：本链路只生成运行证据、中文复核文本和 USDJPY 实盘恢复状态；不会下单、不会平仓、不会撤单、不会修改订单、不会修改实盘 preset。",
+        "安全边界：executionLaneExists=false；本链路只生成 Shadow/ReadOnly 证据和中文复核文本，不会下单、平仓、撤单或修改 broker 状态。",
     ])

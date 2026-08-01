@@ -26,6 +26,10 @@ test('automation chain exposes only local advisory safety flags', () => {
   assert.match(schema, /orderSendAllowed": False/);
   assert.match(schema, /telegramCommandsAllowed": False/);
   assert.match(schema, /doesNotPlaceOrders": True/);
+  assert.match(schema, /executionLaneExists": False/);
+  assert.match(schema, /unattendedLiveExpansionAllowed": False/);
+  assert.match(schema, /operatorApprovalRequired": True/);
+  assert.match(schema, /atomic_write_json/);
 });
 
 test('dashboard route stays under api automation chain namespace', () => {
@@ -44,7 +48,7 @@ test('automation chain defaults to USDJPY scope only', () => {
   assert.doesNotMatch(combined, /XAUUSDc/);
 });
 
-test('automation chain uses USDJPY live loop as source of truth', () => {
+test('automation chain uses the USDJPY shadow advisory loop as source of truth', () => {
   const runner = read('tools/automation_chain/runner.py');
   const text = read('tools/automation_chain/telegram_text.py');
   assert.match(runner, /run_usdjpy_strategy_lab\.py/);
@@ -63,6 +67,7 @@ test('automation chain uses USDJPY live loop as source of truth', () => {
   assert.match(runner, /SHADOW_SIMULATION_ONLY/);
   assert.doesNotMatch(runner, /QuantGod_AutoExecutionPolicy\.json/);
   assert.doesNotMatch(runner, /run_auto_execution_policy\.py/);
-  assert.match(text, /USDJPY Strategy Lab \+ Live Loop/);
+  assert.match(text, /USDJPY Strategy Lab \+ Shadow advisory compatibility loop/);
+  assert.match(text, /executionLaneExists=false/);
   assert.match(text, /下一轮安全迭代/);
 });

@@ -42,8 +42,8 @@ class ChampionTesterRunGateTests(unittest.TestCase):
                     "livePilotMode": True,
                 },
                 "account": {
-                    "number": 186054398,
-                    "server": "HFMarketsGlobal-Live12",
+                    "number": 90000001,
+                    "server": "SyntheticBroker-Demo",
                     "margin": 0,
                 },
                 "symbols": [{"openPositions": 0}],
@@ -73,8 +73,8 @@ class ChampionTesterRunGateTests(unittest.TestCase):
             {
                 "ready": account_context_ready,
                 "mode": "TEST",
-                "login": "186054398",
-                "server": "HFMarketsGlobal-Live12",
+                "login": "90000001",
+                "server": "SyntheticBroker-Demo",
                 "missingTarget": [] if account_context_ready else ["Config/accounts.dat"],
                 "blockers": [] if account_context_ready else [
                     "isolated_tester_account_context_not_ready",
