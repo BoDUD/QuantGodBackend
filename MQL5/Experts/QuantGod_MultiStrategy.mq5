@@ -155,9 +155,6 @@ input bool   EnableUsdJpyKlineExporter  = true;
 input int    UsdJpyKlineExportIntervalMinutes = 60;
 input int    UsdJpyKlineExportMonths    = 12;
 input int    UsdJpyKlineExportMaxBarsPerTimeframe = 700000;
-input bool   EnableHfmCryptoSpecExporter = true;
-input string HfmCryptoSpecExportSymbols = "#BTCUSD,#ETHUSD,#SOLUSD,#XRPUSD,#DOGEUSD,#LTCUSD,#BTCUSDx,#ETHUSDx,#SOLUSDx,#XRPUSDx,#DOGEUSDx,BTCUSD,ETHUSD,SOLUSD,XRPUSD,DOGEUSD,LTCUSD";
-input int    HfmCryptoSpecExportMaxSymbols = 80;
 input bool   EnableEARequestReaderReviewHarness = false;
 input string EARequestReaderReviewMode = "DISABLED_REVIEW_ONLY";
 input bool   EnableEARequestReaderExecutionPath = false;
@@ -1168,7 +1165,7 @@ int PilotDirectionBiasForSymbol(string symbol, int usdBiasDirection)
 
 string PilotActionLabelForSymbol(string symbol)
 {
-   if(g_newsState.blocked)
+   if(!EnablePilotNewsFilter || !g_newsState.calendarAvailable || g_newsState.blocked)
       return "BLOCKED";
 
    int direction = PilotDirectionBiasForSymbol(symbol, g_newsState.usdBiasDirection);
@@ -1200,6 +1197,8 @@ void RefreshNewsFilterState(bool force=false)
    if(ArraySize(g_usdTrackedEventIds) == 0)
    {
       g_newsState.status = "NO_CALENDAR";
+      g_newsState.phase = "unavailable";
+      g_newsState.blocked = true;
       g_newsState.reason = "USDJPY calendar events unavailable in this terminal";
       return;
    }
@@ -1423,11 +1422,21 @@ void RefreshNewsFilterState(bool force=false)
 bool PilotNewsBlocksSymbol(string symbol, string &reason)
 {
    reason = "";
-   if(!EnablePilotNewsFilter || !g_newsState.blocked)
-      return false;
-
    int directionBias = PilotDirectionBiasForSymbol(symbol, 1);
    if(directionBias == 0)
+      return false;
+
+   if(!EnablePilotNewsFilter)
+   {
+      reason = "USDJPY news filter disabled; trading readiness fails closed";
+      return true;
+   }
+   if(!g_newsState.calendarAvailable || g_newsState.status == "NO_CALENDAR")
+   {
+      reason = "USDJPY calendar unavailable; trading readiness fails closed";
+      return true;
+   }
+   if(!g_newsState.blocked)
       return false;
 
    reason = SafeNewsReasonText(g_newsState.reason);
@@ -1505,14 +1514,8 @@ string SafeNewsReasonText(string reason)
 bool PilotDirectionAllowedByNews(string symbol, int direction, MqlTick &tick, string &reason)
 {
    reason = "";
-   if(!EnablePilotNewsFilter)
-      return true;
-
-   if(g_newsState.blocked)
-   {
-      reason = SafeNewsReasonText(g_newsState.reason);
+   if(PilotNewsBlocksSymbol(symbol, reason))
       return false;
-   }
 
    int preferredDirection = PilotDirectionBiasForSymbol(symbol, g_newsState.usdBiasDirection);
    if(g_newsState.biasActive && preferredDirection != 0 && direction != preferredDirection)
@@ -1541,7 +1544,8 @@ bool PilotDirectionAllowedByNews(string symbol, int direction, MqlTick &tick, st
 
 string BuildNewsJson()
 {
-   bool calendarAvailable = g_newsState.calendarAvailable || ArraySize(g_usdTrackedEventIds) > 0;
+   bool calendarAvailable = g_newsState.calendarAvailable;
+   bool tradingReady = EnablePilotNewsFilter && calendarAvailable && !g_newsState.blocked;
    string newsReason = g_newsState.reason;
    if(EnablePilotNewsFilter &&
       calendarAvailable &&
@@ -1560,7 +1564,8 @@ string BuildNewsJson()
    json += "\"trackedEvents\": " + IntegerToString(ArraySize(g_usdTrackedEventIds)) + ", ";
    json += "\"status\": \"" + JsonEscape(g_newsState.status) + "\", ";
    json += "\"phase\": \"" + JsonEscape(g_newsState.phase) + "\", ";
-   json += "\"blocked\": " + JsonBool(g_newsState.blocked) + ", ";
+   json += "\"blocked\": " + JsonBool(!tradingReady) + ", ";
+   json += "\"tradingReady\": " + JsonBool(tradingReady) + ", ";
    json += "\"biasActive\": " + JsonBool(g_newsState.biasActive) + ", ";
    json += "\"usdBias\": \"" + JsonEscape(UsdBiasLabel(g_newsState.usdBiasDirection)) + "\", ";
    json += "\"eventName\": \"" + JsonEscape(safeEventName) + "\", ";
@@ -1582,7 +1587,7 @@ string BuildNewsJson()
 
 bool IsPilotLiveMode()
 {
-   return (EnablePilotAutoTrading && !ReadOnlyMode);
+   return (EnablePilotAutoTrading && !ShadowMode && !ReadOnlyMode);
 }
 
 string SymbolTradeModeLabel(long mode)
@@ -1608,8 +1613,12 @@ bool SymbolEntryTradeAllowed(string symbol)
 
 string LiveTradePermissionBlocker(string symbol)
 {
+   if(ShadowMode)
+      return "SHADOW_MODE";
    if(ReadOnlyMode)
       return "READ_ONLY_MODE";
+   if(!EnablePilotAutoTrading)
+      return "PILOT_AUTO_TRADING_DISABLED";
    if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED))
       return "TERMINAL_DISCONNECTED";
    if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
@@ -3430,7 +3439,7 @@ bool LoadShadowCandidateLedgerRecords(ShadowCandidateLedgerRecord &records[])
 
 string BuildShadowCandidateOutcomeLedgerCsv()
 {
-   string csv = "EventId,OutcomeLabelTimeLocal,OutcomeLabelTimeServer,EventBarTime,Symbol,CandidateRoute,Timeframe,CandidateDirection,CandidateScore,Regime,ReferencePrice,SpreadPips,NewsStatus,Trigger,totalScore,dataCoverageScore,professionalScore,marketQualityScore,entryTimingScore,fundFlowScore,executionRiskScore,resonanceCount,atrPips,trendScore,sentimentScore,openInterestChange,newsScore,smartMoneyScore,predictionMarketScore,kronosScore,estimatedEV,estimatedWinProbability,estimatedRiskReward,positionScaling,stopLossR,takeProfitR,tp1R,tp2R,trailingStartR,mfeGivebackPct,maxHoldMinutes,stopLossPips,takeProfitPips,entryReasons,factorAttributionSummary,HorizonBars,HorizonMinutes,FutureClose,LongClosePips,ShortClosePips,LongMFEPips,LongMAEPips,ShortMFEPips,ShortMAEPips,DirectionalOutcome,BestOpportunity,OutcomeReason\r\n";
+   string csv = "EventId,OutcomeLabelTimeLocal,OutcomeLabelTimeServer,EventBarTime,Symbol,CandidateRoute,Timeframe,CandidateDirection,CandidateScore,Regime,ReferencePrice,SpreadPips,NewsStatus,Trigger,totalScore,dataCoverageScore,professionalScore,marketQualityScore,entryTimingScore,fundFlowScore,executionRiskScore,resonanceCount,atrPips,trendScore,sentimentScore,openInterestChange,newsScore,smartMoneyScore,kronosScore,estimatedEV,estimatedWinProbability,estimatedRiskReward,positionScaling,stopLossR,takeProfitR,tp1R,tp2R,trailingStartR,mfeGivebackPct,maxHoldMinutes,stopLossPips,takeProfitPips,entryReasons,factorAttributionSummary,HorizonBars,HorizonMinutes,FutureClose,LongClosePips,ShortClosePips,LongMFEPips,LongMAEPips,ShortMFEPips,ShortMAEPips,DirectionalOutcome,BestOpportunity,OutcomeReason\r\n";
    ShadowCandidateLedgerRecord records[];
    if(!EnableShadowCandidateRouter || !LoadShadowCandidateLedgerRecords(records))
       return csv;
@@ -3518,7 +3527,6 @@ string BuildShadowCandidateOutcomeLedgerCsv()
          csv += "0.00,";
          csv += "0.00,";
          csv += FormatNumber(newsScore, 2) + ",";
-         csv += "0.00,";
          csv += "0.00,";
          csv += "0.00,";
          csv += FormatNumber(estimatedEV, 2) + ",";
@@ -4697,8 +4705,21 @@ bool SendPilotMarketOrder(string symbol, int direction, double slPrice, double t
    return false;
 }
 
+bool ClosePositionWithExecutionGuard(ulong ticket)
+{
+   if(!IsPilotLiveMode())
+   {
+      Print("QuantGod MT5 position close blocked: execution guard active ticket=", ticket);
+      return false;
+   }
+   return g_trade.PositionClose(ticket);
+}
+
 void ClosePilotPositions(const string reason)
 {
+   if(!IsPilotLiveMode())
+      return;
+
    int total = PositionsTotal();
    for(int i = total - 1; i >= 0; i--)
    {
@@ -4713,7 +4734,7 @@ void ClosePilotPositions(const string reason)
       g_trade.SetExpertMagicNumber(PilotMagic);
       g_trade.SetDeviationInPoints(PilotDeviationPoints);
       g_trade.SetTypeFillingBySymbol(PositionGetString(POSITION_SYMBOL));
-      bool closed = g_trade.PositionClose(ticket);
+      bool closed = ClosePositionWithExecutionGuard(ticket);
       Print("QuantGod MT5 pilot emergency close ticket=", ticket,
             " ok=", (closed ? "true" : "false"),
             " retcode=", g_trade.ResultRetcode(),
@@ -4723,6 +4744,9 @@ void ClosePilotPositions(const string reason)
 
 bool ModifyPilotPositionStops(ulong ticket, string symbol, double slPrice, double tpPrice)
 {
+   if(!IsPilotLiveMode())
+      return false;
+
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    MqlTradeRequest request;
    MqlTradeResult result;
@@ -4773,6 +4797,8 @@ bool IsPilotRouteLiveEnabledByComment(string comment)
 
 void ManageDemotedPilotRouteExits()
 {
+   if(!IsPilotLiveMode())
+      return;
    if(!EnableDemotedPilotRouteExit)
       return;
 
@@ -4801,7 +4827,7 @@ void ManageDemotedPilotRouteExits()
       g_trade.SetExpertMagicNumber(PilotMagic);
       g_trade.SetDeviationInPoints(PilotDeviationPoints);
       g_trade.SetTypeFillingBySymbol(symbol);
-      bool closed = g_trade.PositionClose(ticket);
+      bool closed = ClosePositionWithExecutionGuard(ticket);
       Print("QuantGod MT5 demoted route exit ticket=", ticket,
             " symbol=", symbol,
             " net=", DoubleToString(netProfit, 2),
@@ -4814,6 +4840,8 @@ void ManageDemotedPilotRouteExits()
 
 void ManagePilotRsiTimeStops()
 {
+   if(!IsPilotLiveMode())
+      return;
    if(!EnablePilotRsiTimeStopProtect)
       return;
 
@@ -4853,7 +4881,7 @@ void ManagePilotRsiTimeStops()
       g_trade.SetExpertMagicNumber(PilotMagic);
       g_trade.SetDeviationInPoints(PilotDeviationPoints);
       g_trade.SetTypeFillingBySymbol(symbol);
-      bool closed = g_trade.PositionClose(ticket);
+      bool closed = ClosePositionWithExecutionGuard(ticket);
       Print("QuantGod MT5 RSI time stop close ticket=", ticket,
             " symbol=", symbol,
             " age=", ageMinutes, "m",
@@ -4867,6 +4895,8 @@ void ManagePilotRsiTimeStops()
 
 void ManagePilotRsiFailFastStops()
 {
+   if(!IsPilotLiveMode())
+      return;
    if(!EnablePilotRsiFailFastProtect)
       return;
 
@@ -4930,7 +4960,7 @@ void ManagePilotRsiFailFastStops()
          g_trade.SetExpertMagicNumber(PilotMagic);
          g_trade.SetDeviationInPoints(PilotDeviationPoints);
          g_trade.SetTypeFillingBySymbol(symbol);
-         bool closed = g_trade.PositionClose(ticket);
+         bool closed = ClosePositionWithExecutionGuard(ticket);
          Print("QuantGod MT5 RSI failfast close ticket=", ticket,
                " symbol=", symbol,
                " age=", ageMinutes, "m",
@@ -4986,6 +5016,9 @@ void ManagePilotRsiFailFastStops()
 
 void ManagePilotBreakevenStops()
 {
+   if(!IsPilotLiveMode())
+      return;
+
    bool baseBreakevenOn = (EnablePilotBreakevenProtect && PilotBreakevenTriggerPips > 0.0);
    bool baseTrailingOn = (EnablePilotTrailingStop &&
                           PilotTrailingStartPips > 0.0 &&
@@ -5134,6 +5167,8 @@ bool ManualSafetySymbolAllowed(string symbol)
 
 void ManageManualSafetyGuard()
 {
+   if(!IsPilotLiveMode())
+      return;
    if(!EnableManualSafetyGuard)
       return;
 
@@ -5160,7 +5195,7 @@ void ManageManualSafetyGuard()
       {
          g_trade.SetDeviationInPoints(PilotDeviationPoints);
          g_trade.SetTypeFillingBySymbol(symbol);
-         bool closed = g_trade.PositionClose(ticket);
+         bool closed = ClosePositionWithExecutionGuard(ticket);
          Print("QuantGod MT5 manual safety close ticket=", ticket,
                " symbol=", symbol,
                " net=", DoubleToString(netProfit, 2),
@@ -6005,13 +6040,6 @@ bool AutonomousPatchStageMayAffectLiveRuntime(string stage)
    return (stage == "MICRO_LIVE" || stage == "LIVE_LIMITED");
 }
 
-double AutonomousPatchClampDouble(double value, double minValue, double maxValue, double fallback)
-{
-   if(!MathIsValidNumber(value) || value <= 0.0)
-      return fallback;
-   return MathMax(minValue, MathMin(maxValue, value));
-}
-
 string RefreshAutonomousConfigPatchRuntimeAdapter()
 {
    g_autonomousPatchLoaded = false;
@@ -6050,6 +6078,7 @@ string RefreshAutonomousConfigPatchRuntimeAdapter()
          bool requiresGovernance = StrategyJsonContractBool(content, "requiresAutonomousGovernance", false);
          bool operatorApprovalRequired = StrategyJsonContractBool(content, "operatorApprovalRequired", false);
          bool unattendedLiveExpansionAllowed = StrategyJsonContractBool(content, "unattendedLiveExpansionAllowed", false);
+         bool liveExpansionAllowed = StrategyJsonContractBool(content, "liveExpansionAllowed", false);
          bool liveMutationAllowed = StrategyJsonContractBool(content, "liveMutationAllowed", false);
          bool orderSendAllowed = StrategyJsonContractBool(content, "orderSendAllowed", false);
          bool presetMutationAllowed = StrategyJsonContractBool(content, "livePresetMutationAllowed", false);
@@ -6082,10 +6111,14 @@ string RefreshAutonomousConfigPatchRuntimeAdapter()
             AutonomousPatchAddRejectedField("autoAppliedByAgent", g_autonomousPatchRejectedItems);
          if(!requiresGovernance)
             AutonomousPatchAddRejectedField("requiresAutonomousGovernance", g_autonomousPatchRejectedItems);
-         if(operatorApprovalRequired)
+         if(!operatorApprovalRequired)
             AutonomousPatchAddRejectedField("operatorApprovalRequired", g_autonomousPatchRejectedItems);
-         if(stageMayAffectLive && !unattendedLiveExpansionAllowed)
+         if(unattendedLiveExpansionAllowed)
             AutonomousPatchAddRejectedField("unattendedLiveExpansionAllowed", g_autonomousPatchRejectedItems);
+         if(liveExpansionAllowed)
+            AutonomousPatchAddRejectedField("liveExpansionAllowed", g_autonomousPatchRejectedItems);
+         if(stageMayAffectLive)
+            AutonomousPatchAddRejectedField("executionStage_live_disabled", g_autonomousPatchRejectedItems);
          if(liveMutationAllowed || orderSendAllowed || presetMutationAllowed)
             AutonomousPatchAddRejectedField("execution_permissions", g_autonomousPatchRejectedItems);
          if(newsBypassAllowed || runtimeBypassAllowed || fastlaneBypassAllowed)
@@ -6110,23 +6143,10 @@ string RefreshAutonomousConfigPatchRuntimeAdapter()
             g_autonomousPatchStatus = "PATCH_REJECTED";
             g_autonomousPatchReasonZh = "Agent patch 含有越权或越界字段，EA 已拒绝运行时生效。";
          }
-         else if(!stageMayAffectLive)
-         {
-            g_autonomousPatchStatus = "PATCH_OBSERVED_ONLY";
-            g_autonomousPatchReasonZh = "Agent patch 已同步，但当前阶段不是 MICRO_LIVE/LIVE_LIMITED；EA 只记录，不改变实盘运行参数。";
-         }
          else
          {
-            g_autonomousPatchRuntimeActive = true;
-            g_autonomousPatchStatus = "PATCH_ACTIVE";
-            g_autonomousPatchReasonZh = "Agent patch 已通过白名单校验，EA 将仅对白名单 RSI/出场/阶段仓位上限参数生效。";
-            g_autonomousPatchRsiBuyBand = AutonomousPatchClampDouble(rsiBuyBand, 5.0, 45.0, 0.0);
-            g_autonomousPatchRsiCrossbackThreshold = MathMax(0.0, MathMin(20.0, rsiCrossbackThreshold));
-            g_autonomousPatchBreakevenDelayR = AutonomousPatchClampDouble(breakevenDelayR, 0.2, 3.0, 0.0);
-            g_autonomousPatchTrailStartR = AutonomousPatchClampDouble(trailStartR, 0.3, 5.0, 0.0);
-            g_autonomousPatchMfeGivebackPct = AutonomousPatchClampDouble(mfeGivebackPct, 0.10, 0.90, 0.0);
-            g_autonomousPatchStageMaxLot = MathMax(0.0, MathMin(2.0, stageMaxLot));
-            g_autonomousPatchMaxLot = MathMax(0.0, MathMin(2.0, maxLot));
+            g_autonomousPatchStatus = "PATCH_OBSERVED_ONLY";
+            g_autonomousPatchReasonZh = "Agent patch 已同步，但 Shadow/ReadOnly 合约禁止 EA 激活或改写任何实盘运行参数。";
          }
       }
    }
@@ -6152,7 +6172,7 @@ string RefreshAutonomousConfigPatchRuntimeAdapter()
    json += "\"stageMaxLot\":" + FormatNumber(g_autonomousPatchStageMaxLot, 2) + ",";
    json += "\"maxLot\":" + FormatNumber(g_autonomousPatchMaxLot, 2);
    json += "},";
-   json += "\"safety\":{\"usdJpyOnly\":true,\"rsiLongOnly\":true,\"operatorApprovalRequired\":false,\"unattendedLiveExpansionAllowed\":true,\"maxLotCap\":2.0,\"newsHardBypassAllowed\":false,\"runtimeFreshnessBypassAllowed\":false,\"fastlaneBypassAllowed\":false,\"orderSendAllowedByPatch\":false,\"livePresetMutationAllowed\":false}";
+   json += "\"safety\":{\"usdJpyOnly\":true,\"rsiLongOnly\":true,\"operatorApprovalRequired\":true,\"unattendedLiveExpansionAllowed\":false,\"liveExpansionAllowed\":false,\"maxLotCap\":2.0,\"newsHardBypassAllowed\":false,\"runtimeFreshnessBypassAllowed\":false,\"fastlaneBypassAllowed\":false,\"orderSendAllowedByPatch\":false,\"livePresetMutationAllowed\":false}";
    json += "}";
    g_autonomousConfigPatchStatusJson = json;
    return json;
@@ -9183,263 +9203,6 @@ string BuildSymbolsJson(SymbolSnapshot &snapshots[])
    return json;
 }
 
-// HFM Crypto Symbol Spec Export BEGIN
-string HfmCryptoCanonicalFromSymbol(string symbol)
-{
-   string upper = ToUpperString(symbol);
-   if(StringFind(upper, "BTCUSD") >= 0)
-      return "BTCUSD";
-   if(StringFind(upper, "ETHUSD") >= 0)
-      return "ETHUSD";
-   if(StringFind(upper, "SOLUSD") >= 0)
-      return "SOLUSD";
-   if(StringFind(upper, "XRPUSD") >= 0)
-      return "XRPUSD";
-   if(StringFind(upper, "DOGEUSD") >= 0)
-      return "DOGEUSD";
-   if(StringFind(upper, "LTCUSD") >= 0)
-      return "LTCUSD";
-   if(StringFind(upper, "BCHUSD") >= 0)
-      return "BCHUSD";
-   if(StringFind(upper, "ADAUSD") >= 0)
-      return "ADAUSD";
-   if(StringFind(upper, "DOTUSD") >= 0)
-      return "DOTUSD";
-   return "";
-}
-
-string ResolveHfmCryptoSpecSymbol(string token)
-{
-   string requested = TrimString(token);
-   if(StringLen(requested) == 0)
-      return "";
-   if(SymbolExistsInTerminal(requested))
-      return requested;
-
-   string canonical = HfmCryptoCanonicalFromSymbol(requested);
-   if(StringLen(canonical) == 0)
-      return "";
-
-   int total = SymbolsTotal(false);
-   for(int i = 0; i < total; i++)
-   {
-      string symbolName = SymbolName(i, false);
-      if(HfmCryptoCanonicalFromSymbol(symbolName) == canonical)
-         return symbolName;
-   }
-   return "";
-}
-
-bool AppendHfmCryptoSpecSymbol(string &symbols[], string symbol)
-{
-   if(ArraySize(symbols) >= HfmCryptoSpecExportMaxSymbols)
-      return false;
-   string cleanSymbol = TrimString(symbol);
-   if(StringLen(cleanSymbol) == 0)
-      return false;
-   if(StringLen(HfmCryptoCanonicalFromSymbol(cleanSymbol)) == 0)
-      return false;
-   if(!SymbolExistsInTerminal(cleanSymbol))
-      return false;
-   if(StringArrayContains(symbols, cleanSymbol))
-      return false;
-   PushString(symbols, cleanSymbol);
-   return true;
-}
-
-void CollectHfmCryptoSpecSymbols(string &symbols[])
-{
-   ArrayResize(symbols, 0);
-   string remaining = HfmCryptoSpecExportSymbols;
-   while(StringLen(remaining) > 0)
-   {
-      int commaPos = StringFind(remaining, ",");
-      string token = (commaPos >= 0) ? StringSubstr(remaining, 0, commaPos) : remaining;
-      string resolved = ResolveHfmCryptoSpecSymbol(token);
-      AppendHfmCryptoSpecSymbol(symbols, resolved);
-      if(commaPos < 0)
-         break;
-      remaining = StringSubstr(remaining, commaPos + 1);
-   }
-
-   int total = SymbolsTotal(false);
-   for(int i = 0; i < total && ArraySize(symbols) < HfmCryptoSpecExportMaxSymbols; i++)
-   {
-      string symbolName = SymbolName(i, false);
-      if(StringLen(HfmCryptoCanonicalFromSymbol(symbolName)) > 0)
-         AppendHfmCryptoSpecSymbol(symbols, symbolName);
-   }
-}
-
-string BuildHfmCryptoSpecRowJson(string symbol)
-{
-   MqlTick tick;
-   ZeroMemory(tick);
-   bool tickOk = SymbolInfoTick(symbol, tick);
-   double bid = tickOk ? tick.bid : 0.0;
-   double ask = tickOk ? tick.ask : 0.0;
-
-   string json = "{";
-   json += "\"name\":\"" + JsonEscape(symbol) + "\",";
-   json += "\"brokerSymbol\":\"" + JsonEscape(symbol) + "\",";
-   json += "\"canonicalSymbol\":\"" + JsonEscape(HfmCryptoCanonicalFromSymbol(symbol)) + "\",";
-   json += "\"description\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_DESCRIPTION)) + "\",";
-   json += "\"path\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_PATH)) + "\",";
-   json += "\"currency_base\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_BASE)) + "\",";
-   json += "\"currency_profit\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_PROFIT)) + "\",";
-   json += "\"currencyBase\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_BASE)) + "\",";
-   json += "\"currencyProfit\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_CURRENCY_PROFIT)) + "\",";
-   json += "\"visible\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_VISIBLE)) + ",";
-   json += "\"selected\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_SELECT)) + ",";
-   json += "\"digits\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + ",";
-   json += "\"point\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_POINT), 8) + ",";
-   json += "\"spread\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_SPREAD)) + ",";
-   json += "\"spreadPips\":" + FormatNumber(tickOk ? CalcSpreadPips(symbol, bid, ask) : 0.0, 2) + ",";
-   json += "\"tradeMode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE)) + ",";
-   json += "\"tradeCalcMode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE)) + ",";
-   json += "\"calcMode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE)) + ",";
-   json += "\"tradeContractSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE), 8) + ",";
-   json += "\"tradeTickSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE), 8) + ",";
-   json += "\"tradeTickValue\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE), 8) + ",";
-   json += "\"volumeMin\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN), 8) + ",";
-   json += "\"volumeMax\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX), 8) + ",";
-   json += "\"volumeStep\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP), 8) + ",";
-   json += "\"contractSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE), 8) + ",";
-   json += "\"tickSize\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE), 8) + ",";
-   json += "\"tickValue\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE), 8) + ",";
-   json += "\"minLot\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN), 8) + ",";
-   json += "\"maxLot\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX), 8) + ",";
-   json += "\"lotStep\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP), 8) + ",";
-   json += "\"swapLong\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_SWAP_LONG), 8) + ",";
-   json += "\"swapShort\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_SWAP_SHORT), 8) + ",";
-   json += "\"marginInitial\":" + FormatNumber(SymbolInfoDouble(symbol, SYMBOL_MARGIN_INITIAL), 8) + ",";
-   json += "\"tradeEnabled\":" + JsonBool(SymbolEntryTradeAllowed(symbol));
-   json += "}";
-   return json;
-}
-
-string BuildHfmCryptoSymbolSpecsJson()
-{
-   string symbols[];
-   if(EnableHfmCryptoSpecExporter)
-      CollectHfmCryptoSpecSymbols(symbols);
-
-   string json = "{\r\n";
-   json += "  \"schema\":\"quantgod.mql5.hfm_crypto_symbol_specs.v1\",\r\n";
-   json += "  \"source\":\"MQL5_SYMBOLINFO_READONLY\",\r\n";
-   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
-   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(CurrentServerTime(), true)) + "\",\r\n";
-   json += "  \"enabled\":" + JsonBool(EnableHfmCryptoSpecExporter) + ",\r\n";
-   json += "  \"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\",\r\n";
-   json += "  \"account\":" + IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN)) + ",\r\n";
-   json += "  \"symbolCount\":" + IntegerToString(ArraySize(symbols)) + ",\r\n";
-   json += "  \"summary\":{\"candidateCount\":" + IntegerToString(ArraySize(symbols)) + ",\"symbolCount\":" + IntegerToString(ArraySize(symbols)) + "},\r\n";
-   json += "  \"symbols\":[";
-   for(int i = 0; i < ArraySize(symbols); i++)
-   {
-      if(i > 0)
-         json += ",";
-      json += "\r\n    " + BuildHfmCryptoSpecRowJson(symbols[i]);
-   }
-   if(ArraySize(symbols) > 0)
-      json += "\r\n  ";
-   json += "],\r\n";
-   json += "  \"safety\":{\"readOnly\":true,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"writesMt5OrderRequest\":false,\"symbolSelectAllowed\":false,\"livePresetMutationAllowed\":false}\r\n";
-   json += "}\r\n";
-   return json;
-}
-
-string BuildHfmCryptoRuntimeProbeRowJson(string symbol)
-{
-   MqlTick tick;
-   ZeroMemory(tick);
-   bool tickOk = SymbolInfoTick(symbol, tick);
-   long digits = SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   int digitsInt = (digits > 0) ? (int)digits : 5;
-   long spread = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
-   long spreadFloat = SymbolInfoInteger(symbol, SYMBOL_SPREAD_FLOAT);
-   long tradeMode = SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   double liveSpread = (tickOk && tick.ask > tick.bid) ? (tick.ask - tick.bid) : 0.0;
-   double spreadPoints = (point > 0.0 && liveSpread > 0.0) ? (liveSpread / point) : (double)spread;
-
-   string json = "{";
-   json += "\"brokerSymbol\":\"" + JsonEscape(symbol) + "\",";
-   json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
-   json += "\"canonicalSymbol\":\"" + JsonEscape(HfmCryptoCanonicalFromSymbol(symbol)) + "\",";
-   json += "\"source\":\"MQL5_SYMBOLINFO_READONLY_MULTISTRATEGY_RUNTIME_PROBE\",";
-   json += "\"description\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_DESCRIPTION)) + "\",";
-   json += "\"path\":\"" + JsonEscape(SymbolInfoString(symbol, SYMBOL_PATH)) + "\",";
-   json += "\"visible\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_VISIBLE)) + ",";
-   json += "\"selected\":" + JsonBool((bool)SymbolInfoInteger(symbol, SYMBOL_SELECT)) + ",";
-   json += "\"digits\":" + IntegerToString((int)digits) + ",";
-   json += "\"point\":" + FormatNumber(point, 8) + ",";
-   json += "\"spread\":" + IntegerToString((int)spread) + ",";
-   json += "\"spreadFloat\":" + JsonBool(spreadFloat != 0) + ",";
-   json += "\"spreadPoints\":" + FormatNumber(spreadPoints, 2) + ",";
-   json += "\"tradeMode\":" + IntegerToString((int)tradeMode) + ",";
-   json += "\"tradeEnabled\":" + JsonBool(SymbolEntryTradeAllowed(symbol)) + ",";
-   json += "\"tickOk\":" + JsonBool(tickOk && tick.ask > tick.bid) + ",";
-   json += "\"bid\":" + FormatNumber(tickOk ? tick.bid : 0.0, digitsInt) + ",";
-   json += "\"ask\":" + FormatNumber(tickOk ? tick.ask : 0.0, digitsInt) + ",";
-   json += "\"time\":" + IntegerToString((long)(tickOk ? tick.time : 0));
-   json += "}";
-   return json;
-}
-
-string BuildHfmCryptoRuntimeProbeJson()
-{
-   string symbols[];
-   if(EnableHfmCryptoSpecExporter)
-      CollectHfmCryptoSpecSymbols(symbols);
-
-   datetime serverClock = CurrentServerTime();
-   string json = "{\r\n";
-   json += "  \"schema\":\"quantgod.mql5.hfm_crypto_runtime_probe.v1\",\r\n";
-   json += "  \"source\":\"MQL5_SYMBOLINFO_READONLY_MULTISTRATEGY_RUNTIME_PROBE\",\r\n";
-   json += "  \"expert\":\"QuantGod_MultiStrategy.mq5\",\r\n";
-   json += "  \"generatedAtLocal\":\"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
-   json += "  \"generatedAtServer\":\"" + JsonEscape(FormatDateTime(serverClock, true)) + "\",\r\n";
-   json += "  \"chartSymbol\":\"" + JsonEscape(_Symbol) + "\",\r\n";
-   json += "  \"focusSymbol\":\"" + JsonEscape(g_focusSymbol) + "\",\r\n";
-   json += "  \"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\",\r\n";
-   json += "  \"account\":" + IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN)) + ",\r\n";
-   json += "  \"candidateSymbolsScanned\":" + IntegerToString(ArraySize(symbols)) + ",\r\n";
-   json += "  \"symbolCount\":" + IntegerToString(ArraySize(symbols)) + ",\r\n";
-   json += "  \"symbols\":[";
-   for(int i = 0; i < ArraySize(symbols); i++)
-   {
-      if(i > 0)
-         json += ",";
-      json += "\r\n    " + BuildHfmCryptoRuntimeProbeRowJson(symbols[i]);
-   }
-   if(ArraySize(symbols) > 0)
-      json += "\r\n  ";
-   json += "],\r\n";
-   json += "  \"runtime\":{\"readOnlyMode\":" + JsonBool(ReadOnlyMode) + ",\"executionEnabled\":" + JsonBool(!ReadOnlyMode) + ",\"livePilotMode\":" + JsonBool(IsPilotLiveMode()) + ",\"tradeAllowed\":false,\"tradeStatus\":\"HFM_CRYPTO_RUNTIME_PROBE_ONLY\"},\r\n";
-   json += "  \"safety\":{\"readOnly\":true,\"orderSendAllowed\":false,\"mt5OrderSendAllowed\":false,\"writesMt5OrderRequest\":false,\"symbolSelectAllowed\":false,\"livePresetMutationAllowed\":false}\r\n";
-   json += "}\r\n";
-   return json;
-}
-
-void WriteHfmCryptoReadOnlyEvidenceFiles(string hfmCryptoSymbolSpecsJson, string hfmCryptoRuntimeProbeJson)
-{
-   WriteTextFile("QuantGod_HFMCryptoSymbolSpecs.json", hfmCryptoSymbolSpecsJson);
-   FolderCreate("hfm_crypto");
-   WriteTextFile("hfm_crypto\\QuantGod_HFMCryptoSymbolSpecs.json", hfmCryptoSymbolSpecsJson);
-   WriteTextFile("hfm_crypto\\QuantGod_HFMCryptoRuntimeProbe.json", hfmCryptoRuntimeProbeJson);
-   WriteTextFile("QuantGod_HFMCryptoRuntimeProbe.json", hfmCryptoRuntimeProbeJson);
-}
-
-void ExportHfmCryptoReadOnlyEvidenceFiles()
-{
-   if(!EnableHfmCryptoSpecExporter)
-      return;
-   string hfmCryptoSymbolSpecsJson = BuildHfmCryptoSymbolSpecsJson();
-   string hfmCryptoRuntimeProbeJson = BuildHfmCryptoRuntimeProbeJson();
-   WriteHfmCryptoReadOnlyEvidenceFiles(hfmCryptoSymbolSpecsJson, hfmCryptoRuntimeProbeJson);
-}
-// HFM Crypto Symbol Spec Export END
 
 // EA Request Reader Review Harness BEGIN
 // QG_EA_REQUEST_READER_DISABLED_BY_DEFAULT
@@ -10127,6 +9890,7 @@ void ExportDashboard(bool runExecutionLoop)
       drawdown = 0.0;
 
    bool terminalConnected = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+   bool brokerConnected = terminalConnected;
    bool terminalTradeAllowed = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
    bool programTradeAllowed = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
    bool dllAllowed = (bool)MQLInfoInteger(MQL_DLLS_ALLOWED);
@@ -10138,14 +9902,23 @@ void ExportDashboard(bool runExecutionLoop)
    long accountLogin = AccountInfoInteger(ACCOUNT_LOGIN);
    string accountServer = AccountInfoString(ACCOUNT_SERVER);
    bool accountAuthorized = (accountLogin > 0 && StringLen(accountServer) > 0);
-   bool connected = (terminalConnected || accountAuthorized);
-   bool tradeAllowed = (!ReadOnlyMode && connected && terminalTradeAllowed && programTradeAllowed && accountTradeAllowed && accountExpertTradeAllowed && focusSymbolTradeAllowed);
+   bool connected = (terminalConnected && brokerConnected && accountAuthorized);
+   bool tradePermissionsAllowed = (IsPilotLiveMode() && connected && terminalTradeAllowed && programTradeAllowed && accountTradeAllowed && accountExpertTradeAllowed && focusSymbolTradeAllowed);
    string startupGuardReason = "";
    bool startupGuardActive = PilotStartupEntryGuardBlocks(g_focusSymbol, startupGuardReason);
+   string newsTradingBlockReason = "";
+   bool newsTradingBlocked = PilotNewsBlocksSymbol(g_focusSymbol, newsTradingBlockReason);
+   bool tradeAllowed = tradePermissionsAllowed && !g_pilotKillSwitch && !newsTradingBlocked && !startupGuardActive;
    string tradeStatus = "NO_DATA";
-   if(connected)
+   if(!terminalConnected)
+      tradeStatus = "TERMINAL_DISCONNECTED";
+   else if(!brokerConnected)
+      tradeStatus = "BROKER_DISCONNECTED";
+   else if(!accountAuthorized)
+      tradeStatus = "ACCOUNT_NOT_AUTHORIZED";
+   else if(connected)
    {
-      if(ReadOnlyMode)
+      if(!IsPilotLiveMode())
          tradeStatus = "SHADOW";
       else if(StringLen(tradePermissionBlocker) > 0)
       {
@@ -10158,7 +9931,7 @@ void ExportDashboard(bool runExecutionLoop)
       }
       else if(g_pilotKillSwitch)
          tradeStatus = "AUTO_PAUSED";
-      else if(g_newsState.blocked)
+      else if(newsTradingBlocked)
          tradeStatus = "NEWS_BLOCK";
       else if(startupGuardActive)
          tradeStatus = "STARTUP_GUARD";
@@ -10183,8 +9956,6 @@ void ExportDashboard(bool runExecutionLoop)
    string usdJpyRsiEntryDiagnosticsJson = BuildUsdJpyRsiEntryDiagnosticsJson();
    string strategyJsonEAContractStatusJson = BuildStrategyJsonEAContractStatusJson();
    string strategyJsonEAShadowEvaluationJson = BuildStrategyJsonEAShadowEvaluationJson();
-   string hfmCryptoSymbolSpecsJson = BuildHfmCryptoSymbolSpecsJson();
-   string hfmCryptoRuntimeProbeJson = BuildHfmCryptoRuntimeProbeJson();
    string eaRequestReaderReviewStatusJson = BuildEARequestReaderReviewStatusJson();
    string eaRequestReaderExecutionStatusJson = BuildEARequestReaderExecutionStatusJson();
    string brokerOrderSendWrapperStatusJson = BuildBrokerOrderSendWrapperStatusJson();
@@ -10200,7 +9971,7 @@ void ExportDashboard(bool runExecutionLoop)
    json += "    \"tradeStatus\": \"" + tradeStatus + "\",\r\n";
    json += "    \"shadowMode\": " + JsonBool(ShadowMode) + ",\r\n";
    json += "    \"readOnlyMode\": " + JsonBool(ReadOnlyMode) + ",\r\n";
-   json += "    \"executionEnabled\": " + JsonBool(!ReadOnlyMode) + ",\r\n";
+   json += "    \"executionEnabled\": " + JsonBool(tradeAllowed) + ",\r\n";
    json += "    \"livePilotMode\": " + JsonBool(IsPilotLiveMode()) + ",\r\n";
    json += "    \"pilotStartupEntryGuard\": " + JsonBool(EnablePilotStartupEntryGuard) + ",\r\n";
    json += "    \"pilotStartupEntryGuardMode\": \"" + JsonEscape(PilotStartupEntryGuardModeValue()) + "\",\r\n";
@@ -10228,7 +9999,13 @@ void ExportDashboard(bool runExecutionLoop)
    json += "    \"pilotFloatingProfit\": " + FormatNumber(SumPilotFloatingProfit(), 2) + ",\r\n";
    json += "    \"connected\": " + JsonBool(connected) + ",\r\n";
    json += "    \"terminalConnected\": " + JsonBool(terminalConnected) + ",\r\n";
+   json += "    \"brokerConnected\": " + JsonBool(brokerConnected) + ",\r\n";
    json += "    \"accountAuthorized\": " + JsonBool(accountAuthorized) + ",\r\n";
+   json += "    \"connectionState\": {\"terminalConnected\": " + JsonBool(terminalConnected)
+           + ", \"brokerConnected\": " + JsonBool(brokerConnected)
+           + ", \"accountAuthorized\": " + JsonBool(accountAuthorized)
+           + ", \"operationalConnected\": " + JsonBool(connected)
+           + ", \"snapshotFreshAtExport\": true},\r\n";
    json += "    \"terminalTradeAllowed\": " + JsonBool(terminalTradeAllowed) + ",\r\n";
    json += "    \"programTradeAllowed\": " + JsonBool(programTradeAllowed) + ",\r\n";
    json += "    \"accountTradeAllowed\": " + JsonBool(accountTradeAllowed) + ",\r\n";
@@ -10236,6 +10013,9 @@ void ExportDashboard(bool runExecutionLoop)
    json += "    \"focusSymbolTradeAllowed\": " + JsonBool(focusSymbolTradeAllowed) + ",\r\n";
    json += "    \"focusSymbolTradeMode\": \"" + JsonEscape(SymbolTradeModeLabel(focusSymbolTradeMode)) + "\",\r\n";
    json += "    \"tradePermissionBlocker\": \"" + JsonEscape(tradePermissionBlocker) + "\",\r\n";
+   json += "    \"tradePermissionsAllowed\": " + JsonBool(tradePermissionsAllowed) + ",\r\n";
+   json += "    \"newsTradingReady\": " + JsonBool(!newsTradingBlocked) + ",\r\n";
+   json += "    \"newsTradingBlockReason\": \"" + JsonEscape(newsTradingBlockReason) + "\",\r\n";
    json += "    \"dllAllowed\": " + JsonBool(dllAllowed) + ",\r\n";
    json += "    \"tradeAllowed\": " + JsonBool(tradeAllowed) + ",\r\n";
    json += "    \"tickAgeSeconds\": " + IntegerToString(focusTickAge) + ",\r\n";
@@ -10246,18 +10026,6 @@ void ExportDashboard(bool runExecutionLoop)
    json += "  },\r\n";
 
    json += "  \"news\": " + BuildNewsJson() + ",\r\n";
-
-   json += "  \"cloudSync\": {\r\n";
-   json += "    \"enabled\": false,\r\n";
-   json += "    \"configured\": false,\r\n";
-   json += "    \"endpoint\": \"\",\r\n";
-   json += "    \"intervalSeconds\": 30,\r\n";
-   json += "    \"lastAttemptLocal\": \"\",\r\n";
-   json += "    \"lastSuccessLocal\": \"\",\r\n";
-   json += "    \"status\": \"DISABLED\",\r\n";
-   json += "    \"httpCode\": 0,\r\n";
-   json += "    \"message\": \"Cloud sync is disabled in the MT5 phase 1 skeleton\"\r\n";
-   json += "  },\r\n";
 
    json += "  \"account\": {\r\n";
    json += "    \"number\": " + IntegerToString((int)accountLogin) + ",\r\n";
@@ -10303,8 +10071,6 @@ void ExportDashboard(bool runExecutionLoop)
    json += "  \"strategyJsonEaContract\": " + strategyJsonEAContractStatusJson + ",\r\n";
    json += "  \"strategyJsonEaShadowEvaluation\": " + strategyJsonEAShadowEvaluationJson + ",\r\n";
    json += "  \"autonomousConfigPatchEaStatus\": " + autonomousConfigPatchStatusJson + ",\r\n";
-   json += "  \"hfmCryptoSymbolSpecs\": " + hfmCryptoSymbolSpecsJson + ",\r\n";
-   json += "  \"hfmCryptoRuntimeProbe\": " + hfmCryptoRuntimeProbeJson + ",\r\n";
    json += "  \"eaRequestReaderReview\": " + eaRequestReaderReviewStatusJson + ",\r\n";
    json += "  \"eaRequestReaderExecution\": " + eaRequestReaderExecutionStatusJson + ",\r\n";
    json += "  \"brokerOrderSendWrapper\": " + brokerOrderSendWrapperStatusJson + ",\r\n";
@@ -10347,7 +10113,7 @@ void ExportDashboard(bool runExecutionLoop)
    statusFile += "pilotFloatingProfit=" + FormatNumber(SumPilotFloatingProfit(), 2) + "\r\n";
    string exportNewsReason = g_newsState.reason;
    if(EnablePilotNewsFilter &&
-      (g_newsState.calendarAvailable || ArraySize(g_usdTrackedEventIds) > 0) &&
+      g_newsState.calendarAvailable &&
       g_newsState.status == "IDLE" &&
       g_newsState.reason == "USDJPY high-impact news filter is armed")
    {
@@ -10356,11 +10122,16 @@ void ExportDashboard(bool runExecutionLoop)
    string exportNewsEvent = SafeNewsEventName(g_newsState.eventName);
    exportNewsReason = SafeNewsReasonText(exportNewsReason);
    statusFile += "newsStatus=" + g_newsState.status + "\r\n";
+   statusFile += "newsTradingReady=" + (!newsTradingBlocked ? "true" : "false") + "\r\n";
+   statusFile += "newsTradingBlockReason=" + newsTradingBlockReason + "\r\n";
    statusFile += "newsBias=" + UsdBiasLabel(g_newsState.usdBiasDirection) + "\r\n";
    statusFile += "newsEvent=" + exportNewsEvent + "\r\n";
    statusFile += "newsCurrency=" + g_newsState.eventCurrency + "\r\n";
    statusFile += "newsReason=" + exportNewsReason + "\r\n";
    statusFile += "connected=" + (connected ? "true" : "false") + "\r\n";
+   statusFile += "terminalConnected=" + (terminalConnected ? "true" : "false") + "\r\n";
+   statusFile += "brokerConnected=" + (brokerConnected ? "true" : "false") + "\r\n";
+   statusFile += "accountAuthorized=" + (accountAuthorized ? "true" : "false") + "\r\n";
    statusFile += "focusSymbol=" + g_focusSymbol + "\r\n";
    statusFile += "watchlist=" + g_resolvedWatchlist + "\r\n";
    statusFile += "account=" + IntegerToString((int)accountLogin) + "\r\n";
@@ -10384,7 +10155,6 @@ void ExportDashboard(bool runExecutionLoop)
    WriteTextFile(StrategyJsonEAContractStatusFileName(), strategyJsonEAContractStatusJson);
    WriteStrategyJsonEAShadowEvaluationFiles(strategyJsonEAShadowEvaluationJson);
    WriteTextFile("QuantGod_AutonomousConfigPatchEAStatus.json", autonomousConfigPatchStatusJson);
-   WriteHfmCryptoReadOnlyEvidenceFiles(hfmCryptoSymbolSpecsJson, hfmCryptoRuntimeProbeJson);
    WriteTextFile("QuantGod_EARequestReaderReviewStatus.json", eaRequestReaderReviewStatusJson);
    WriteTextFile("QuantGod_EARequestReaderExecutionStatus.json", eaRequestReaderExecutionStatusJson);
    WriteTextFile("QuantGod_BrokerOrderSendWrapperStatus.json", brokerOrderSendWrapperStatusJson);
@@ -10553,7 +10323,6 @@ int OnInit()
       Print("QuantGod timer setup failed. seconds=", timerSeconds, " err=", GetLastError());
    g_startupWarmupUntil = TimeLocal() + MathMax(60, MathMax(1, RefreshIntervalSec) * 36);
    WriteStartupWarmupHeartbeat("OnInit", "defer heavy export until market data warmup window ends");
-   ExportHfmCryptoReadOnlyEvidenceFiles();
    Print("QuantGod MT5 runtime warmup armed. Focus symbol=", g_focusSymbol,
          " warmupUntil=", FormatDateTime(g_startupWarmupUntil, true));
    return(INIT_SUCCEEDED);
@@ -10573,11 +10342,15 @@ void OnTick()
    datetime now = TimeCurrent();
    RefreshAutonomousConfigPatchRuntimeAdapter();
 
-   // Risk-critical protections: every tick
-   ManagePilotBreakevenStops();
-   ManagePilotRsiFailFastStops();
-   if(g_pilotKillSwitch && PilotCloseOnKillSwitch)
-      ClosePilotPositions(g_pilotKillReason);
+   // Risk-critical protections may mutate live positions, so they stay behind
+   // the same fail-closed execution gate as entries and the main pilot loop.
+   if(IsPilotLiveMode())
+   {
+      ManagePilotBreakevenStops();
+      ManagePilotRsiFailFastStops();
+      if(g_pilotKillSwitch && PilotCloseOnKillSwitch)
+         ClosePilotPositions(g_pilotKillReason);
+   }
 
    if(startupWarmupActive)
       return;

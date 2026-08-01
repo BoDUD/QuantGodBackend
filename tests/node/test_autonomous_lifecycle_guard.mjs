@@ -26,10 +26,9 @@ function listPythonFiles(relDir) {
     .map((name) => path.join(relDir, name));
 }
 
-test('autonomous lifecycle keeps the three-lane safety model explicit', () => {
+test('autonomous lifecycle keeps the forex safety model explicit', () => {
   const lifecycle = read('tools/autonomous_lifecycle/lifecycle.py');
   const mt5 = read('tools/autonomous_lifecycle/mt5_shadow_lane.py');
-  const hfmCrypto = read('tools/autonomous_lifecycle/hfm_crypto_shadow_lane.py');
   const cent = read('tools/autonomous_lifecycle/cent_account_rules.py');
   const daily = read('tools/daily_autopilot_v2/report.py');
   const orchestrator = read('tools/daily_autopilot_v2/orchestrator.py');
@@ -39,21 +38,23 @@ test('autonomous lifecycle keeps the three-lane safety model explicit', () => {
     'USDJPYc',
     'RSI_Reversal',
     'MT5_SHADOW',
-    'HFM_CRYPTO_CFD_SHADOW',
     'externalMarketRealMoneyAllowed',
-    'hfmCryptoExecutionAllowed',
     'liveMutationAllowed',
     'operatorApprovalRequired',
     'unattendedLiveExpansionAllowed',
+    'liveExpansionAllowed',
   ]) {
-    assert.match(lifecycle + mt5 + hfmCrypto + daily + orchestrator, new RegExp(marker));
+    assert.match(lifecycle + mt5 + daily + orchestrator, new RegExp(marker));
   }
   assert.match(cent, /QG_AUTO_MAX_LOT/);
   assert.match(cent, /2\.0/);
   assert.doesNotMatch(
-    lifecycle + mt5 + hfmCrypto + cent + daily,
+    lifecycle + mt5 + cent + daily,
     /\b(TRADE_ACTION_DEAL|PositionClose|OrderSendAsync|CTrade)\b|OrderSend\s*\(/
   );
+  assert.doesNotMatch(lifecycle + mt5 + daily, /"operatorApprovalRequired": False/);
+  assert.doesNotMatch(lifecycle + mt5 + daily, /"unattendedLiveExpansionAllowed": True/);
+  assert.doesNotMatch(lifecycle + mt5 + daily, /"liveExpansionAllowed": True/);
 });
 
 test('strategy policy no longer uses manual promotion language', () => {
@@ -74,7 +75,6 @@ test('API exposes lifecycle and lane endpoints', () => {
     '/api/usdjpy-strategy-lab/autonomous-agent/lifecycle',
     '/api/usdjpy-strategy-lab/autonomous-agent/lanes',
     '/api/usdjpy-strategy-lab/autonomous-agent/mt5-shadow',
-    '/api/usdjpy-strategy-lab/autonomous-agent/hfm-crypto-shadow',
     '/api/usdjpy-strategy-lab/autonomous-agent/ea-repro',
     '/api/usdjpy-strategy-lab/autonomous-agent/daily-autopilot-v2',
     '/api/usdjpy-strategy-lab/autonomous-agent/daily-autopilot-v2/run',
@@ -97,7 +97,7 @@ test('daily autopilot v2 keeps Chinese autonomous reporting and push-only safety
   const text = read('tools/daily_autopilot_v2/telegram_text.py');
   const routes = read('Dashboard/usdjpy_strategy_lab_api_routes.js');
 
-  for (const marker of ['今日自动作战计划', '今日自动复盘', 'MT5 模拟车道', 'HFM Crypto CFD 影子车道', '不触发 MT5 crypto 下单']) {
+  for (const marker of ['今日自动作战计划', '今日自动复盘', 'MT5 模拟车道']) {
     assert.match(report + text, new RegExp(marker));
   }
   for (const marker of [
@@ -135,7 +135,7 @@ test('daily autopilot v2 keeps Chinese autonomous reporting and push-only safety
   assert.match(runner, /dispatch_text/);
   assert.match(runner, /telegramGateway/);
   assert.match(read('tools/usdjpy_evidence_os/telegram_gateway.py'), /QG_TELEGRAM_COMMANDS_ALLOWED/);
-  assert.doesNotMatch(runner + report + text, /privateKeyAllowed\s*["']?\s*:\s*true|hfmCryptoExecutionAllowed\s*["']?\s*:\s*true/);
+  assert.doesNotMatch(runner + report + text, /privateKeyAllowed\s*["']?\s*:\s*true/);
 });
 
 test('autonomous lifecycle Python sources stay readable and multi-line', () => {

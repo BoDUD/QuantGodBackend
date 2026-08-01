@@ -14,6 +14,7 @@ from .schema import (
     FOCUS_SYMBOL,
     SAFETY_BOUNDARY,
     SCHEMA_VERSION,
+    atomic_write_json,
     history_sync_report_path,
     production_status_path,
 )
@@ -173,12 +174,8 @@ def sync_historical_klines(
     finally:
         _shutdown_mt5(mt5)
     if write:
-        history_sync_report_path(runtime_dir).parent.mkdir(parents=True, exist_ok=True)
-        history_sync_report_path(runtime_dir).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        production_status_path(runtime_dir).write_text(
-            json.dumps(report.get("productionStatus") or {}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(history_sync_report_path(runtime_dir), report)
+        atomic_write_json(production_status_path(runtime_dir), report.get("productionStatus") or {})
     return report
 
 

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-PATH_RE = re.compile(r"/api/[A-Za-z0-9_./:-]+")
+PATH_RE = re.compile(r"(?:/api/[A-Za-z0-9_./:-]+|/(?:healthz|readyz)\b)")
 
 ROUTE_FILE_DISCOVERY_PATTERNS = (
     "Dashboard/*_api_routes.js",
@@ -28,7 +28,6 @@ ROUTE_FILE_RELATIVE_PATHS = (
     "Dashboard/strategy_ga_factory_api_routes.js",
     "Dashboard/ga_factory_api_routes.js",
     "Dashboard/telegram_gateway_ops_api_routes.js",
-    "Dashboard/hfm_crypto_cfd_api_routes.js",
     "Dashboard/live_automation_readiness_api_routes.js",
     "Dashboard/production_evidence_validation_api_routes.js",
 )
@@ -41,12 +40,9 @@ PLACEHOLDER_PATHS = frozenset(
         "/api/usdjpy-strategy-lab/ga/candidate/:seedId",
         "/api/paramlab/auto-tester/:action",
         "/api/mt5-platform/:endpoint",
-        "/api/mt5-trading/:endpoint",
-        "/api/mt5/order/:ticket",
         "/api/mt5-readonly/:endpoint",
         "/api/mt5-readonly-secondary/:endpoint",
         "/api/mt5-symbol-registry/:endpoint",
-        "/api/mt5/:endpoint",
     }
 )
 
@@ -55,9 +51,13 @@ ALIAS_PREFIX_COVERAGE = {
 }
 
 SAFETY_DEFAULTS = {
-    "mode": "READ_ONLY_ROUTE_DISCOVERY",
+    "mode": "SHADOW_READONLY_ROUTE_DISCOVERY",
     "readOnly": True,
     "writesFiles": False,
+    "executionLaneExists": False,
+    "liveExpansionAllowed": False,
+    "unattendedLiveExpansionAllowed": False,
+    "operatorApprovalRequired": True,
     "orderSendAllowed": False,
     "closeAllowed": False,
     "cancelAllowed": False,
@@ -80,12 +80,9 @@ def normalize_backend_path(path: str) -> str:
         ),
         ("/api/paramlab/auto-tester/", "/api/paramlab/auto-tester/:action"),
         ("/api/mt5-platform/", "/api/mt5-platform/:endpoint"),
-        ("/api/mt5-trading/", "/api/mt5-trading/:endpoint"),
-        ("/api/mt5/order/", "/api/mt5/order/:ticket"),
         ("/api/mt5-readonly/", "/api/mt5-readonly/:endpoint"),
         ("/api/mt5-readonly-secondary/", "/api/mt5-readonly-secondary/:endpoint"),
         ("/api/mt5-symbol-registry/", "/api/mt5-symbol-registry/:endpoint"),
-        ("/api/mt5/", "/api/mt5/:endpoint"),
     )
     for prefix, normalized in dynamic_prefixes:
         if clean.startswith(prefix):

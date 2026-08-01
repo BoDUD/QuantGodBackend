@@ -44,10 +44,8 @@ test('Strategy GA Factory exposes P4-4 API endpoints', () => {
     '/api/strategy-ga-factory/status',
     '/api/strategy-ga-factory/build',
     '/api/strategy-ga-factory/intent-plan',
-    '/api/strategy-ga-factory/hyperliquid-shadow',
     '/api/strategy-ga-factory/telegram-text',
     'run_strategy_ga_factory.py',
-    'run_hyperliquid_shadow_lane.py',
     'GA Factory',
   ]) {
     assert.match(`${server}\n${routes}\n${runner}`, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

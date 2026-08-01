@@ -160,7 +160,6 @@ _ADVERSE_FACTOR_DEFS = {
     "fundFlow": {"keys": ("fundFlowScore", "fundFlow"), "mode": "lt", "threshold": -0.15},
     "news": {"keys": ("newsScore", "news"), "mode": "lt", "threshold": -0.15},
     "smartMoney": {"keys": ("smartMoneyScore", "smartMoney"), "mode": "lt", "threshold": -0.15},
-    "predictionMarket": {"keys": ("predictionMarketScore", "predictionMarket"), "mode": "lt", "threshold": -0.15},
     "kronos": {"keys": ("kronosScore", "kronos"), "mode": "lt", "threshold": -0.15},
     "executionRisk": {"keys": ("executionRiskScore", "executionRisk"), "mode": "gt", "threshold": 0.60},
     "entryTiming": {"keys": ("entryTimingScore", "entryTiming"), "mode": "lt", "threshold": 0.45},

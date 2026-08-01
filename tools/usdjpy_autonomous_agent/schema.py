@@ -45,11 +45,12 @@ HARD_SAFETY = {
     "focusOnly": True,
     "focusSymbol": FOCUS_SYMBOL,
     "requiresAutonomousGovernance": True,
-    "autoApplyAllowed": "stage_gated",
-    "operatorApprovalRequired": False,
-    "unattendedLiveExpansionAllowed": True,
-    "liveScopeExpansionMode": "autonomous_governance_stage_gated",
-    "agentMayExpandLiveScope": True,
+    "autoApplyAllowed": "shadow_only",
+    "operatorApprovalRequired": True,
+    "unattendedLiveExpansionAllowed": False,
+    "liveExpansionAllowed": False,
+    "liveScopeExpansionMode": "operator_reviewed_future_lane",
+    "agentMayExpandLiveScope": False,
     "agentMayWriteConfigPatch": True,
     "patchWritable": True,
     # Keep direct broker and preset mutation disabled. The agent may only write
@@ -72,7 +73,6 @@ HARD_SAFETY = {
     "posteriorMayAffectTrigger": False,
     "posteriorUsedForScoringOnly": True,
     "externalMarketRealMoneyAllowed": False,
-    "hfmCryptoExecutionAllowed": False,
 }
 
 

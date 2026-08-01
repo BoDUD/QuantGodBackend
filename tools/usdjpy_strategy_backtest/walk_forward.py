@@ -11,7 +11,7 @@ except ModuleNotFoundError:  # pragma: no cover
     from strategy_json.schema import base_strategy_seed
 
 from .historical_news import load_historical_news_events
-from .schema import AGENT_VERSION, FOCUS_SYMBOL, SAFETY_BOUNDARY
+from .schema import AGENT_VERSION, FOCUS_SYMBOL, SAFETY_BOUNDARY, atomic_write_json
 from .sqlite_store import (
     BAR_TABLES,
     Bar,
@@ -118,8 +118,7 @@ def build_seed_walk_forward(
     }
     if write:
         path = runtime_dir / "replay" / "usdjpy" / "QuantGod_USDJPYSeedWalkForwardReport.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(path, report)
     return report
 
 

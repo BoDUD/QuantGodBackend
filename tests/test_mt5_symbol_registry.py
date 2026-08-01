@@ -81,13 +81,16 @@ class Mt5SymbolRegistryTests(unittest.TestCase):
             generated_at="2026-04-28T00:00:00Z",
         )
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["summary"]["totalSymbols"], 3)
+        self.assertEqual(payload["summary"]["totalSymbols"], 2)
         self.assertEqual(payload["summary"]["assetClassCounts"]["Forex"], 2)
-        self.assertEqual(payload["summary"]["assetClassCounts"]["Metals"], 1)
+        self.assertNotIn("Metals", payload["summary"]["assetClassCounts"])
 
         resolved = registry.add_resolve_payload(payload, "EURUSD")
         self.assertEqual(resolved["matchCount"], 1)
         self.assertEqual(resolved["resolved"]["brokerSymbol"], "EURUSDc")
+
+        filtered = registry.add_resolve_payload(payload, "XAUUSD")
+        self.assertEqual(filtered["matchCount"], 0)
 
     def test_registry_contract_fields_are_stable(self):
         payload = registry.build_registry_from_symbols(
@@ -172,16 +175,15 @@ class Mt5SymbolRegistryTests(unittest.TestCase):
         self.assertFalse(registry.SAFETY["symbolSelectAllowed"])
         self.assertFalse(registry.SAFETY["mutatesMt5"])
 
-    def test_static_catalog_and_lot_profiles_cover_quantdinger_mt5_assets(self):
+    def test_static_catalog_is_forex_only(self):
         catalog = registry.static_symbol_catalog()
         canonical = {row["canonicalSymbol"] for row in catalog}
         self.assertIn("EURUSD", canonical)
         self.assertIn("USDJPY", canonical)
-        self.assertIn("XAUUSD", canonical)
-        self.assertIn("US500", canonical)
-        self.assertIn("BTCUSD", canonical)
+        self.assertNotIn("XAUUSD", canonical)
+        self.assertNotIn("US500", canonical)
+        self.assertTrue(all(row["marketCategory"] == "forex" for row in catalog))
         self.assertEqual(registry.get_lot_size_info("EURUSD")["standardLot"], 100000)
-        self.assertEqual(registry.get_lot_size_info("XAUUSD")["contractUnit"], "troy_ounces")
 
 
 if __name__ == "__main__":

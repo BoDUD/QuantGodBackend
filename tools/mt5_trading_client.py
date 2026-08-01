@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Guarded MT5 trading bridge for QuantGod.
+"""Retired MT5 mutation bridge kept as a fail-closed compatibility shim.
 
-This module is intentionally stricter than the read-only bridge.  It exposes
-the missing trading operations, but live mutation is impossible unless an
-operator enables every guard: environment switch, local config, kill switch,
-authorization lock, action scope, symbol scope, and risk limits.  Dry-run is
-the default and still writes the audit ledger.
+QuantGod's active product contract is Shadow/ReadOnly and has no execution
+lane.  Read-only account, position, order, quote, and health access lives in
+``mt5_readonly_bridge.py`` and the dedicated Dashboard routes.  Legacy callers
+may still import this module while they are migrated, but every mutating
+endpoint is permanently blocked in code and never calls the broker API.
 """
 
 from __future__ import annotations
@@ -38,11 +38,14 @@ DEFAULT_CONFIG_NAME = "QuantGod_MT5TradingConfig.json"
 DEFAULT_PROFILES_NAME = "QuantGod_MT5AccountProfiles.json"
 AUDIT_LEDGER_NAME = "QuantGod_MT5TradingAuditLedger.csv"
 MODE = "MT5_TRADING_BRIDGE_V1"
-WORKER_VERSION = "mt5-trading-bridge-v1"
+WORKER_VERSION = "mt5-trading-bridge-retired-v2"
+EXECUTION_LANE_EXISTS = False
+EXECUTION_LANE_REMOVED_REASON = "execution_lane_removed_shadow_readonly"
 
 ENDPOINTS = {"status", "profiles", "save-profile", "login", "order", "close", "cancel"}
-MUTATING_ENDPOINTS = {"login", "order", "close", "cancel"}
+MUTATING_ENDPOINTS = {"save-profile", "login", "order", "close", "cancel"}
 ORDER_ENDPOINTS = {"order", "close", "cancel"}
+SHADOW_SIMULATION_ENDPOINTS = {"order", "close", "cancel"}
 LIVE_OWNER_MODES = {"DASHBOARD_TICKET_OPS", "PY_PENDING_ONLY", "EA_AND_PY_SPLIT"}
 PENDING_ONLY_OWNER_MODES = {"PY_PENDING_ONLY", "EA_AND_PY_SPLIT"}
 TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -194,23 +197,27 @@ def load_config(runtime_dir: Path, config_path: Path | None = None) -> dict[str,
 
 
 def public_safety(config: dict[str, Any], *, live_allowed: bool = False, dry_run: bool | None = None) -> dict[str, Any]:
-    dry = as_bool(config.get("dryRun"), True) if dry_run is None else bool(dry_run)
+    del live_allowed, dry_run
     return {
-        "readOnly": False,
-        "dryRun": dry,
-        "tradingEnabled": as_bool(config.get("tradingEnabled")),
+        "readOnly": True,
+        "dryRun": True,
+        "executionLaneExists": EXECUTION_LANE_EXISTS,
+        "tradingEnabled": False,
+        "legacyTradingConfigured": as_bool(config.get("tradingEnabled")),
         "envEnableVar": config.get("envEnableVar", "QG_MT5_TRADING_ENABLED"),
-        "envEnabled": env_enabled(config),
-        "killSwitch": as_bool(config.get("killSwitch"), True),
-        "ownerMode": clean(config.get("ownerMode") or "EA_ONLY", 64),
-        "orderSendAllowed": bool(live_allowed),
-        "closeAllowed": bool(live_allowed and as_bool(config.get("allowDashboardClose"))),
-        "cancelAllowed": bool(live_allowed and as_bool(config.get("allowDashboardCancel"))),
-        "loginAllowed": bool(live_allowed and as_bool(config.get("allowLogin"))),
+        "envEnabled": False,
+        "legacyEnvRequested": env_enabled(config),
+        "killSwitch": True,
+        "ownerMode": "SHADOW_READONLY",
+        "orderSendAllowed": False,
+        "closeAllowed": False,
+        "cancelAllowed": False,
+        "loginAllowed": False,
         "credentialStorageAllowed": False,
         "livePresetMutationAllowed": False,
-        "auditLedgerRequired": True,
-        "mutatesMt5": bool(live_allowed),
+        "auditLedgerRequired": False,
+        "mutatesMt5": False,
+        "reason": EXECUTION_LANE_REMOVED_REASON,
     }
 
 
@@ -442,49 +449,17 @@ def control_state(
     mt5: Any | None,
     runtime_dir: Path,
 ) -> dict[str, Any]:
+    del account, mt5, runtime_dir
     endpoint = clean(request.get("endpoint") or request.get("action"), 40)
-    dry_run = as_bool(request.get("dryRun"), as_bool(config.get("dryRun"), True))
-    owner_mode = clean(config.get("ownerMode") or "EA_ONLY", 64)
-    auth = validate_auth_lock(config, request, account)
-    reasons: list[str] = []
-
-    if endpoint in MUTATING_ENDPOINTS:
-        if dry_run:
-            reasons.append("dry_run")
-        if not as_bool(config.get("tradingEnabled")):
-            reasons.append("trading_config_disabled")
-        if not env_enabled(config):
-            reasons.append("trading_env_disabled")
-        if as_bool(config.get("killSwitch"), True):
-            reasons.append("kill_switch_on")
-        if endpoint == "login" and not as_bool(config.get("allowLogin")):
-            reasons.append("login_disabled")
-        if endpoint == "order":
-            order_type = clean(request.get("orderType") or request.get("type"), 40).lower()
-            is_pending = "limit" in order_type or "stop" in order_type
-            if is_pending and not as_bool(config.get("allowDashboardPendingOrders")):
-                reasons.append("dashboard_pending_orders_disabled")
-            if not is_pending and not as_bool(config.get("allowDashboardMarketOrders")):
-                reasons.append("dashboard_market_orders_disabled")
-        if endpoint == "close" and not as_bool(config.get("allowDashboardClose")):
-            reasons.append("dashboard_close_disabled")
-        if endpoint == "cancel" and not as_bool(config.get("allowDashboardCancel")):
-            reasons.append("dashboard_cancel_disabled")
-        if owner_mode not in LIVE_OWNER_MODES:
-            reasons.append("owner_mode_blocks_python_trading")
-        if not auth["ok"]:
-            reasons.extend(auth["reasons"])
-        reasons.extend(validate_limits(config, auth, request, mt5, runtime_dir))
-
-    live_allowed = endpoint in MUTATING_ENDPOINTS and not reasons
+    reasons = [EXECUTION_LANE_REMOVED_REASON] if endpoint in MUTATING_ENDPOINTS else []
     return {
         "endpoint": endpoint,
-        "dryRun": dry_run,
-        "liveAllowed": live_allowed,
-        "decision": "LIVE_ALLOWED" if live_allowed else ("DRY_RUN_ALLOWED" if dry_run else "BLOCKED"),
+        "dryRun": True,
+        "liveAllowed": False,
+        "decision": "BLOCKED" if endpoint in MUTATING_ENDPOINTS else "READ_ONLY",
         "reasons": reasons,
-        "authLock": auth,
-        "safety": public_safety(config, live_allowed=live_allowed, dry_run=dry_run),
+        "authLock": {"ok": False, "reasons": reasons},
+        "safety": public_safety(config),
     }
 
 
@@ -751,10 +726,10 @@ def status_payload(runtime_dir: Path, config: dict[str, Any], mt5: Any | None = 
         "endpoint": "status",
         "generatedAtIso": utc_now(),
         "host": socket.gethostname(),
-        "status": "LOCKED" if as_bool(config.get("killSwitch"), True) else "ARMED_DRY_RUN" if as_bool(config.get("dryRun"), True) else "READY_FOR_AUTH_CHECK",
+        "status": "EXECUTION_LANE_REMOVED",
         "config": redact_config(config),
         "safety": public_safety(config),
-        "authLock": validate_auth_lock(config, {"endpoint": "status"}, account),
+        "authLock": {"ok": False, "reasons": [EXECUTION_LANE_REMOVED_REASON]},
         "terminalInitialized": initialized,
         "terminal": terminal,
         "account": account,
@@ -772,6 +747,21 @@ def redact_config(config: dict[str, Any]) -> dict[str, Any]:
             continue
         if key.lower() in {"password", "secret", "signature"}:
             visible[key] = "[REDACTED]"
+    visible.update(
+        {
+            "tradingEnabled": False,
+            "dryRun": True,
+            "killSwitch": True,
+            "ownerMode": "SHADOW_READONLY",
+            "allowDashboardMarketOrders": False,
+            "allowDashboardPendingOrders": False,
+            "allowDashboardClose": False,
+            "allowDashboardCancel": False,
+            "allowLogin": False,
+            "executionLaneExists": False,
+            "legacyConfigIgnored": True,
+        }
+    )
     return visible
 
 
@@ -789,6 +779,12 @@ def execute_endpoint(
     request["endpoint"] = endpoint
     config = load_config(runtime_dir, config_path)
 
+    requested_dry_run = as_bool(request.get("dryRun"), as_bool(config.get("dryRun"), True))
+    if endpoint in SHADOW_SIMULATION_ENDPOINTS and requested_dry_run:
+        return shadow_simulation_payload(runtime_dir, endpoint, request, config, audit=audit)
+    if endpoint in MUTATING_ENDPOINTS:
+        return disabled_mutation_payload(endpoint, config)
+
     if endpoint == "profiles":
         return {
             "ok": True,
@@ -797,17 +793,6 @@ def execute_endpoint(
             "generatedAtIso": utc_now(),
             "safety": public_safety(config),
             "profiles": load_profiles(runtime_dir, config),
-        }
-
-    if endpoint == "save-profile":
-        profile = save_profile(runtime_dir, config, request)
-        return {
-            "ok": True,
-            "mode": MODE,
-            "endpoint": endpoint,
-            "generatedAtIso": utc_now(),
-            "safety": public_safety(config),
-            "profile": profile,
         }
 
     own_mt5 = False
@@ -820,18 +805,6 @@ def execute_endpoint(
     try:
         if endpoint == "status":
             return status_payload(runtime_dir, config, mt5)
-
-        account = mt5_readonly_bridge.account_payload(mt5) if mt5 is not None else None
-        state = control_state(config, request, account, mt5, runtime_dir)
-
-        if endpoint == "login":
-            return execute_login(runtime_dir, config, request, state, mt5, audit)
-        if endpoint == "order":
-            return execute_order(runtime_dir, config, request, state, mt5, audit)
-        if endpoint == "close":
-            return execute_close(runtime_dir, config, request, state, mt5, audit)
-        if endpoint == "cancel":
-            return execute_cancel(runtime_dir, config, request, state, mt5, audit)
 
         return {
             "ok": False,
@@ -849,6 +822,71 @@ def execute_endpoint(
                 pass
 
 
+def disabled_mutation_payload(endpoint: str, config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "mode": MODE,
+        "endpoint": endpoint,
+        "generatedAtIso": utc_now(),
+        "status": "BLOCKED",
+        "decision": "EXECUTION_LANE_REMOVED",
+        "reason": EXECUTION_LANE_REMOVED_REASON,
+        "safety": public_safety(config),
+        "authLock": {"ok": False, "reasons": [EXECUTION_LANE_REMOVED_REASON]},
+        "wouldSendRequest": {},
+        "audit": {},
+    }
+
+
+def shadow_simulation_payload(
+    runtime_dir: Path,
+    endpoint: str,
+    request: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    audit: bool = True,
+) -> dict[str, Any]:
+    state = {
+        "endpoint": endpoint,
+        "dryRun": True,
+        "liveAllowed": False,
+        "decision": "DRY_RUN_ACCEPTED",
+        "reasons": ["shadow_simulation_only", EXECUTION_LANE_REMOVED_REASON],
+        "authLock": {"ok": False, "reasons": [EXECUTION_LANE_REMOVED_REASON]},
+        "safety": public_safety(config),
+    }
+    ledger = (
+        audit_row(
+            runtime_dir,
+            endpoint=endpoint,
+            request=request,
+            state=state,
+            decision="DRY_RUN_ACCEPTED",
+            reason="shadow_simulation_only",
+        )
+        if audit
+        else {}
+    )
+    return {
+        "ok": True,
+        "mode": MODE,
+        "endpoint": endpoint,
+        "generatedAtIso": utc_now(),
+        "status": "SHADOW_ONLY",
+        "decision": "DRY_RUN_ACCEPTED",
+        "reason": "shadow_simulation_only",
+        "safety": state["safety"],
+        "authLock": state["authLock"],
+        "wouldSendRequest": redact_request(request),
+        "audit": {
+            "ledgerId": ledger.get("LedgerId"),
+            "ledgerPath": str(runtime_path(runtime_dir, AUDIT_LEDGER_NAME)),
+        }
+        if ledger
+        else {},
+    }
+
+
 def blocked_or_dry_run_payload(
     runtime_dir: Path,
     endpoint: str,
@@ -859,144 +897,36 @@ def blocked_or_dry_run_payload(
     audit: bool = True,
     account: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    decision = "DRY_RUN_ACCEPTED" if state.get("dryRun") else "BLOCKED"
-    reason = ",".join(state.get("reasons") or []) or ("dry_run" if state.get("dryRun") else "blocked")
-    ledger = audit_row(runtime_dir, endpoint=endpoint, request=request, state=state, decision=decision, reason=reason, account=account) if audit else {}
-    return {
-        "ok": bool(state.get("dryRun")),
-        "mode": MODE,
-        "endpoint": endpoint,
-        "generatedAtIso": utc_now(),
-        "decision": decision,
-        "reason": reason,
-        "safety": state["safety"],
-        "authLock": state["authLock"],
-        "wouldSendRequest": would_send or {},
-        "audit": {"ledgerId": ledger.get("LedgerId"), "ledgerPath": str(runtime_path(runtime_dir, AUDIT_LEDGER_NAME))} if ledger else {},
-    }
+    del would_send, account
+    if state.get("dryRun") and endpoint in SHADOW_SIMULATION_ENDPOINTS:
+        return shadow_simulation_payload(runtime_dir, endpoint, request, DEFAULT_CONFIG, audit=audit)
+    return disabled_mutation_payload(endpoint, DEFAULT_CONFIG)
 
 
 def execute_login(runtime_dir: Path, config: dict[str, Any], request: dict[str, Any], state: dict[str, Any], mt5: Any | None, audit: bool) -> dict[str, Any]:
-    profile = find_profile(runtime_dir, config, clean(request.get("profileId"), 80)) if request.get("profileId") else None
-    login = as_int(request.get("accountLogin") or request.get("login") or (profile or {}).get("accountLogin"), 0)
-    server = clean(request.get("server") or (profile or {}).get("server"), 120)
-    password = password_for_login(request, profile)
-    would_send = {"login": login, "server": server, "passwordProvided": bool(password)}
-
-    if not state["liveAllowed"] or mt5 is None:
-        return blocked_or_dry_run_payload(runtime_dir, "login", request, state, would_send=would_send, audit=audit)
-    if not password:
-        state["reasons"].append("password_missing")
-        state["liveAllowed"] = False
-        state["safety"] = public_safety(config, live_allowed=False, dry_run=False)
-        return blocked_or_dry_run_payload(runtime_dir, "login", request, state, would_send=would_send, audit=audit)
-
-    pre = audit_row(runtime_dir, endpoint="login", request=request, state=state, decision="LOGIN_REQUESTED", reason="pre_broker_audit") if audit else {}
-    ok = bool(mt5.login(login=login, password=password, server=server))
-    response = {"retcode": 1 if ok else 0, "order": "", "comment": "login accepted" if ok else str(mt5_readonly_bridge.safe_last_error(mt5))}
-    post = audit_row(runtime_dir, endpoint="login", request=request, state=state, decision="LOGIN_ACCEPTED" if ok else "LOGIN_REJECTED", reason=response["comment"], broker_response=response) if audit else {}
-    return {
-        "ok": ok,
-        "mode": MODE,
-        "endpoint": "login",
-        "generatedAtIso": utc_now(),
-        "decision": "LOGIN_ACCEPTED" if ok else "LOGIN_REJECTED",
-        "safety": state["safety"],
-        "audit": {"preLedgerId": pre.get("LedgerId"), "postLedgerId": post.get("LedgerId"), "ledgerPath": str(runtime_path(runtime_dir, AUDIT_LEDGER_NAME))},
-        "response": response,
-    }
+    del runtime_dir, request, state, mt5, audit
+    return disabled_mutation_payload("login", config)
 
 
 def execute_order(runtime_dir: Path, config: dict[str, Any], request: dict[str, Any], state: dict[str, Any], mt5: Any | None, audit: bool) -> dict[str, Any]:
-    would_send: dict[str, Any] = {}
-    if mt5 is not None:
-        try:
-            would_send = build_order_send_request(mt5, config, request)
-        except Exception as exc:
-            state["reasons"].append(f"request_build_failed:{exc}")
-            state["liveAllowed"] = False
-            state["safety"] = public_safety(config, live_allowed=False, dry_run=state["dryRun"])
-    if not state["liveAllowed"] or mt5 is None:
-        return blocked_or_dry_run_payload(runtime_dir, "order", request, state, would_send=would_send, audit=audit, account=mt5_readonly_bridge.account_payload(mt5) if mt5 else None)
-
-    account = mt5_readonly_bridge.account_payload(mt5)
-    pre = audit_row(runtime_dir, endpoint="order", request=request, state=state, decision="ORDER_SEND_REQUESTED", reason="pre_broker_audit", account=account) if audit else {}
-    result = mt5.order_send(would_send)
-    response = result_to_dict(result)
-    retcode = as_int(response.get("retcode"), 0)
-    accepted = retcode in {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), 10008, 10009}
-    post = audit_row(runtime_dir, endpoint="order", request=request, state=state, decision="ORDER_SEND_ACCEPTED" if accepted else "ORDER_SEND_REJECTED", reason=clean(response.get("comment"), 240), account=account, broker_response=response) if audit else {}
-    return {
-        "ok": accepted,
-        "mode": MODE,
-        "endpoint": "order",
-        "generatedAtIso": utc_now(),
-        "decision": "ORDER_SEND_ACCEPTED" if accepted else "ORDER_SEND_REJECTED",
-        "safety": state["safety"],
-        "orderRequest": redact_request(would_send),
-        "response": response,
-        "audit": {"preLedgerId": pre.get("LedgerId"), "postLedgerId": post.get("LedgerId"), "ledgerPath": str(runtime_path(runtime_dir, AUDIT_LEDGER_NAME))},
-    }
+    del mt5
+    if as_bool(request.get("dryRun"), bool(state.get("dryRun"))):
+        return shadow_simulation_payload(runtime_dir, "order", request, config, audit=audit)
+    return disabled_mutation_payload("order", config)
 
 
 def execute_close(runtime_dir: Path, config: dict[str, Any], request: dict[str, Any], state: dict[str, Any], mt5: Any | None, audit: bool) -> dict[str, Any]:
-    would_send: dict[str, Any] = {}
-    if mt5 is not None:
-        try:
-            would_send = build_close_request(mt5, config, request)
-        except Exception as exc:
-            state["reasons"].append(f"request_build_failed:{exc}")
-            state["liveAllowed"] = False
-            state["safety"] = public_safety(config, live_allowed=False, dry_run=state["dryRun"])
-    if not state["liveAllowed"] or mt5 is None:
-        return blocked_or_dry_run_payload(runtime_dir, "close", request, state, would_send=would_send, audit=audit, account=mt5_readonly_bridge.account_payload(mt5) if mt5 else None)
-    account = mt5_readonly_bridge.account_payload(mt5)
-    pre = audit_row(runtime_dir, endpoint="close", request=request, state=state, decision="CLOSE_REQUESTED", reason="pre_broker_audit", account=account) if audit else {}
-    result = mt5.order_send(would_send)
-    response = result_to_dict(result)
-    accepted = as_int(response.get("retcode"), 0) in {getattr(mt5, "TRADE_RETCODE_DONE", 10009), 10009}
-    post = audit_row(runtime_dir, endpoint="close", request=request, state=state, decision="CLOSE_ACCEPTED" if accepted else "CLOSE_REJECTED", reason=clean(response.get("comment"), 240), account=account, broker_response=response) if audit else {}
-    return {
-        "ok": accepted,
-        "mode": MODE,
-        "endpoint": "close",
-        "generatedAtIso": utc_now(),
-        "decision": "CLOSE_ACCEPTED" if accepted else "CLOSE_REJECTED",
-        "safety": state["safety"],
-        "closeRequest": redact_request(would_send),
-        "response": response,
-        "audit": {"preLedgerId": pre.get("LedgerId"), "postLedgerId": post.get("LedgerId"), "ledgerPath": str(runtime_path(runtime_dir, AUDIT_LEDGER_NAME))},
-    }
+    del mt5
+    if as_bool(request.get("dryRun"), bool(state.get("dryRun"))):
+        return shadow_simulation_payload(runtime_dir, "close", request, config, audit=audit)
+    return disabled_mutation_payload("close", config)
 
 
 def execute_cancel(runtime_dir: Path, config: dict[str, Any], request: dict[str, Any], state: dict[str, Any], mt5: Any | None, audit: bool) -> dict[str, Any]:
-    would_send: dict[str, Any] = {}
-    if mt5 is not None:
-        try:
-            would_send = build_cancel_request(mt5, request)
-        except Exception as exc:
-            state["reasons"].append(f"request_build_failed:{exc}")
-            state["liveAllowed"] = False
-            state["safety"] = public_safety(config, live_allowed=False, dry_run=state["dryRun"])
-    if not state["liveAllowed"] or mt5 is None:
-        return blocked_or_dry_run_payload(runtime_dir, "cancel", request, state, would_send=would_send, audit=audit, account=mt5_readonly_bridge.account_payload(mt5) if mt5 else None)
-    account = mt5_readonly_bridge.account_payload(mt5)
-    pre = audit_row(runtime_dir, endpoint="cancel", request=request, state=state, decision="CANCEL_REQUESTED", reason="pre_broker_audit", account=account) if audit else {}
-    result = mt5.order_send(would_send)
-    response = result_to_dict(result)
-    accepted = as_int(response.get("retcode"), 0) in {getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008), 10008, 10009}
-    post = audit_row(runtime_dir, endpoint="cancel", request=request, state=state, decision="CANCEL_ACCEPTED" if accepted else "CANCEL_REJECTED", reason=clean(response.get("comment"), 240), account=account, broker_response=response) if audit else {}
-    return {
-        "ok": accepted,
-        "mode": MODE,
-        "endpoint": "cancel",
-        "generatedAtIso": utc_now(),
-        "decision": "CANCEL_ACCEPTED" if accepted else "CANCEL_REJECTED",
-        "safety": state["safety"],
-        "cancelRequest": redact_request(would_send),
-        "response": response,
-        "audit": {"preLedgerId": pre.get("LedgerId"), "postLedgerId": post.get("LedgerId"), "ledgerPath": str(runtime_path(runtime_dir, AUDIT_LEDGER_NAME))},
-    }
+    del mt5
+    if as_bool(request.get("dryRun"), bool(state.get("dryRun"))):
+        return shadow_simulation_payload(runtime_dir, "cancel", request, config, audit=audit)
+    return disabled_mutation_payload("cancel", config)
 
 
 def parse_payload_arg(args: argparse.Namespace) -> dict[str, Any]:
@@ -1042,7 +972,7 @@ def main(argv: list[str]) -> int:
             "safety": public_safety(config),
         }
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
+    return 0 if result.get("ok") else 2
 
 
 if __name__ == "__main__":

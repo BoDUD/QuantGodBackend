@@ -29,9 +29,6 @@ function sendError(res, statusCode, requestUrl, error) {
       closeAllowed: false,
       cancelAllowed: false,
       mt5OrderSendAllowed: false,
-      hfmCryptoExecutionAllowed: false,
-      copyTradeExecutionAllowed: false,
-      mossExecutionAllowed: false,
       livePresetMutationAllowed: false,
       livePilotActivationAllowed: false,
       receiptWritesAllowed: false,
@@ -146,7 +143,7 @@ function truthyParam(value) {
 function normalizeRuntimeScope(value) {
   const text = String(value || '').trim().toLowerCase();
   if (!text) return '';
-  if (['secondary', 'live16', 'hfm-live16', 'hfm_live16', 'crypto', 'hfm-crypto'].includes(text)) return 'secondary';
+  if (['secondary', 'live16', 'hfm-live16', 'hfm_live16'].includes(text)) return 'secondary';
   if (['primary', 'live12', 'hfm-live12', 'hfm_live12', 'default'].includes(text)) return 'primary';
   return text;
 }
@@ -187,14 +184,13 @@ function resolveLiveAutomationRuntimeScope(ctx = {}, url = new URL('/', 'http://
     url.searchParams.get('scope') ||
     url.searchParams.get('accountScope') ||
     url.searchParams.get('account') ||
-    process.env.QG_HFM_CRYPTO_SCOPE ||
     '';
   const scope = normalizeRuntimeScope(requestedScope) || 'primary';
   if (scope === 'secondary') {
     return {
       scope,
       requestedScope: requestedScope || 'secondary',
-      accountLabel: 'HFM Live16 crypto CFD',
+      accountLabel: 'HFM Live16 secondary forex',
       runtimeDir: secondaryRuntimeDir(ctx),
     };
   }
@@ -275,9 +271,6 @@ function runtimeScopeNotFoundPayload(requestUrl, runtimeScope) {
       closeAllowed: false,
       cancelAllowed: false,
       mt5OrderSendAllowed: false,
-      hfmCryptoExecutionAllowed: false,
-      copyTradeExecutionAllowed: false,
-      mossExecutionAllowed: false,
       livePresetMutationAllowed: false,
     },
   };
@@ -286,12 +279,6 @@ function runtimeScopeNotFoundPayload(requestUrl, runtimeScope) {
 function buildArgs(runtimeDir, url) {
   const args = ['--runtime-dir', runtimeDir, 'build', '--write'];
   if (truthyParam(url.searchParams.get('refreshSources'))) args.push('--refresh-sources');
-  const mossBacktestJson = url.searchParams.get('mossBacktestJson') || '';
-  if (mossBacktestJson) args.push('--moss-backtest-json', mossBacktestJson);
-  const hfmSimulationProfileJson = url.searchParams.get('hfmSimulationProfileJson') || url.searchParams.get('simulationProfileJson') || '';
-  if (hfmSimulationProfileJson) args.push('--hfm-simulation-profile-json', hfmSimulationProfileJson);
-  const hfmContractSpecJson = url.searchParams.get('hfmContractSpecJson') || url.searchParams.get('contractSpecJson') || '';
-  if (hfmContractSpecJson) args.push('--hfm-contract-spec-json', hfmContractSpecJson);
   for (const root of url.searchParams.getAll('extraBasesRoot')) {
     if (root) args.push('--extra-bases-root', root);
   }
@@ -333,12 +320,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/live-automation/readiness') {
     const args = ['--runtime-dir', runtimeDir, 'status'];
     if (truthyParam(url.searchParams.get('refreshSources'))) args.push('--refresh-sources');
-    const mossBacktestJson = url.searchParams.get('mossBacktestJson') || '';
-    if (mossBacktestJson) args.push('--moss-backtest-json', mossBacktestJson);
-    const hfmSimulationProfileJson = url.searchParams.get('hfmSimulationProfileJson') || url.searchParams.get('simulationProfileJson') || '';
-    if (hfmSimulationProfileJson) args.push('--hfm-simulation-profile-json', hfmSimulationProfileJson);
-    const hfmContractSpecJson = url.searchParams.get('hfmContractSpecJson') || url.searchParams.get('contractSpecJson') || '';
-    if (hfmContractSpecJson) args.push('--hfm-contract-spec-json', hfmContractSpecJson);
     for (const root of url.searchParams.getAll('extraBasesRoot')) {
       if (root) args.push('--extra-bases-root', root);
     }

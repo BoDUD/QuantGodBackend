@@ -24,7 +24,7 @@ const CSV_FULL_READ_BYTES = 1024 * 1024;
 const CSV_TAIL_MIN_BYTES = 256 * 1024;
 const CSV_TAIL_BYTES_PER_ROW = 2048;
 const DASHBOARD_STATE_ENDPOINT = '/api/dashboard/state';
-const latestDashboardFreshMs = Number.parseInt(process.env.QG_LATEST_DASHBOARD_FRESH_MS || '1800000', 10) || 1800000;
+const latestDashboardFreshMs = Number.parseInt(process.env.QG_LATEST_DASHBOARD_FRESH_MS || '180000', 10) || 180000;
 
 const PHASE2_API_SAFETY = Object.freeze({
   mode: 'QUANTGOD_PHASE2_API_V1',
@@ -224,13 +224,73 @@ function dashboardFreshnessRecoverySteps() {
   ];
 }
 
-function latestDashboardFreshness(stat, sourceFile = '') {
+function parseLocalDashboardTimeMs(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})[.-](\d{2})[.-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (match) {
+    const parsed = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6]),
+    ).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function latestDashboardWriterEvidence(stat, sourceFile = '', payload = {}) {
+  const candidates = [];
+  if (Number.isFinite(Number(stat?.mtimeMs))) {
+    candidates.push({ source: 'file_mtime', timeMs: Number(stat.mtimeMs) });
+  }
+  const dashboardTimeMs = parseLocalDashboardTimeMs(payload?.timestamp);
+  if (dashboardTimeMs !== null) {
+    candidates.push({ source: 'dashboard_timestamp', timeMs: dashboardTimeMs });
+  }
+  const heartbeatFile = sourceFile
+    ? path.join(path.dirname(sourceFile), 'QuantGod_MT5_TimerHeartbeat.txt')
+    : '';
+  let heartbeatMtimeIso = '';
+  if (heartbeatFile && fs.existsSync(heartbeatFile)) {
+    try {
+      const heartbeatStat = fs.statSync(heartbeatFile);
+      const heartbeatText = fs.readFileSync(heartbeatFile, 'utf8');
+      const heartbeatLocalTime = heartbeatText.match(/^localTime=(.+?)\s*$/m)?.[1]?.trim() || '';
+      const heartbeatTimeMs = parseLocalDashboardTimeMs(heartbeatLocalTime);
+      candidates.push({ source: 'heartbeat_mtime', timeMs: heartbeatStat.mtimeMs });
+      if (heartbeatTimeMs !== null) {
+        candidates.push({ source: 'heartbeat_local_time', timeMs: heartbeatTimeMs });
+      }
+      heartbeatMtimeIso = heartbeatStat.mtime.toISOString();
+    } catch {
+      // Dashboard timestamp and file mtime remain compatibility evidence.
+    }
+  }
+  const oldest = candidates.reduce(
+    (current, candidate) => (!current || candidate.timeMs < current.timeMs ? candidate : current),
+    null,
+  );
+  return {
+    effectiveTimeMs: oldest?.timeMs ?? 0,
+    oldestEvidenceSource: oldest?.source || '',
+    evidenceSources: candidates.map((candidate) => candidate.source),
+    dashboardTimestamp: String(payload?.timestamp || ''),
+    heartbeatMtimeIso,
+  };
+}
+
+function latestDashboardFreshness(stat, sourceFile = '', payload = {}) {
   if (!stat) return {};
-  const ageMs = Math.max(0, Date.now() - Number(stat.mtimeMs || 0));
+  const writerEvidence = latestDashboardWriterEvidence(stat, sourceFile, payload);
+  const ageMs = Math.max(0, Date.now() - Number(writerEvidence.effectiveTimeMs || 0));
   const fresh = ageMs <= latestDashboardFreshMs;
   const checkedAtIso = new Date().toISOString();
   return {
-    mode: 'LATEST_DASHBOARD_MTIME_WATCH',
+    mode: 'LATEST_DASHBOARD_WRITER_EVIDENCE_WATCH',
     status: fresh ? 'FRESH_DASHBOARD_SNAPSHOT' : 'STALE_DASHBOARD_SNAPSHOT',
     statusZh: fresh ? 'MT5 dashboard 快照新鲜' : 'MT5 dashboard 快照已过期',
     checkedAtIso,
@@ -242,6 +302,11 @@ function latestDashboardFreshness(stat, sourceFile = '') {
     maxAgeSeconds: Math.round(latestDashboardFreshMs / 100) / 10,
     sourceFile,
     mtimeIso: stat.mtime ? stat.mtime.toISOString() : '',
+    freshnessBasis: 'oldest_writer_evidence',
+    oldestEvidenceSource: writerEvidence.oldestEvidenceSource,
+    evidenceSources: writerEvidence.evidenceSources,
+    dashboardTimestamp: writerEvidence.dashboardTimestamp,
+    heartbeatMtimeIso: writerEvidence.heartbeatMtimeIso,
     blockers: fresh ? [] : ['live_dashboard_snapshot_stale'],
     nextActionZh: fresh
       ? '继续读取最新 MT5 dashboard。'
@@ -260,7 +325,7 @@ function cloneJsonObject(payload) {
 }
 
 function withDashboardFreshnessOverlay(payload, stat, sourceFile = '') {
-  const freshness = latestDashboardFreshness(stat, sourceFile);
+  const freshness = latestDashboardFreshness(stat, sourceFile, payload);
   const next = cloneJsonObject(payload);
   next._freshness = freshness;
   next._runtimeUsability = {

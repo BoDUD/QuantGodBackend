@@ -31,33 +31,35 @@ def run_daily_autopilot_cycle(
     repo_root: Path,
     write: bool = True,
     bootstrap_samples: bool = False,
-    hfm_crypto_runtime_dir: Path | str | None = None,
 ) -> Dict[str, Any]:
     runtime_dir = Path(runtime_dir)
     repo_root = Path(repo_root)
-    hfm_crypto_runtime = Path(hfm_crypto_runtime_dir) if hfm_crypto_runtime_dir else runtime_dir
     started_at = utc_now_iso()
     steps: List[Dict[str, Any]] = []
     for step in _build_steps(
         runtime_dir,
         repo_root,
         bootstrap_samples=bootstrap_samples,
-        hfm_crypto_runtime_dir=hfm_crypto_runtime,
     ):
         steps.append(_run_step(repo_root, step))
     failed = [step for step in steps if step.get("status") != "COMPLETED_BY_AGENT"]
+    cycle_started = len(steps) > 0
+    cycle_completed = cycle_started and not failed
     payload: Dict[str, Any] = {
-        "ok": not failed,
+        "ok": cycle_completed,
         "schema": "quantgod.daily_autopilot_v2_run.v1",
         "agentVersion": "v2.6",
         "startedAtIso": started_at,
         "completedAtIso": utc_now_iso(),
         "symbol": "USDJPYc",
         "runtimeDir": str(runtime_dir),
-        "hfmCryptoRuntimeDir": str(hfm_crypto_runtime),
-        "status": "COMPLETED_BY_AGENT" if not failed else "FAILED_RETRYABLE",
-        "completedByAgent": not failed,
-        "autoAppliedByAgent": True,
+        "status": (
+            "COMPLETED_BY_AGENT"
+            if cycle_completed
+            else ("FAILED_RETRYABLE" if cycle_started else "NOT_STARTED")
+        ),
+        "completedByAgent": cycle_completed,
+        "autoAppliedByAgent": cycle_completed,
         "requiresAutonomousGovernance": True,
         "stepCount": len(steps),
         "completedStepCount": len(steps) - len(failed),
@@ -65,12 +67,16 @@ def run_daily_autopilot_cycle(
         "steps": steps,
         "summaryZh": _summary_zh(steps, failed),
         "safety": {
+            "shadowOnly": True,
+            "readOnlyMode": True,
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
             "orderSendAllowed": False,
             "closeAllowed": False,
             "cancelAllowed": False,
             "livePresetMutationAllowed": False,
             "externalMarketRealMoneyAllowed": False,
-            "hfmCryptoExecutionAllowed": False,
             "telegramCommandExecutionAllowed": False,
         },
     }
@@ -95,11 +101,9 @@ def _build_steps(
     repo_root: Path,
     *,
     bootstrap_samples: bool,
-    hfm_crypto_runtime_dir: Path,
 ) -> List[Dict[str, Any]]:
     py = sys.executable
     runtime_arg = ["--runtime-dir", str(runtime_dir)]
-    hfm_crypto_runtime_arg = ["--runtime-dir", str(hfm_crypto_runtime_dir)]
     steps: List[Dict[str, Any]] = [
         {
             "id": "automation_chain",
@@ -131,21 +135,6 @@ def _build_steps(
             "action": "CHECK_STRATEGY_BACKTEST_QUALITY",
             "summaryZh": "检查回测生产化质量：历史深度、动态成本、历史新闻门禁和缓存证据。",
             "command": [py, "tools/run_usdjpy_strategy_backtest.py", *runtime_arg, "quality"],
-            "timeoutSeconds": 120,
-            "allowWarn": True,
-        },
-        {
-            "id": "hfm_crypto_shadow_scan",
-            "lane": "HFM_CRYPTO_CFD_SHADOW",
-            "action": "BUILD_HFM_CRYPTO_CFD_SHADOW_STATE",
-            "summaryZh": "刷新 HFM Crypto CFD symbol 证据和 Moss 回测 profile 映射；只读不下单。",
-            "command": [
-                py,
-                "tools/run_hfm_crypto_cfd.py",
-                *hfm_crypto_runtime_arg,
-                "build",
-                "--write",
-            ],
             "timeoutSeconds": 120,
             "allowWarn": True,
         },
@@ -303,6 +292,8 @@ def _write_run(runtime_dir: Path, payload: Dict[str, Any]) -> None:
 
 
 def _summary_zh(steps: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
+    if not steps:
+        return "Agent 调度周期尚未开始；没有步骤证据，不能标记为自动完成。"
     if failed:
         return f"Agent 调度完成 {len(steps) - len(failed)}/{len(steps)} 步；失败步骤会保留为可重试。"
     return (

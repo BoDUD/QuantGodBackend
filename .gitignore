@@ -13,7 +13,7 @@ exports/
 cache/
 .cache/
 Dashboard/vue-dist/
-Dashboard/quantgod_cloud_sync.json
+Dashboard/vue-dist.previous-*/
 Dashboard/QuantGod_*.json
 Dashboard/QuantGod_*.csv
 Dashboard/QuantGod_*.db
@@ -29,7 +29,6 @@ runtime/
 archive/backtests/runs/
 archive/backtests/latest/QuantGod_BacktestSummary.json
 archive/param-lab/runs/
-archive/polymarket/history/
 !.env.telegram.local.example
 
 # QuantGod AI provider local env

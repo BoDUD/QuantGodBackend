@@ -71,6 +71,7 @@ test('USDJPY Strategy JSON backtest writes SQLite, trades, equity, and report ar
     'QG_USDJPY_HISTORY_LOOKBACK_DAYS',
     'QG_USDJPY_HISTORY_MAX_LAG_HOURS',
     'QG_USDJPY_HISTORY_TIMEFRAMES',
+    'return 0 if payload.get("ok") else 2',
     'quantgod.usdjpy_history_production_status.v1',
     'HISTORY_PRODUCTION_STATUS',
     'maxLatestLagHours',
@@ -133,7 +134,9 @@ test('Mac MT5 startup raises MaxBars so M1 CopyRates can reach 6-12 months', () 
     'patch_ini_section_key',
     'prepare_live_config "$MT5_LIVE_CONFIG" "$MT5_START_SYMBOL" "$QG_MT5_MAX_BARS"',
     'patch_ini_section_key "$target_config" "Charts" "MaxBars" "$max_bars"',
-    'patch_ini_section_key "$MT5_SHADOW_CONFIG" "Charts" "MaxBars" "$QG_MT5_MAX_BARS"',
+    'tools/hydrate_mt5_shadow_config.py',
+    '--target "$MT5_SHADOW_CONFIG"',
+    '--max-bars "$QG_MT5_MAX_BARS"',
     'terminal.ini',
   ]) {
     assert.match(launcher, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

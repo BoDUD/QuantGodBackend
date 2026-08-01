@@ -347,8 +347,6 @@ def _mock_base_price(symbol: str) -> float:
         return 156.25
     if "XAU" in upper or "GOLD" in upper:
         return 2310.0
-    if "BTC" in upper:
-        return 65000.0
     return 1.10 + (sum(ord(ch) for ch in upper) % 200) / 100000.0
 
 

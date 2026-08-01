@@ -86,4 +86,3 @@ jobs:
       - name: No frontend source should remain in backend
         run: |
           test ! -d frontend
-          test ! -d cloudflare

@@ -44,3 +44,14 @@ test('MT5 symbol registry exposes frontend symbols alias without MT5 mutation', 
   assert.match(text, /orderSendAllowed:\s*false/);
   assert.doesNotMatch(text, /symbol_select\s*\(/i);
 });
+
+test('dashboard registers only the MT5 read-only lane', () => {
+  const text = readIfExists(dashboardServerPath);
+
+  assert.match(text, /mt5ReadonlyEndpoints = new Set\(\['status', 'account', 'positions'/);
+  assert.match(text, /requestUrl[^\n]+=== '\/api\/mt5-readonly'/);
+  assert.doesNotMatch(text, /\/api\/mt5-trading/);
+  assert.doesNotMatch(text, /mt5TradingClientScript|mt5TradingEndpoints|handleMt5Trading/);
+  assert.doesNotMatch(text, /requestUrl[^\n]+=== '\/api\/mt5'/);
+  assert.doesNotMatch(text, /\/api\/mt5\/order\//);
+});

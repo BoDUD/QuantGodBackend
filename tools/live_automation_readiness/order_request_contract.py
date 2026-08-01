@@ -64,7 +64,7 @@ def _request_fields() -> list[dict[str, Any]]:
         {"name": "reviewPacketHash", "required": True, "type": "string", "source": "runtime_preflight"},
         {"name": "runtimePreflightHash", "required": True, "type": "string", "source": "runtime_preflight"},
         {"name": "operatorApprovalId", "required": True, "type": "string", "source": "approval_evidence"},
-        {"name": "lane", "required": True, "type": "enum", "allowed": ["USDJPY_MT5", "HFM_CRYPTO_CFD"]},
+        {"name": "lane", "required": True, "type": "enum", "allowed": ["USDJPY_MT5"]},
         {"name": "brokerSymbol", "required": True, "type": "string", "source": "approved_lane_contract"},
         {"name": "canonicalSymbol", "required": True, "type": "string", "source": "approved_lane_contract"},
         {"name": "side", "required": True, "type": "enum", "allowed": ["BUY", "SELL", "CLOSE_ONLY"]},
@@ -134,9 +134,6 @@ def build_mt5_order_request_contract(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -148,9 +145,6 @@ def build_mt5_order_request_contract(
     should_rebuild = bool(
         refresh_sources
         or operator_approval_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     preflight = (
@@ -159,9 +153,6 @@ def build_mt5_order_request_contract(
             write=bool(write and refresh_sources),
             refresh_sources=refresh_sources,
             operator_approval_json=operator_approval_json,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
         if should_rebuild
@@ -203,7 +194,7 @@ def build_mt5_order_request_contract(
         status = "WAITING_EXECUTION_MODE_ACTIVATION"
         status_zh = "数据面已通过，等待执行模式闸门"
         next_required_action_zh = (
-            "HFM/BTC 数据、symbol、tick、spread、审批和 dry-run 回放已通过；"
+            "USDJPY 外汇数据、symbol、tick、spread、审批和 dry-run 回放已通过；"
             "剩余 livePilotMode/readOnlyMode/executionEnabled/tradeAllowed 执行模式闸门。"
         )
     payload = {

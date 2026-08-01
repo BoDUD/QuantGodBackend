@@ -190,15 +190,92 @@ def ea_snapshot_age_seconds(stat: os.stat_result | None) -> float | None:
     return max(0.0, time.time() - float(stat.st_mtime))
 
 
-def ea_snapshot_fresh(stat: os.stat_result | None) -> bool:
-    age = ea_snapshot_age_seconds(stat)
+def parse_local_evidence_timestamp(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for pattern in ("%Y.%m.%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, pattern).timestamp()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def ea_snapshot_evidence(
+    file_path: Path | None,
+    dashboard: dict[str, Any],
+    stat: os.stat_result | None,
+) -> dict[str, Any]:
+    """Use writer-owned timestamps so copying an old JSON cannot make it fresh."""
+    now = time.time()
+    candidates: list[tuple[str, float]] = []
+    if stat is not None:
+        candidates.append(("file_mtime", float(stat.st_mtime)))
+
+    dashboard_timestamp = parse_local_evidence_timestamp(dashboard.get("timestamp"))
+    if dashboard_timestamp is not None:
+        candidates.append(("dashboard_timestamp", dashboard_timestamp))
+
+    heartbeat_path = file_path.with_name("QuantGod_MT5_TimerHeartbeat.txt") if file_path else None
+    heartbeat_stat: os.stat_result | None = None
+    heartbeat_timestamp: float | None = None
+    heartbeat_local_time = ""
+    if heartbeat_path and heartbeat_path.exists():
+        try:
+            heartbeat_stat = heartbeat_path.stat()
+            heartbeat_text = heartbeat_path.read_text(encoding="utf-8", errors="replace")
+            match = re.search(r"(?m)^localTime=(.+?)\s*$", heartbeat_text)
+            heartbeat_local_time = match.group(1).strip() if match else ""
+            heartbeat_timestamp = parse_local_evidence_timestamp(heartbeat_local_time)
+        except OSError:
+            heartbeat_stat = None
+        if heartbeat_stat is not None:
+            candidates.append(("heartbeat_mtime", float(heartbeat_stat.st_mtime)))
+        if heartbeat_timestamp is not None:
+            candidates.append(("heartbeat_local_time", heartbeat_timestamp))
+
+    effective_timestamp = min((value for _, value in candidates), default=None)
+    age_seconds = max(0.0, now - effective_timestamp) if effective_timestamp is not None else None
+    oldest_source = ""
+    if effective_timestamp is not None:
+        oldest_source = next((name for name, value in candidates if value == effective_timestamp), "")
+    return {
+        "ageSeconds": age_seconds,
+        "oldestSource": oldest_source,
+        "evidenceSources": [name for name, _ in candidates],
+        "dashboardTimestamp": str(dashboard.get("timestamp") or ""),
+        "dashboardTimestampIso": (
+            datetime.fromtimestamp(dashboard_timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
+            if dashboard_timestamp is not None
+            else ""
+        ),
+        "heartbeatFile": str(heartbeat_path) if heartbeat_path and heartbeat_path.exists() else "",
+        "heartbeatLocalTime": heartbeat_local_time,
+        "heartbeatMtimeIso": (
+            datetime.fromtimestamp(heartbeat_stat.st_mtime, timezone.utc).isoformat().replace("+00:00", "Z")
+            if heartbeat_stat is not None
+            else ""
+        ),
+    }
+
+
+def ea_snapshot_fresh(stat: os.stat_result | None, evidence: dict[str, Any] | None = None) -> bool:
+    age = evidence.get("ageSeconds") if isinstance(evidence, dict) else ea_snapshot_age_seconds(stat)
     if age is None:
         return False
     return age <= ea_snapshot_max_age_seconds()
 
 
-def ea_snapshot_freshness(file_path: Path | None, stat: os.stat_result | None) -> dict[str, Any]:
-    age = ea_snapshot_age_seconds(stat)
+def ea_snapshot_freshness(
+    file_path: Path | None,
+    stat: os.stat_result | None,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    age = evidence.get("ageSeconds") if isinstance(evidence, dict) else ea_snapshot_age_seconds(stat)
     max_age = ea_snapshot_max_age_seconds()
     fresh = age is not None and age <= max_age
     source_file = str(file_path) if file_path else ""
@@ -218,6 +295,9 @@ def ea_snapshot_freshness(file_path: Path | None, stat: os.stat_result | None) -
         "ageSeconds": round(age, 3) if age is not None else None,
         "maxAgeSeconds": max_age,
         "sourceFile": source_file,
+        "freshnessBasis": "oldest_writer_evidence" if evidence else "file_mtime",
+        "oldestEvidenceSource": evidence.get("oldestSource", "") if evidence else "file_mtime",
+        "evidenceSources": list(evidence.get("evidenceSources") or []) if evidence else ["file_mtime"],
         "blockers": [] if fresh else ["live_dashboard_snapshot_stale"],
         "nextAction": (
             "Continue reading the latest EA dashboard snapshot."
@@ -313,9 +393,16 @@ def detect_mt5_host_process(file_path: Path | None) -> dict[str, Any]:
         }
     rows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     terminal_rows = [row for row in rows if is_mt5_host_process_row(row)]
+    terminal_pids = [pid for row in terminal_rows if (pid := mt5_host_process_pid(row)) is not None]
+    process_cwds = mt5_host_process_cwds(terminal_pids)
     hint_matches = []
     for row in terminal_rows:
         normalized_row = row.replace("\\", "/")
+        pid = mt5_host_process_pid(row)
+        cwd = process_cwds.get(pid, "") if pid is not None else ""
+        if cwd and mt5_process_cwd_matches_snapshot(cwd, file_path):
+            hint_matches.append(row)
+            continue
         for hint in hints:
             if hint and hint.replace("\\", "/") in normalized_row:
                 hint_matches.append(row)
@@ -331,6 +418,51 @@ def detect_mt5_host_process(file_path: Path | None) -> dict[str, Any]:
         "matchedTargetProcessCount": len(hint_matches),
         "scanner": "tasklist" if os.name == "nt" else "ps",
     }
+
+
+def mt5_host_process_pid(row: str) -> int | None:
+    match = re.match(r"\s*(?P<pid>\d+)\s+", str(row or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group("pid"))
+    except (TypeError, ValueError):
+        return None
+
+
+def mt5_host_process_cwds(pids: list[int]) -> dict[int, str]:
+    """Return cwd evidence for candidate terminal processes without reading env."""
+    unique_pids = sorted({int(pid) for pid in pids if int(pid) > 0})
+    lsof = Path("/usr/sbin/lsof")
+    if os.name == "nt" or not unique_pids or not lsof.exists():
+        return {}
+    try:
+        result = subprocess.run(
+            [str(lsof), "-a", "-d", "cwd", "-p", ",".join(str(pid) for pid in unique_pids), "-Fn"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return {}
+    current_pid: int | None = None
+    found: dict[int, str] = {}
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith("p") and line[1:].isdigit():
+            current_pid = int(line[1:])
+        elif line.startswith("n") and current_pid is not None:
+            found[current_pid] = line[1:]
+    return found
+
+
+def mt5_process_cwd_matches_snapshot(cwd: str, file_path: Path | None) -> bool:
+    if not cwd or file_path is None:
+        return False
+    normalized_cwd = str(Path(cwd)).replace("\\", "/").rstrip("/")
+    normalized_file = str(file_path).replace("\\", "/")
+    return bool(normalized_cwd and (normalized_file == normalized_cwd or normalized_file.startswith(f"{normalized_cwd}/")))
 
 
 def is_mt5_host_process_row(row: str) -> bool:
@@ -352,9 +484,34 @@ def is_mt5_host_process_row(row: str) -> bool:
         return False
     comm = Path(match.group("comm")).name.lower()
     args = match.group("args")
-    if re.search(r"\b(terminal64(?:\.exe)?|metatrader|wine64(?:-preloader)?|wine-preloader)\b", comm, re.I):
+    if comm in {"screen", "login", "env", "zsh", "bash", "sh", "python", "python3", "rg", "grep", "perl"}:
+        return False
+    if re.search(r"\bterminal64(?:\.exe)?\b", comm, re.I):
         return True
-    return bool(re.search(r"(^|\s)(?:\S*/)?terminal64\.exe(\s|$)", args, re.I))
+
+    # macOS `ps -axo pid=,comm=,args=` truncates `comm` at the first space in
+    # application paths.  MetaQuotes Wine therefore appears as `/Users/.../App`
+    # even though `args` contains the real wine64-preloader executable followed
+    # by `C:\\Program Files\\MetaTrader 5\\terminal64.exe`.  Require both the
+    # Wine host and a bounded terminal executable argument so helper processes,
+    # maintenance scripts, and plain dashboard-path mentions cannot become
+    # false-positive MT5 terminals.
+    normalized_args = args.replace("\\", "/")
+    wine_host = bool(
+        re.search(
+            r"(?:^|[\s/])(wine64(?:-preloader)?|wine-preloader)(?=\s|$)",
+            normalized_args,
+            re.I,
+        )
+    )
+    terminal_argument = bool(
+        re.search(
+            r"(?:^|[\s/])terminal64\.exe(?=\s|$)",
+            normalized_args,
+            re.I,
+        )
+    )
+    return wine_host and terminal_argument
 
 
 def attach_host_process_freshness(freshness: dict[str, Any], host_process: dict[str, Any]) -> dict[str, Any]:
@@ -377,8 +534,13 @@ def attach_host_process_freshness(freshness: dict[str, Any], host_process: dict[
     return enriched
 
 
-def stale_collection_payload(kind: str, symbol: str, stat: os.stat_result | None) -> dict[str, Any]:
-    age = ea_snapshot_age_seconds(stat)
+def stale_collection_payload(
+    kind: str,
+    symbol: str,
+    stat: os.stat_result | None,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    age = evidence.get("ageSeconds") if isinstance(evidence, dict) else ea_snapshot_age_seconds(stat)
     max_age = ea_snapshot_max_age_seconds()
     return {
         "count": 0,
@@ -499,10 +661,44 @@ def find_ea_symbol_row(dashboard: dict[str, Any], symbol: str = "") -> dict[str,
     return rows[0] if rows and isinstance(rows[0], dict) else {}
 
 
+def build_connection_state(
+    *,
+    runtime: dict[str, Any],
+    terminal: dict[str, Any],
+    account: dict[str, Any] | None,
+    snapshot_fresh: bool,
+) -> dict[str, Any]:
+    terminal_value = runtime.get("terminalConnected")
+    terminal_connected = terminal_value if isinstance(terminal_value, bool) else terminal.get("connected") is True
+    broker_value = runtime.get("brokerConnected")
+    broker_connected = broker_value if isinstance(broker_value, bool) else terminal_connected
+    account_value = runtime.get("accountAuthorized")
+    if isinstance(account_value, bool):
+        account_authorized = account_value
+    else:
+        account_authorized = bool(
+            account
+            and to_int(first_present(account, "login", "number", default=0)) > 0
+            and str(first_present(account, "server", default="")).strip()
+        )
+    operational_connected = terminal_connected and broker_connected and account_authorized
+    return {
+        "terminalConnected": terminal_connected,
+        "brokerConnected": broker_connected,
+        "accountAuthorized": account_authorized,
+        "operationalConnected": operational_connected,
+        "snapshotFresh": snapshot_fresh,
+        "readReady": operational_connected and snapshot_fresh,
+        "semantics": "INDEPENDENT_REQUIRED_SIGNALS",
+    }
+
+
 def ea_terminal_payload(dashboard: dict[str, Any], file_path: Path | None) -> dict[str, Any]:
     runtime = dashboard.get("runtime") if isinstance(dashboard.get("runtime"), dict) else {}
     return {
-        "connected": bool(runtime.get("terminalConnected", runtime.get("connected", False))),
+        # Never reuse the legacy aggregate `connected` flag as terminal proof;
+        # older snapshots must provide terminalConnected explicitly.
+        "connected": runtime.get("terminalConnected") is True,
         "tradeAllowed": bool(runtime.get("terminalTradeAllowed", runtime.get("tradeAllowed", False))),
         "dllsAllowed": bool(runtime.get("dllAllowed", False)),
         "name": "HFM MetaTrader 5 EA Snapshot",
@@ -701,13 +897,34 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
     endpoint = args.endpoint
     payload = base_payload(endpoint)
     stat = file_path.stat() if file_path else None
-    snapshot_age = ea_snapshot_age_seconds(stat)
+    snapshot_evidence = ea_snapshot_evidence(file_path, dashboard, stat)
+    snapshot_age = snapshot_evidence.get("ageSeconds")
     snapshot_max_age = ea_snapshot_max_age_seconds()
-    snapshot_fresh = ea_snapshot_fresh(stat)
+    snapshot_fresh = ea_snapshot_fresh(stat, snapshot_evidence)
     host_process = detect_mt5_host_process(file_path)
-    freshness = attach_host_process_freshness(ea_snapshot_freshness(file_path, stat), host_process)
-    runtime = dashboard.get("runtime") if isinstance(dashboard.get("runtime"), dict) else {}
+    freshness = attach_host_process_freshness(
+        ea_snapshot_freshness(file_path, stat, snapshot_evidence),
+        host_process,
+    )
+    runtime = dict(dashboard.get("runtime")) if isinstance(dashboard.get("runtime"), dict) else {}
     terminal = ea_terminal_payload(dashboard, file_path)
+    account = ea_account_payload(dashboard)
+    connection = build_connection_state(
+        runtime=runtime,
+        terminal=terminal,
+        account=account,
+        snapshot_fresh=snapshot_fresh,
+    )
+    terminal["connected"] = connection["terminalConnected"]
+    runtime.update(
+        {
+            "connected": connection["operationalConnected"],
+            "terminalConnected": connection["terminalConnected"],
+            "brokerConnected": connection["brokerConnected"],
+            "accountAuthorized": connection["accountAuthorized"],
+            "connectionState": connection,
+        }
+    )
     terminal.update(
         {
             "hostProcessStatus": host_process.get("status"),
@@ -722,8 +939,9 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
             "bridgeStatus": "MT5_PYTHON_UNAVAILABLE_EA_SNAPSHOT_FALLBACK",
             "terminal": terminal,
             "hostProcess": host_process,
-            "account": ea_account_payload(dashboard),
+            "account": account,
             "runtime": runtime,
+            "connection": connection,
             "watchlist": dashboard.get("watchlist", ""),
             "market": dashboard.get("market", {}),
             "snapshotFresh": snapshot_fresh,
@@ -737,6 +955,12 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
                 "maxAgeSeconds": snapshot_max_age,
                 "fresh": snapshot_fresh,
                 "readError": read_error,
+                "freshnessBasis": "oldest_writer_evidence",
+                "oldestEvidenceSource": snapshot_evidence.get("oldestSource", ""),
+                "evidenceSources": snapshot_evidence.get("evidenceSources", []),
+                "dashboardTimestamp": snapshot_evidence.get("dashboardTimestamp", ""),
+                "dashboardTimestampIso": snapshot_evidence.get("dashboardTimestampIso", ""),
+                "heartbeatMtimeIso": snapshot_evidence.get("heartbeatMtimeIso", ""),
             },
             "_freshness": freshness,
         }
@@ -747,20 +971,27 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
     if endpoint == "status":
         return payload
     if endpoint == "account":
-        payload["status"] = "CONNECTED" if payload.get("account") else "NO_ACCOUNT"
+        if not payload.get("account"):
+            payload["status"] = "NO_ACCOUNT"
+        elif connection["readReady"]:
+            payload["status"] = "CONNECTED"
+        elif not snapshot_fresh:
+            payload["status"] = "STALE_EA_SNAPSHOT"
+        else:
+            payload["status"] = "ACCOUNT_AVAILABLE_NOT_CONNECTED"
         return payload
     if endpoint == "positions":
         payload["positions"] = (
             ea_positions_payload(dashboard, args.symbol)
             if snapshot_fresh
-            else stale_collection_payload("positions", args.symbol, stat)
+            else stale_collection_payload("positions", args.symbol, stat, snapshot_evidence)
         )
         return payload
     if endpoint == "orders":
         payload["orders"] = (
             ea_orders_payload(dashboard, args.symbol)
             if snapshot_fresh
-            else stale_collection_payload("orders", args.symbol, stat)
+            else stale_collection_payload("orders", args.symbol, stat, snapshot_evidence)
         )
         return payload
     if endpoint == "symbols":
@@ -777,12 +1008,12 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
         payload["positions"] = (
             ea_positions_payload(dashboard, args.symbol)
             if snapshot_fresh
-            else stale_collection_payload("positions", args.symbol, stat)
+            else stale_collection_payload("positions", args.symbol, stat, snapshot_evidence)
         )
         payload["orders"] = (
             ea_orders_payload(dashboard, args.symbol)
             if snapshot_fresh
-            else stale_collection_payload("orders", args.symbol, stat)
+            else stale_collection_payload("orders", args.symbol, stat, snapshot_evidence)
         )
         payload["symbols"] = ea_symbols_payload(dashboard, args.group, args.query, args.symbols_limit)
         payload["quote"] = ea_quote_payload(dashboard, args.symbol) if args.symbol else None
@@ -826,6 +1057,15 @@ def build_missing_ea_snapshot_payload(
             "hostProcess": host_process,
             "account": None,
             "runtime": {},
+            "connection": {
+                "terminalConnected": False,
+                "brokerConnected": False,
+                "accountAuthorized": False,
+                "operationalConnected": False,
+                "snapshotFresh": False,
+                "readReady": False,
+                "semantics": "INDEPENDENT_REQUIRED_SIGNALS",
+            },
             "watchlist": "",
             "market": {},
             "snapshotFresh": False,
@@ -954,11 +1194,26 @@ def status_payload(mt5: Any, endpoint: str = "status") -> dict[str, Any]:
     payload = base_payload(endpoint)
     account = account_payload(mt5)
     terminal = terminal_payload(mt5)
+    connection = build_connection_state(
+        runtime={},
+        terminal=terminal,
+        account=account,
+        snapshot_fresh=True,
+    )
     payload.update(
         {
-            "status": "CONNECTED" if terminal.get("connected") and account else "INITIALIZED",
+            "status": "CONNECTED" if connection["operationalConnected"] else "INITIALIZED",
             "terminal": terminal,
             "account": account,
+            "runtime": {
+                "connected": connection["operationalConnected"],
+                "terminalConnected": connection["terminalConnected"],
+                "brokerConnected": connection["brokerConnected"],
+                "accountAuthorized": connection["accountAuthorized"],
+                "connectionState": connection,
+            },
+            "connection": connection,
+            "snapshotFresh": True,
             "lastError": safe_last_error(mt5),
         }
     )
@@ -1141,7 +1396,12 @@ def build_endpoint_payload(mt5: Any, args: argparse.Namespace) -> dict[str, Any]
         return payload
     if endpoint == "account":
         payload["account"] = account_payload(mt5)
-        payload["status"] = "CONNECTED" if payload["account"] else "NO_ACCOUNT"
+        if not payload["account"]:
+            payload["status"] = "NO_ACCOUNT"
+        elif payload["connection"]["readReady"]:
+            payload["status"] = "CONNECTED"
+        else:
+            payload["status"] = "ACCOUNT_AVAILABLE_NOT_CONNECTED"
         return payload
     if endpoint == "positions":
         payload["positions"] = get_positions(mt5, args.symbol)
@@ -1165,7 +1425,7 @@ def build_endpoint_payload(mt5: Any, args: argparse.Namespace) -> dict[str, Any]
         payload["symbols"] = get_symbols(mt5, args.group, args.query, args.symbols_limit)
         payload["quote"] = get_quote(mt5, args.symbol) if args.symbol else None
         merge_usdjpy_rsi_entry_diagnostics(payload)
-        payload["status"] = "CONNECTED" if payload.get("account") else payload.get("status", "INITIALIZED")
+        payload["status"] = "CONNECTED" if payload["connection"]["readReady"] else "INITIALIZED"
         return payload
     raise ValueError(f"unsupported endpoint: {endpoint}")
 

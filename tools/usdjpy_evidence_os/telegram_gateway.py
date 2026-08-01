@@ -19,7 +19,6 @@ SCHEDULED_REPORT_TOPICS = (
     "DAILY_AUTOPILOT_V2_REPORT",
     "GA_EVOLUTION_REPORT",
     "USDJPY_AUTONOMOUS_AGENT_REPORT",
-    "HFM_CRYPTO_SHADOW_REPORT",
 )
 
 
@@ -83,7 +82,6 @@ def collect_scheduled_events(
         _build_daily_autopilot_event,
         _build_ga_event,
         _build_autonomous_agent_event,
-        _build_hfm_crypto_event,
     ):
         try:
             event = builder(runtime_dir, repo_root, refresh)
@@ -109,7 +107,7 @@ def collect_scheduled_events(
             "collectedCount": len(collected),
             "collectedEvents": collected,
             "collectErrors": errors,
-            "reasonZh": "Telegram Gateway 已收集日报、GA、Agent 回滚/patch、HFM Crypto CFD 影子报告；统一排队、去重、限频和投递。",
+            "reasonZh": "Telegram Gateway 已收集日报、GA 与 Agent 回滚/patch 报告；统一排队、去重、限频和投递。",
         }
     )
     write_json(gateway_status_path(runtime_dir), status)
@@ -354,26 +352,6 @@ def _next_eligible_send_at() -> str:
     return next_hour.isoformat().replace("+00:00", "Z")
 
 
-def hfm_crypto_to_chinese_text(payload: Dict[str, Any]) -> str:
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    state = payload.get("hfmCryptoCfdState") if isinstance(payload.get("hfmCryptoCfdState"), dict) else {}
-    lines = [
-        "【QuantGod HFM Crypto CFD 影子复盘】",
-        "",
-        f"状态：{_fmt(payload.get('stageZh') or payload.get('stage') or state.get('statusZh'))}",
-        f"Symbol 证据：{_fmt(summary.get('detectedSymbolCount'), '0')} / 目标 {_fmt(summary.get('targetSymbolCount'), '0')}",
-        f"Moss profile：{'已导入' if summary.get('mossProfileFound') else '未导入'}；ROI {_fmt(summary.get('mossRoiPct'))}% / Sharpe {_fmt(summary.get('mossSharpe'))}",
-        "",
-        f"结论：{_fmt(payload.get('reasonZh') or state.get('statusZh'))}",
-        "下一步：",
-        "- 先补齐本机 HFM/MT5 crypto CFD history 或 tick 证据。",
-        "- 继续只读映射 Moss 回测指标，不触发 MT5 crypto 下单。",
-        "",
-        "安全边界：HFM Crypto CFD 当前只做 shadow-only 资料同步；不下单、不授权钱包、不改 live preset。",
-    ]
-    return "\n".join(lines)
-
-
 def _build_daily_autopilot_event(runtime_dir: Path, repo_root: Path, refresh: bool) -> Dict[str, Any]:
     from daily_autopilot_v2.report import build_daily_autopilot_v2
     from daily_autopilot_v2.telegram_text import daily_autopilot_v2_to_chinese_text
@@ -451,42 +429,6 @@ def _build_autonomous_agent_event(runtime_dir: Path, repo_root: Path, refresh: b
         severity,
         text,
         payload={"autonomousAgent": payload},
-        dedupe_key=dedupe_key,
-    )
-
-
-def _build_hfm_crypto_event(runtime_dir: Path, repo_root: Path, refresh: bool) -> Optional[Dict[str, Any]]:
-    del repo_root
-    from autonomous_lifecycle.hfm_crypto_shadow_lane import build_hfm_crypto_shadow_lane
-    from hfm_crypto_cfd.runtime_scope import hfm_crypto_runtime_scope_meta, resolve_hfm_crypto_runtime_dir
-
-    hfm_crypto_runtime_dir = resolve_hfm_crypto_runtime_dir(
-        runtime_dir,
-        os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""),
-    )
-    payload = build_hfm_crypto_shadow_lane(hfm_crypto_runtime_dir, write=refresh)
-    payload["hfmCryptoRuntimeScope"] = hfm_crypto_runtime_scope_meta(
-        runtime_dir,
-        os.environ.get("QG_HFM_CRYPTO_RUNTIME_DIR", ""),
-    )
-    text = hfm_crypto_to_chinese_text(payload)
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    severity = "INFO" if summary.get("symbolEvidenceFound") else "WARN"
-    dedupe_key = "|".join(
-        [
-            _local_day(),
-            "HFM_CRYPTO_SHADOW_REPORT",
-            str(payload.get("stage") or "UNKNOWN"),
-            str(summary.get("detectedSymbolCount") or 0),
-            str(bool(summary.get("mossProfileFound"))),
-        ]
-    )
-    return build_notification_event(
-        "hfm_crypto_shadow",
-        "HFM_CRYPTO_SHADOW_REPORT",
-        severity,
-        text,
-        payload={"hfmCryptoShadow": payload},
         dedupe_key=dedupe_key,
     )
 

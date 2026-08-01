@@ -17,9 +17,9 @@ from tools.api_route_registry import (
 
 class ApiRouteRegistryTests(unittest.TestCase):
     def test_extract_api_paths_deduplicates_in_order(self) -> None:
-        text = "fetch('/api/a'); fetch('/api/a'); fetch('/api/b/status')"
+        text = "fetch('/api/a'); fetch('/api/a'); fetch('/api/b/status'); fetch('/healthz'); fetch('/readyz')"
 
-        self.assertEqual(extract_api_paths(text), ["/api/a", "/api/b/status"])
+        self.assertEqual(extract_api_paths(text), ["/api/a", "/api/b/status", "/healthz", "/readyz"])
 
     def test_registry_discovers_normalized_paths_and_safety_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -52,6 +52,9 @@ class ApiRouteRegistryTests(unittest.TestCase):
             self.assertTrue(registry["safety"]["readOnly"])
             self.assertFalse(registry["safety"]["orderSendAllowed"])
             self.assertFalse(registry["safety"]["livePresetMutationAllowed"])
+            self.assertFalse(registry["safety"]["executionLaneExists"])
+            self.assertFalse(registry["safety"]["unattendedLiveExpansionAllowed"])
+            self.assertTrue(registry["safety"]["operatorApprovalRequired"])
 
     def test_registry_auto_discovers_dashboard_api_route_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,8 +110,8 @@ class ApiRouteRegistryTests(unittest.TestCase):
             root = Path(tmp)
             dashboard = root / "Dashboard"
             dashboard.mkdir()
-            (dashboard / "hfm_crypto_cfd_api_routes.js").write_text(
-                "router.get('/api/hfm-crypto/status', handler)",
+            (dashboard / "forex_health_api_routes.js").write_text(
+                "router.get('/api/forex-health/status', handler)",
                 encoding="utf-8",
             )
 
@@ -127,7 +130,28 @@ class ApiRouteRegistryTests(unittest.TestCase):
                 text=True,
             )
 
-            self.assertIn("/api/hfm-crypto/status", result.stdout.splitlines())
+            self.assertIn("/api/forex-health/status", result.stdout.splitlines())
+
+    def test_repository_registry_has_no_crypto_endpoints(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        registry = build_api_route_registry(root)
+        banned = ("crypto", "btc", "hyperliquid", "moss")
+        self.assertFalse([
+            route for route in registry["paths"]
+            if any(token in route.lower() for token in banned)
+        ])
+
+    def test_repository_registry_has_no_mt5_execution_lane(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        paths = set(build_api_route_registry(root)["paths"])
+
+        self.assertIn("/api/mt5-readonly/:endpoint", paths)
+        self.assertIn("/api/operator/overview", paths)
+        self.assertNotIn("/api/mt5-trading", paths)
+        self.assertNotIn("/api/mt5-trading/:endpoint", paths)
+        self.assertNotIn("/api/mt5", paths)
+        self.assertNotIn("/api/mt5/:endpoint", paths)
+        self.assertNotIn("/api/mt5/order/:ticket", paths)
 
     def test_cli_json_format_is_machine_readable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

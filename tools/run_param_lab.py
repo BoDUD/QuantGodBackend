@@ -85,8 +85,8 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Kill the Strategy Tester terminal child after this many seconds. 0 means no runner-level timeout.",
     )
-    parser.add_argument("--login", default="186054398")
-    parser.add_argument("--server", default="HFMarketsGlobal-Live12")
+    parser.add_argument("--login", default="90000001")
+    parser.add_argument("--server", default="SyntheticBroker-Demo")
     parser.add_argument("--run-terminal", action="store_true", help="Launch MT5 Strategy Tester for selected tasks.")
     parser.add_argument(
         "--authorized-strategy-tester",

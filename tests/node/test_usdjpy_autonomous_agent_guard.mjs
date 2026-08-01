@@ -21,16 +21,17 @@ test('autonomous agent keeps hard safety boundaries', () => {
     assert.doesNotMatch(text, /livePresetMutationAllowed["']?\s*:\s*True/);
   }
   assert.match(schema, /"requiresAutonomousGovernance": True/);
-  assert.match(schema, /"autoApplyAllowed": "stage_gated"/);
-  assert.match(schema, /"operatorApprovalRequired": False/);
-  assert.match(schema, /"unattendedLiveExpansionAllowed": True/);
+  assert.match(schema, /"autoApplyAllowed": "shadow_only"/);
+  assert.match(schema, /"operatorApprovalRequired": True/);
+  assert.match(schema, /"unattendedLiveExpansionAllowed": False/);
+  assert.match(schema, /"liveExpansionAllowed": False/);
   assert.match(schema, /"patchWritable": True/);
   assert.match(schema, /"liveMutationAllowed": False/);
   assert.match(schema, /"deepSeekCanApproveLive": False/);
   assert.match(schema, /"externalMarketRealMoneyAllowed": False/);
-  assert.match(schema, /"hfmCryptoExecutionAllowed": False/);
   assert.match(patch, /patchWritable/);
   assert.match(patch, /unattendedLiveExpansionAllowed/);
+  assert.match(patch, /liveExpansionAllowed/);
   assert.doesNotMatch(patch, /patchAllowed/);
   assert.match(patch, /executionStage/);
   assert.match(patch, /liveMutationAllowed/);
@@ -56,6 +57,7 @@ test('MT5 EA reads autonomous config patch through a narrow runtime adapter', ()
     'rejectedFields',
     'operatorApprovalRequired',
     'unattendedLiveExpansionAllowed',
+    'liveExpansionAllowed',
     'AutonomousPatchEffectiveRsiBuyBand',
     'AutonomousPatchEffectiveRsiCrossbackThreshold',
     'AutonomousPatchEffectiveStageLotCap',
@@ -72,7 +74,9 @@ test('MT5 EA reads autonomous config patch through a narrow runtime adapter', ()
   assert.match(ea, /maxLot <= 0\.0 \|\| maxLot > 2\.0/);
   assert.match(ea, /stageMaxLot < 0\.0 \|\| stageMaxLot > 2\.0/);
   assert.match(ea, /PATCH_REJECTED/);
-  assert.match(ea, /PATCH_ACTIVE/);
+  assert.match(ea, /PATCH_OBSERVED_ONLY/);
+  assert.doesNotMatch(ea, /g_autonomousPatchRuntimeActive = true;/);
+  assert.doesNotMatch(ea, /g_autonomousPatchStatus = "PATCH_ACTIVE";/);
 });
 
 test('strategy lab exposes walk-forward and autonomous endpoints only', () => {
@@ -86,9 +90,6 @@ test('strategy lab exposes walk-forward and autonomous endpoints only', () => {
     '/api/usdjpy-strategy-lab/autonomous-agent/lanes',
     'run_usdjpy_walk_forward.py',
     'run_usdjpy_autonomous_agent.py',
-    'resolveHfmCryptoRuntimeScope',
-    '--hfm-crypto-runtime-dir',
-    'HFM Live16 crypto CFD',
   ]) {
     assert.match(routes, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

@@ -79,7 +79,7 @@ test('dashboard state overlays stale MT5 snapshot with non-execution safety', as
     await writeFile(
       dashboardPath,
       JSON.stringify({
-        account: { number: 186054398, server: 'HFMarketsGlobal-Live12', equity: 10020.5 },
+        account: { number: 90000001, server: 'SyntheticBroker-Demo', equity: 10020.5 },
         trading: {
           tradeStatus: 'RUNNING',
           executionEnabled: true,
@@ -112,6 +112,38 @@ test('dashboard state overlays stale MT5 snapshot with non-execution safety', as
     assert.equal(res.body.data.safety.orderSendAllowed, false);
     assert.equal(res.body.data.safety.mt5OrderSendAllowed, false);
     assert.equal(res.body.data.trading.historicalTradeStatus, 'RUNNING');
+    assert.equal(res.body.data.trading.tradeStatus, 'STALE_DASHBOARD_SNAPSHOT');
+    assert.equal(res.body.data.trading.executionEnabled, false);
+    assert.equal(res.body.data.trading.tradeAllowed, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('dashboard state cannot be made fresh by touching an old writer snapshot', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'qg-phase2-dashboard-writer-evidence-'));
+  try {
+    const dashboardPath = path.join(dir, 'QuantGod_Dashboard.json');
+    await writeFile(
+      dashboardPath,
+      JSON.stringify({
+        timestamp: '2025.01.01 00:00:00',
+        trading: { tradeStatus: 'RUNNING', executionEnabled: true, tradeAllowed: true },
+      }),
+      'utf8',
+    );
+
+    const res = await invoke('/api/dashboard/state', {
+      defaultRuntimeDir: dir,
+      repoRoot: dir,
+      rootDir: dir,
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body._freshness.status, 'STALE_DASHBOARD_SNAPSHOT');
+    assert.equal(res.body._freshness.freshnessBasis, 'oldest_writer_evidence');
+    assert.equal(res.body._freshness.oldestEvidenceSource, 'dashboard_timestamp');
+    assert.ok(res.body._freshness.maxAgeSeconds <= 180);
     assert.equal(res.body.data.trading.tradeStatus, 'STALE_DASHBOARD_SNAPSHOT');
     assert.equal(res.body.data.trading.executionEnabled, false);
     assert.equal(res.body.data.trading.tradeAllowed, false);
@@ -172,7 +204,7 @@ test('CSV trade endpoints can read secondary MT5 runtime by scope', async () => 
   try {
     await writeFile(
       path.join(primaryDir, 'QuantGod_TradeJournal.csv'),
-      'EventTime,Symbol,AccountLogin\n2026-05-18 10:00:00,USDJPYc,186054398\n',
+      'EventTime,Symbol,AccountLogin\n2026-05-18 10:00:00,USDJPYc,90000001\n',
       'utf8',
     );
     await writeFile(

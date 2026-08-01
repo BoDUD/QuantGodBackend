@@ -14,7 +14,6 @@ python "%REPO_ROOT%\tools\build_optimizer_v2_plan.py" --runtime-dir "%RUNTIME_DI
 python "%REPO_ROOT%\tools\build_version_promotion_gate.py" --runtime-dir "%RUNTIME_DIR%"
 python "%REPO_ROOT%\tools\build_param_lab_auto_scheduler.py" --runtime-dir "%RUNTIME_DIR%"
 python "%REPO_ROOT%\tools\build_param_lab_run_recovery.py" --runtime-dir "%RUNTIME_DIR%"
-python "%REPO_ROOT%\tools\run_hfm_crypto_cfd.py" --runtime-dir "%RUNTIME_DIR%" build --write
 python "%REPO_ROOT%\tools\run_param_lab_auto_tester_window.py" --runtime-dir "%RUNTIME_DIR%" --tester-root "%TESTER_ROOT%" --require-isolated-tester
 python "%REPO_ROOT%\tools\build_param_lab_run_recovery.py" --runtime-dir "%RUNTIME_DIR%"
 python "%REPO_ROOT%\tools\build_governance_advisor.py" --runtime-dir "%RUNTIME_DIR%"

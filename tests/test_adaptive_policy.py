@@ -569,9 +569,9 @@ class AdaptivePolicyTests(unittest.TestCase):
                         "status": "MEMORY_ACTIVE_OBSERVE",
                         "sampleCount": 12,
                         "candidatePenaltyRules": [{
-                            "match": {"dataGap": "missingFactor:predictionMarket"},
+                            "match": {"dataGap": "missingFactor:smartMoney"},
                             "penalty": 0.09,
-                            "reasonZh": "predictionMarket 细因子缺失亏损重复，信息不完整信号降权。",
+                            "reasonZh": "smartMoney 细因子缺失亏损重复，信息不完整信号降权。",
                         }],
                         "defenseMode": {"enabled": False},
                     },
@@ -586,7 +586,7 @@ class AdaptivePolicyTests(unittest.TestCase):
 
         self.assertEqual(sell["memoryPenalty"], 0.09)
         self.assertTrue(
-            any(item["gap"] == "missingFactor:predictionMarket" for item in sell["memoryQualityProfile"]["dataGaps"])
+            any(item["gap"] == "missingFactor:smartMoney" for item in sell["memoryQualityProfile"]["dataGaps"])
         )
         self.assertEqual(sell["memoryFeedback"]["appliedRules"][0]["observedCount"], 7)
 

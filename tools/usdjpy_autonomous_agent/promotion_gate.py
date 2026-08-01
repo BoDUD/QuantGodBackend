@@ -24,33 +24,17 @@ from .walk_forward import build_autonomous_walk_forward
 try:
     from tools.autonomous_lifecycle.cent_account_rules import cent_account_config
     from tools.autonomous_lifecycle.demotion_speed import demotion_from_rollback
-    from tools.autonomous_lifecycle.promotion_speed import cent_accelerated_stage
 except ModuleNotFoundError:  # pragma: no cover
     from autonomous_lifecycle.cent_account_rules import cent_account_config
     from autonomous_lifecycle.demotion_speed import demotion_from_rollback
-    from autonomous_lifecycle.promotion_speed import cent_accelerated_stage
 
 
 def _stage_for_candidate(item: Dict[str, Any]) -> str:
     conclusion = str(item.get("conclusion") or "").upper()
-    summary = item.get("summary") if isinstance(item.get("summary"), dict) else {}
-    delta = float(summary.get("netRDelta") or 0.0)
-    samples = int(summary.get("sampleCount") or 0)
-    cfg = cent_account_config()
     if conclusion == "LIVE_CONFIG_PROPOSAL_ELIGIBLE":
-        validation_delta = float(summary.get("validationNetRDelta") or 0.0)
-        forward_delta = float(summary.get("forwardNetRDelta") or 0.0)
-        min_samples = int(cfg.get("microLiveMinSamples") or 10)
-        can_micro_live = (
-            cfg.get("centFastPromotion")
-            and samples >= min_samples
-            and delta > 0
-            and validation_delta > 0
-            and forward_delta > 0
-        )
-        base_stage = STAGE_MICRO_LIVE if can_micro_live else STAGE_PAPER_LIVE_SIM
-        accelerated = cent_accelerated_stage(base_stage, sample_count=samples, net_r_delta=delta)
-        return str(accelerated.get("stage") or base_stage)
+        # Active releases remain Shadow/ReadOnly. Positive evidence may advance
+        # to paper-live simulation, never to an unattended broker-execution stage.
+        return STAGE_PAPER_LIVE_SIM
     if conclusion == "TESTER_ONLY":
         return STAGE_TESTER_ONLY
     if conclusion == "SHADOW_ONLY":
@@ -97,14 +81,15 @@ def build_promotion_decision(runtime_dir: Path, *, write: bool = False) -> Dict[
         "stage": best_stage,
         "executionStage": best_stage,
         "stageZh": STAGE_ZH.get(best_stage, best_stage),
-        "status": "AUTONOMOUS_PROMOTION_READY" if best_stage not in {STAGE_REJECTED, ROLLBACK_PAUSED} else best_stage,
+        "status": "SHADOW_EVIDENCE_READY" if best_stage not in {STAGE_REJECTED, ROLLBACK_PAUSED} else best_stage,
         "requiresAutonomousGovernance": True,
         "completedByAgent": True,
-        "autoAppliedByAgent": best_stage not in {STAGE_REJECTED, ROLLBACK_PAUSED},
-        "autoApplyAllowed": "stage_gated",
-        "operatorApprovalRequired": False,
-        "unattendedLiveExpansionAllowed": True,
-        "liveScopeExpansionMode": "autonomous_governance_stage_gated",
+        "autoAppliedByAgent": False,
+        "autoApplyAllowed": "shadow_only",
+        "operatorApprovalRequired": True,
+        "unattendedLiveExpansionAllowed": False,
+        "liveExpansionAllowed": False,
+        "liveScopeExpansionMode": "operator_reviewed_future_lane",
         "centAccount": cent,
         "demotionDecision": demotion,
         "hardRollback": rollback,

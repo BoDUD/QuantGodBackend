@@ -40,10 +40,6 @@ SAFETY = {
     "writesMt5OrderRequest": False,
     "writesMt5OrderReceipt": False,
     "livePresetMutationAllowed": False,
-    "walletAuthorizationAllowed": False,
-    "hyperliquidExecutionAllowed": False,
-    "mossExecutionAllowed": False,
-    "hfmCryptoExecutionAllowed": False,
     "autoPromotionToLiveAllowed": False,
 }
 
@@ -107,48 +103,8 @@ def _candidate_from_ace(ace: dict[str, Any]) -> dict[str, Any]:
             "tradeCount": forex.get("tradeCount"),
             "walkForwardStability": forex.get("walkForwardStability"),
         }
-    crypto = ace.get("topQualifiedCrypto") if isinstance(ace.get("topQualifiedCrypto"), dict) else {}
-    if crypto.get("strategyId"):
-        return {
-            "lane": "hfm_crypto_cfd_shadow",
-            "laneZh": "HFM BTC crypto CFD shadow 冠军",
-            "strategyId": crypto.get("strategyId"),
-            "pnlUsd": crypto.get("pnlUsd"),
-            "sharpe": crypto.get("sharpe"),
-            "tradeCount": crypto.get("tradeCount"),
-            "maxDrawdownPct": crypto.get("maxDrawdownPct"),
-            "liquidationCount": crypto.get("liquidationCount"),
-        }
     return {}
 
-
-def _observed_crypto_candidate_from_evidence(ace: dict[str, Any], retest: dict[str, Any]) -> dict[str, Any]:
-    ace_crypto = ace.get("topRetestedCrypto") if isinstance(ace.get("topRetestedCrypto"), dict) else {}
-    retest_crypto = retest.get("cryptoChampion") if isinstance(retest.get("cryptoChampion"), dict) else {}
-    crypto = retest_crypto if retest_crypto.get("strategyId") else ace_crypto
-    if not crypto.get("strategyId"):
-        return {}
-    full_metrics = crypto.get("fullWindowMetrics") if isinstance(crypto.get("fullWindowMetrics"), dict) else {}
-    ace_matches = ace_crypto.get("strategyId") == crypto.get("strategyId")
-    metric_source = ace_crypto if ace_matches else full_metrics
-    return {
-        "lane": "hfm_crypto_cfd_shadow",
-        "laneZh": "HFM BTC crypto CFD 观察中王牌",
-        "strategyId": crypto.get("strategyId"),
-        "status": crypto.get("status"),
-        "validWindowCount": crypto.get("validWindowCount"),
-        "windowCount": crypto.get("windowCount"),
-        "positiveMajorWindowCount": crypto.get("positiveMajorWindowCount"),
-        "majorWindowFailureCount": crypto.get("majorWindowFailureCount"),
-        "negativeMajorWindows": crypto.get("negativeMajorWindows", []),
-        "pnlUsd": metric_source.get("pnlUsd"),
-        "sharpe": metric_source.get("sharpe"),
-        "tradeCount": metric_source.get("tradeCount"),
-        "maxDrawdownPct": metric_source.get("maxDrawdownPct"),
-        "blockers": crypto.get("blockers", []),
-        "qualifiedForPromotion": False,
-        "nextRequiredActionZh": "这是当前 BTC 最强观察候选；多窗口仍未完全达标前不进入实盘晋级。",
-    }
 
 
 def _champion_label(candidate: dict[str, Any]) -> str:
@@ -501,7 +457,6 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
     candidate = _candidate_from_ace(ace)
     memory_promotion_review = _memory_promotion_review(evidence_runtime_dir, candidate)
     history_freshness_review = _history_freshness_review(evidence_runtime_dir)
-    observed_crypto_candidate = _observed_crypto_candidate_from_evidence(ace, retest)
     forex_contender_review = (
         retest.get("forexContenderReview")
         if isinstance(retest.get("forexContenderReview"), dict)
@@ -520,14 +475,10 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
     champion_slug = _candidate_slug(candidate)
 
     forex_retest = retest.get("forexChampion") if isinstance(retest.get("forexChampion"), dict) else {}
-    crypto_retest = retest.get("cryptoChampion") if isinstance(retest.get("cryptoChampion"), dict) else {}
     ace_candidate_selected = bool(candidate)
     selected_forex = candidate.get("lane") == "usdjpy_ga_elite"
-    selected_crypto = candidate.get("lane") == "hfm_crypto_cfd_shadow"
     champion_retest_pass = (
         selected_forex and forex_retest.get("seedId") == candidate.get("seedId") and forex_retest.get("status") == "FOREX_CHAMPION_RETEST_PASS"
-    ) or (
-        selected_crypto and crypto_retest.get("strategyId") == candidate.get("strategyId") and crypto_retest.get("status") == "BTC_CHAMPION_RETEST_PASS"
     )
     pipeline_ready_for_review = _bool(pipeline.get("readyForSeparateExecutionAdapterReview"))
     execution_ready = _bool(pipeline.get("executionReady")) or _bool(live_candidates.get("executionReady"))
@@ -546,15 +497,15 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
             "ace_candidate_selected",
             "王牌候选已选出",
             ace_candidate_selected,
-            "Ace scout 必须先选出无 blocker 的 topQualifiedForex 或 topQualifiedCrypto。",
+            "Ace scout 必须先选出无 blocker 的 topQualifiedForex。",
             value=candidate.get("seedId") or candidate.get("strategyId"),
         ),
         _check(
             "champion_retest_pass",
             "冠军复验通过",
             champion_retest_pass,
-            "冠军必须通过 champion retest；BTC 还必须通过多窗口复验。",
-            value=(forex_retest.get("status") if selected_forex else crypto_retest.get("status")),
+            "冠军必须通过 USDJPY forex champion retest。",
+            value=forex_retest.get("status"),
         ),
         _check(
             "isolated_tester_forward_required",
@@ -640,7 +591,7 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
     elif not champion_retest_pass:
         status = "CHAMPION_RETEST_BLOCKED"
         status_zh = "冠军复验未通过"
-        next_action = "修复或补样本后重新复验；BTC 必须补更多多窗口证据。"
+        next_action = "修复或补足 USDJPY 样本后重新复验。"
     elif not tester_request_ready:
         status = "READY_FOR_ISOLATED_TESTER_FORWARD"
         status_zh = "冠军可进入隔离 tester / forward"
@@ -676,13 +627,8 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
         "longTermMemoryPromotionReview": memory_promotion_review,
         "historyFreshnessPromotionReview": history_freshness_review,
         "forexContenderReview": forex_contender_review,
-        "observedCryptoChampion": observed_crypto_candidate,
         "championRetest": {
             "forexStatus": forex_retest.get("status"),
-            "cryptoStatus": crypto_retest.get("status"),
-            "cryptoValidWindowCount": crypto_retest.get("validWindowCount"),
-            "cryptoWindowCount": crypto_retest.get("windowCount"),
-            "cryptoBlockers": crypto_retest.get("blockers") or [],
         },
         "championTesterForwardRequest": {
             "status": tester_request.get("status"),
@@ -726,12 +672,6 @@ def build_champion_promotion_gate(runtime_dir: Path, *, write: bool = False) -> 
             {
                 "id": f"{champion_slug}_tester_forward_task",
                 "actionZh": f"为 {tester_target_label} 生成 tester-only/forward 复验任务，锁定 seed 和风险核，不改 live preset。",
-                "orderSendAllowed": False,
-                "writesMt5OrderRequest": False,
-            },
-            {
-                "id": "btc_multi_window_retest",
-                "actionZh": "BTC 继续补更长 CopyRates，多窗口达标前不进入实盘候选。",
                 "orderSendAllowed": False,
                 "writesMt5OrderRequest": False,
             },

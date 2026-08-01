@@ -26,6 +26,10 @@ test('automation chain exposes only local advisory safety flags', () => {
   assert.match(schema, /orderSendAllowed": False/);
   assert.match(schema, /telegramCommandsAllowed": False/);
   assert.match(schema, /doesNotPlaceOrders": True/);
+  assert.match(schema, /executionLaneExists": False/);
+  assert.match(schema, /unattendedLiveExpansionAllowed": False/);
+  assert.match(schema, /operatorApprovalRequired": True/);
+  assert.match(schema, /atomic_write_json/);
 });
 
 test('dashboard route stays under api automation chain namespace', () => {

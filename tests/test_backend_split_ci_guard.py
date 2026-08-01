@@ -42,7 +42,6 @@ class BackendSplitCiGuardTest(unittest.TestCase):
             "Dashboard/QuantGod_",
             "tools/responsive_check.mjs",
             "tools/install_phase1_frontend.py",
-            "Dashboard/cloud_sync_uploader.js",
         )
         for marker in split_out_markers:
             with self.subTest(marker=marker):

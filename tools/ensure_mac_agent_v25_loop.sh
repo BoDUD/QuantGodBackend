@@ -41,7 +41,7 @@ export QG_MT5_AI_MONITOR_SYMBOLS="${QG_MT5_AI_MONITOR_SYMBOLS:-USDJPYc}"
 export QG_ACCOUNT_MODE="${QG_ACCOUNT_MODE:-cent}"
 export QG_ACCOUNT_CURRENCY_UNIT="${QG_ACCOUNT_CURRENCY_UNIT:-USC}"
 export QG_TELEGRAM_COMMANDS_ALLOWED="${QG_TELEGRAM_COMMANDS_ALLOWED:-0}"
-export QG_AGENT_V25_SEND_TELEGRAM="${QG_AGENT_V25_SEND_TELEGRAM:-${QG_TELEGRAM_PUSH_ALLOWED:-0}}"
+export QG_AGENT_V25_SEND_TELEGRAM="${QG_AGENT_V25_SEND_TELEGRAM:-0}"
 export QG_AGENT_OPS_HEALTH_ENABLED="${QG_AGENT_OPS_HEALTH_ENABLED:-1}"
 export QG_PRODUCTION_BURN_IN_ENABLED="${QG_PRODUCTION_BURN_IN_ENABLED:-1}"
 export QG_PRODUCTION_BURN_IN_INTERVAL_SECONDS="${QG_PRODUCTION_BURN_IN_INTERVAL_SECONDS:-300}"
@@ -92,6 +92,7 @@ LOCK_DIR="${QG_AGENT_V25_LOCK_DIR:-$RUNTIME_DIR/agent/QuantGod_AgentV25Loop.lock
 MAINTENANCE_LOCK_DIR="${QG_AGENT_V25_MAINTENANCE_LOCK_DIR:-$RUNTIME_DIR/agent/QuantGod_AgentV25Maintenance.lock}"
 LOG_MAINTENANCE_LOCK_DIR="${QG_RUNTIME_LOG_MAINTENANCE_LOCK_DIR:-$RUNTIME_DIR/agent/QuantGod_RuntimeLogMaintenance.lock}"
 LOG_FILE="$REPO_ROOT/runtime/agent_v25_screen.log"
+PROCESS_GROUP_FILE="${QG_AGENT_V25_PROCESS_GROUP_FILE:-$RUNTIME_DIR/agent/QuantGod_AgentV25ProcessGroup.json}"
 
 maintain_runtime_log_root() {
   local root="$1"
@@ -177,6 +178,9 @@ matching_screen_sessions() {
 stop_orphan_lock_holder() {
   local holder=""
   local command=""
+  "$PYTHON_BIN" "$REPO_ROOT/tools/run_process_group.py" \
+    --stop-pid-file "$PROCESS_GROUP_FILE" \
+    --grace-seconds 5 >/dev/null 2>&1 || true
   holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
   [[ "$holder" =~ ^[0-9]+$ ]] || return 0
   command="$(ps -p "$holder" -o command= 2>/dev/null || true)"
@@ -271,10 +275,15 @@ restart_loop() {
       screen -S "$session" -X quit >/dev/null 2>&1 || true
     done < <(matching_screen_sessions)
     stop_orphan_lock_holder
-    screen -dmS "$SCREEN_NAME" /bin/zsh -lc "cd '$REPO_ROOT' && exec bash tools/run_mac_agent_v25_loop.sh --loop >> '$LOG_FILE' 2>&1"
+    screen -dmS "$SCREEN_NAME" /bin/zsh -lc "cd '$REPO_ROOT' && exec '$PYTHON_BIN' tools/run_process_group.py --pid-file '$PROCESS_GROUP_FILE' -- /bin/bash tools/run_mac_agent_v25_loop.sh --loop >> '$LOG_FILE' 2>&1"
   else
     stop_orphan_lock_holder
-    /bin/zsh -lc "cd '$REPO_ROOT' && exec bash tools/run_mac_agent_v25_loop.sh --loop >> '$LOG_FILE' 2>&1" &
+    (
+      cd "$REPO_ROOT"
+      exec "$PYTHON_BIN" tools/run_process_group.py \
+        --pid-file "$PROCESS_GROUP_FILE" \
+        -- /bin/bash tools/run_mac_agent_v25_loop.sh --loop
+    ) >> "$LOG_FILE" 2>&1 &
   fi
 }
 

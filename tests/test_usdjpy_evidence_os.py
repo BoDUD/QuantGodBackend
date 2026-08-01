@@ -26,6 +26,76 @@ from tools.usdjpy_strategy_backtest.report import ingest_klines, run_backtest
 
 
 class USDJPYEvidenceOSTests(unittest.TestCase):
+    def _write_ready_agent_ops_evidence(self, runtime_dir: Path) -> None:
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        (runtime_dir / "agent").mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "backtest").mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "production_validation").mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "integrity").mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "agent" / "QuantGod_LiveRuntimePreflightProbe.json").write_text(
+            json.dumps(
+                {
+                    "schema": "quantgod.live_runtime_preflight_probe.v1",
+                    "generatedAtIso": now,
+                    "status": "READY_FOR_RUNTIME_PREFLIGHT_REVIEW",
+                    "dashboardSnapshot": {
+                        "found": True,
+                        "fresh": True,
+                        "ageSeconds": 1,
+                        "maxAgeSeconds": 300,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json").write_text(
+            json.dumps(
+                {
+                    "schema": "quantgod.usdjpy_history_production_status.v1",
+                    "generatedAt": now,
+                    "status": "PASS",
+                    "ok": True,
+                    "historyTargetSatisfied": True,
+                    "copyRatesExportFreshness": {"status": "FRESH", "stale": False},
+                    "continuousSync": {"status": "RUNNING", "running": True},
+                    "timeframes": {
+                        name: {"freshnessOk": True, "passed": True}
+                        for name in ("M1", "M5", "M15", "H1")
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json").write_text(
+            json.dumps(
+                {
+                    "schema": "quantgod.ga_multi_generation_stability.report.v1",
+                    "generatedAt": now,
+                    "status": "PASS",
+                    "ok": True,
+                    "stabilityGrade": "PRODUCTION_READY",
+                    "closureMode": "ELITE_REPEAT_CONFIRMED",
+                    "promotionAllowed": True,
+                    "blockers": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (runtime_dir / "integrity" / "QuantGod_CoreRuntimeEvidenceManifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": "quantgod.core_runtime_evidence_manifest.v1",
+                    "generatedAt": now,
+                    "status": "PASS",
+                    "ok": True,
+                    "promotionGateStatus": "PASS",
+                    "promotionGatePassed": True,
+                    "promotionBlockers": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
     def test_jsonl_tail_reads_only_latest_rows_in_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "large.jsonl"
@@ -192,82 +262,144 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
             self.assertEqual(healthy["checks"][0]["key"], "agentV25Loop")
             self.assertTrue((runtime_dir / "agent" / "QuantGod_AgentOpsHealth.json").exists())
 
-    def test_agent_ops_health_keeps_hfm_crypto_strategy_warn_out_of_system_health(self):
+    def test_agent_ops_health_fails_closed_for_missing_readiness_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)
-            heartbeat_dir = runtime_dir / "agent"
-            heartbeat_dir.mkdir(parents=True)
-            now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-            (heartbeat_dir / "QuantGod_AgentV25LoopStatus.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "quantgod.agent_v25_loop_status.v1",
-                        "generatedAtIso": now,
-                        "lastHeartbeatAtIso": now,
-                        "status": "COMPLETED",
-                        "screenName": "quantgod-agent-v25",
-                        "runtimeDir": str(runtime_dir),
-                        "intervalSeconds": 300,
-                        "sendTelegram": True,
-                        "commandsAllowed": False,
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
+
+            health = build_agent_ops_health(runtime_dir, repo_root=Path(__file__).resolve().parents[1], write=False)
+
+            self.assertEqual(health["overallStatus"], "BLOCKED")
+            self.assertEqual(health["readinessStatus"], "BLOCKED")
+            self.assertFalse(health["ok"])
+            self.assertEqual(health["liveRuntimeFreshness"]["status"], "UNKNOWN")
+            self.assertEqual(health["historyFreshnessSync"]["status"], "UNKNOWN")
+            self.assertEqual(health["gaPromotionGate"]["status"], "UNKNOWN")
+            self.assertEqual(health["promotionGate"]["status"], "UNKNOWN")
+            reason_codes = {row["code"] for row in health["blockingReasons"]}
+            self.assertIn("LIVE_RUNTIME_PREFLIGHT_MISSING", reason_codes)
+            self.assertIn("HISTORY_PRODUCTION_STATUS_MISSING", reason_codes)
+            self.assertIn("GA_STABILITY_REPORT_MISSING", reason_codes)
+            self.assertIn("CORE_EVIDENCE_PROMOTION_GATE_MISSING", reason_codes)
+
+    def test_agent_ops_health_includes_stale_history_ga_and_promotion_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            self._write_ready_agent_ops_evidence(runtime_dir)
+
+            live_path = runtime_dir / "agent" / "QuantGod_LiveRuntimePreflightProbe.json"
+            live = json.loads(live_path.read_text(encoding="utf-8"))
+            live["dashboardSnapshot"].update({"fresh": False, "ageSeconds": 900})
+            live_path.write_text(json.dumps(live), encoding="utf-8")
+
+            history_path = runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json"
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+            history.update({"status": "WARN", "ok": False, "historyTargetSatisfied": False})
+            history["copyRatesExportFreshness"] = {
+                "status": "STALE",
+                "stale": True,
+                "staleTimeframes": ["M1"],
+                "nextActionZh": "刷新 CopyRates export。",
+            }
+            history["continuousSync"] = {
+                "status": "MISSING",
+                "running": False,
+                "reasonZh": "History sync loop 未运行。",
+            }
+            history["timeframes"]["M1"]["freshnessOk"] = False
+            history_path.write_text(json.dumps(history), encoding="utf-8")
+
+            ga_path = runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json"
+            ga = json.loads(ga_path.read_text(encoding="utf-8"))
+            ga.update(
+                {
+                    "stabilityGrade": "NEGATIVE_SELECTION_CLOSED",
+                    "closureMode": "NO_ELITE_NEGATIVE_SELECTION",
+                    "promotionAllowed": False,
+                }
             )
-            (heartbeat_dir / "QuantGod_AgentV25SupervisorStatus.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "quantgod.agent_v25_supervisor_status.v1",
-                        "generatedAtIso": now,
-                        "action": "NOOP",
-                        "reasonZh": "Agent v2.5 后台循环在线，心跳新鲜。",
-                        "screenName": "quantgod-agent-v25",
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
+            ga_path.write_text(json.dumps(ga), encoding="utf-8")
+
+            manifest_path = runtime_dir / "integrity" / "QuantGod_CoreRuntimeEvidenceManifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.update(
+                {
+                    "promotionGateStatus": "BLOCKED",
+                    "promotionGatePassed": False,
+                    "promotionBlockers": ["historyProductionStatus:M1:freshness_not_ok"],
+                }
             )
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-            with patch("tools.agent_ops_health._daily_autopilot_health") as daily, patch(
-                "tools.agent_ops_health._telegram_health"
-            ) as telegram, patch("tools.agent_ops_health._hfm_crypto_health") as hfm_crypto:
-                daily.return_value = {
-                    "status": "PASS",
-                    "statusZh": "自动化健康",
-                    "lastRunAgeSeconds": 1,
-                    "failedStepCount": 0,
-                    "detailZh": "Daily Autopilot 正常。",
-                }
-                telegram.return_value = {
-                    "status": "PASS",
-                    "statusZh": "自动化健康",
-                    "pendingCount": 0,
-                    "pushAllowed": True,
-                    "commandsAllowed": False,
-                    "detailZh": "Telegram Gateway 正常。",
-                }
-                hfm_crypto.return_value = {
-                    "status": "WARN",
-                    "statusZh": "需要观察",
-                    "stage": "WAITING_SYMBOL_EVIDENCE",
-                    "stageZh": "等待 HFM crypto symbol 证据",
-                    "symbolEvidenceFound": False,
-                    "detectedSymbolCount": 0,
-                    "mossProfileFound": False,
-                    "detailZh": "等待本机 HFM/MT5 Bases 里出现 crypto CFD 证据。",
-                    "walletAuthorizationAllowed": False,
-                    "hfmCryptoExecutionAllowed": False,
-                }
+            health = build_agent_ops_health(runtime_dir, repo_root=Path(__file__).resolve().parents[1], write=False)
 
-                health = build_agent_ops_health(runtime_dir, repo_root=Path(__file__).resolve().parents[1], write=False)
+            self.assertEqual(health["overallStatus"], "BLOCKED")
+            self.assertFalse(health["ok"])
+            self.assertEqual(health["liveRuntimeFreshness"]["status"], "STALE")
+            self.assertEqual(health["historyFreshnessSync"]["status"], "BLOCKED")
+            self.assertEqual(health["gaPromotionGate"]["status"], "BLOCKED")
+            self.assertEqual(health["promotionGate"]["status"], "BLOCKED")
+            reason_codes = {row["code"] for row in health["blockingReasons"]}
+            self.assertIn("LIVE_RUNTIME_SNAPSHOT_STALE", reason_codes)
+            self.assertIn("COPYRATES_EXPORT_STALE", reason_codes)
+            self.assertIn("HISTORY_CONTINUOUS_SYNC_NOT_RUNNING", reason_codes)
+            self.assertIn("GA_PROMOTION_NOT_ALLOWED", reason_codes)
+            self.assertIn("CORE_EVIDENCE_PROMOTION_BLOCKER", reason_codes)
 
-            self.assertEqual(health["overallStatus"], "PASS")
-            self.assertEqual(health["systemStatus"], "PASS")
-            self.assertEqual(health["strategyStatus"], "WARN")
-            self.assertEqual(health["warnings"], [])
-            self.assertEqual(len(health["strategyWarnings"]), 1)
-            self.assertTrue(health["ok"])
+    def test_agent_ops_health_blocks_nonempty_gate_blockers_even_when_flags_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            self._write_ready_agent_ops_evidence(runtime_dir)
+
+            ga_path = runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json"
+            ga = json.loads(ga_path.read_text(encoding="utf-8"))
+            ga["blockers"] = ["ELITE_REPEAT_NOT_CONFIRMED"]
+            ga_path.write_text(json.dumps(ga), encoding="utf-8")
+
+            manifest_path = runtime_dir / "integrity" / "QuantGod_CoreRuntimeEvidenceManifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["promotionBlockers"] = ["gaMultiGenerationStabilityReport:elite_repeat_missing"]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            health = build_agent_ops_health(runtime_dir, repo_root=Path(__file__).resolve().parents[1], write=False)
+
+            self.assertEqual(health["gaPromotionGate"]["status"], "BLOCKED")
+            self.assertEqual(health["promotionGate"]["status"], "BLOCKED")
+            self.assertEqual(health["overallStatus"], "BLOCKED")
+            self.assertFalse(health["ok"])
+            reason_codes = {row["code"] for row in health["blockingReasons"]}
+            self.assertIn("GA_STABILITY_BLOCKER", reason_codes)
+            self.assertIn("CORE_EVIDENCE_PROMOTION_BLOCKER", reason_codes)
+
+    def test_agent_ops_health_blocks_explicit_unknown_stale_and_blocked_statuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp)
+            self._write_ready_agent_ops_evidence(runtime_dir)
+
+            artifact_updates = (
+                (runtime_dir / "agent" / "QuantGod_LiveRuntimePreflightProbe.json", {"status": "UNKNOWN"}),
+                (runtime_dir / "backtest" / "QuantGod_USDJPYHistoryProductionStatus.json", {"status": "BLOCKED"}),
+                (
+                    runtime_dir / "production_validation" / "QuantGod_GAMultiGenerationStabilityReport.json",
+                    {"status": "STALE"},
+                ),
+                (
+                    runtime_dir / "integrity" / "QuantGod_CoreRuntimeEvidenceManifest.json",
+                    {"promotionGateStatus": "UNKNOWN"},
+                ),
+            )
+            for path, updates in artifact_updates:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload.update(updates)
+                path.write_text(json.dumps(payload), encoding="utf-8")
+
+            health = build_agent_ops_health(runtime_dir, repo_root=Path(__file__).resolve().parents[1], write=False)
+
+            self.assertEqual(health["liveRuntimeFreshness"]["status"], "UNKNOWN")
+            self.assertEqual(health["historyFreshnessSync"]["status"], "BLOCKED")
+            self.assertEqual(health["gaPromotionGate"]["status"], "STALE")
+            self.assertEqual(health["promotionGate"]["status"], "UNKNOWN")
+            self.assertEqual(health["overallStatus"], "BLOCKED")
+            self.assertFalse(health["ok"])
 
     def test_execution_feedback_reads_live_mt5_files_dir_when_runtime_is_repo_local(self):
         old_mt5_files_dir = os.environ.get("QG_MT5_FILES_DIR")
@@ -1294,13 +1426,9 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
             self.assertIn("DAILY_AUTOPILOT_V2_REPORT", topics)
             self.assertIn("GA_EVOLUTION_REPORT", topics)
             self.assertIn("USDJPY_AUTONOMOUS_AGENT_REPORT", topics)
-            self.assertIn("HFM_CRYPTO_SHADOW_REPORT", topics)
             queued_status = gateway_status(runtime_dir)
-            self.assertGreaterEqual(queued_status["queuedCount"], 4)
-            self.assertGreaterEqual(queued_status["pendingCount"], 4)
-            queue_text = (runtime_dir / "notifications" / "QuantGod_NotificationEventQueue.jsonl").read_text(encoding="utf-8")
-            self.assertIn("HFM_CRYPTO_SHADOW_REPORT", queue_text)
-            self.assertIn("不触发 MT5 crypto 下单", queue_text)
+            self.assertGreaterEqual(queued_status["queuedCount"], 3)
+            self.assertGreaterEqual(queued_status["pendingCount"], 3)
             second = collect_scheduled_events(runtime_dir, repo_root=Path(__file__).resolve().parents[1], refresh=True)
             queued_again = sum(int(row.get("queued") or 0) for row in second["collectedEvents"])
             self.assertEqual(queued_again, 0)

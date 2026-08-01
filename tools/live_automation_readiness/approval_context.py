@@ -35,7 +35,6 @@ def _default_operator_approval_json(runtime_dir: Path) -> str:
     candidates = [
         os.environ.get("QG_LIVE_OPERATOR_APPROVAL_JSON", ""),
         os.environ.get("QG_OPERATOR_APPROVAL_JSON", ""),
-        os.environ.get("QG_HFM_CRYPTO_OPERATOR_APPROVAL_JSON", ""),
         os.environ.get("QG_LIVE16_OPERATOR_APPROVAL_JSON", ""),
         str(repo_root / "runtime" / "agent" / "QuantGod_UserChatOperatorApproval_Live16.json"),
         str(repo_root / "runtime" / "agent" / "QuantGod_UserChatOperatorApproval.json"),

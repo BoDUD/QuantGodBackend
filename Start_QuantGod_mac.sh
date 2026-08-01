@@ -208,7 +208,7 @@ export QG_ACCOUNT_MODE="${QG_ACCOUNT_MODE:-cent}"
 export QG_ACCOUNT_CURRENCY_UNIT="${QG_ACCOUNT_CURRENCY_UNIT:-USC}"
 export QG_CENT_ACCOUNT_ACCELERATION="${QG_CENT_ACCOUNT_ACCELERATION:-1}"
 export QG_TELEGRAM_COMMANDS_ALLOWED="${QG_TELEGRAM_COMMANDS_ALLOWED:-0}"
-export QG_AGENT_V25_SEND_TELEGRAM="${QG_AGENT_V25_SEND_TELEGRAM:-${QG_TELEGRAM_PUSH_ALLOWED:-0}}"
+export QG_AGENT_V25_SEND_TELEGRAM="${QG_AGENT_V25_SEND_TELEGRAM:-0}"
 export QG_AGENT_OPS_HEALTH_ENABLED="${QG_AGENT_OPS_HEALTH_ENABLED:-1}"
 export QG_PRODUCTION_BURN_IN_ENABLED="${QG_PRODUCTION_BURN_IN_ENABLED:-1}"
 export QG_PRODUCTION_BURN_IN_INTERVAL_SECONDS="${QG_PRODUCTION_BURN_IN_INTERVAL_SECONDS:-300}"
@@ -265,8 +265,8 @@ HISTORY_SYNC_SCREEN="${QG_USDJPY_HISTORY_SYNC_SCREEN:-quantgod-usdjpy-history-sy
 LEGACY_DAILY_AUTOPILOT_SCREEN="${QG_DAILY_AUTOPILOT_SCREEN:-quantgod-daily-autopilot}"
 
 RUNTIME_SOURCE="${QG_MAC_RUNTIME_SOURCE:-auto}"
-MT5_START_MODE="${QG_MT5_START_MODE:-live}"
-MT5_LIVE_LAUNCH_ALLOWED="${QG_MT5_LIVE_LAUNCH_ALLOWED:-1}"
+MT5_START_MODE="${QG_MT5_START_MODE:-shadow}"
+MT5_LIVE_LAUNCH_ALLOWED="${QG_MT5_LIVE_LAUNCH_ALLOWED:-0}"
 MT5_START_SYMBOL="${QG_MT5_START_SYMBOL:-USDJPYc}"
 MT5_SECONDARY_ENABLED="${QG_MT5_SECONDARY_ENABLED:-0}"
 MT5_SECONDARY_LOGIN="${QG_MT5_SECONDARY_LOGIN:-}"
@@ -378,10 +378,12 @@ if [[ -d "$MT5_ROOT" ]]; then
   fi
   cp MQL5/Experts/QuantGod_MultiStrategy.mq5 "$MT5_EXPERTS/QuantGod_MultiStrategy.mq5"
   rsync -a MQL5/Presets/ "$MT5_PRESETS/"
-  cp MQL5/Config/QuantGod_MT5_HFM_Shadow.ini "$MT5_SHADOW_CONFIG"
-  patch_ini_key "$MT5_SHADOW_CONFIG" "Symbol" "$MT5_START_SYMBOL"
-  patch_ini_section_key "$MT5_SHADOW_CONFIG" "Charts" "MaxBars" "$QG_MT5_MAX_BARS"
-  perl -0pi -e 's/AllowLiveTrading=1/AllowLiveTrading=0/g' "$MT5_SHADOW_CONFIG"
+  "$QG_PYTHON_BIN" tools/hydrate_mt5_shadow_config.py \
+    --template MQL5/Config/QuantGod_MT5_HFM_Shadow.ini \
+    --target "$MT5_SHADOW_CONFIG" \
+    --common-ini "$MT5_ROOT/config/common.ini" \
+    --symbol "$MT5_START_SYMBOL" \
+    --max-bars "$QG_MT5_MAX_BARS"
   if [[ -f "$MT5_ROOT/config/terminal.ini" ]]; then
     patch_ini_section_key "$MT5_ROOT/config/terminal.ini" "Charts" "MaxBars" "$QG_MT5_MAX_BARS"
   fi

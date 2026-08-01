@@ -111,32 +111,6 @@ async function handle(req, res, ctx) {
     sendJson(res, statusCodeFor(payload), payload);
     return;
   }
-  if (req.method === 'GET' && pathname === '/api/strategy-ga-factory/hyperliquid-shadow') {
-    const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'status'], 120000, 'run_hyperliquid_shadow_lane.py');
-    sendJson(res, statusCodeFor(payload), payload);
-    return;
-  }
-  if (req.method === 'POST' && pathname === '/api/strategy-ga-factory/hyperliquid-shadow/build') {
-    const targetAgentUrl = url.searchParams.get('targetAgentUrl') || '';
-    const targetAgentProfileJson = url.searchParams.get('targetAgentProfileJson') || '';
-    const payload = await runPythonJson(
-      ctx.repoRoot,
-      [
-        '--runtime-dir',
-        runtimeDir,
-        'build',
-        '--write',
-        '--target-agent-url',
-        targetAgentUrl,
-        '--target-agent-profile-json',
-        targetAgentProfileJson,
-      ],
-      120000,
-      'run_hyperliquid_shadow_lane.py',
-    );
-    sendJson(res, statusCodeFor(payload), payload);
-    return;
-  }
   if (req.method === 'GET' && pathname === '/api/strategy-ga-factory/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');

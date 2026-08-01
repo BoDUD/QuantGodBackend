@@ -253,7 +253,7 @@ def _execution_mode_review_row(
             "key": "EnablePilotRsiH1Live",
             "currentValue": preset_values.get("EnablePilotRsiH1Live", blocker.get("value", "")),
             "targetValue": "true",
-            "reviewRequirementZh": "单独评审 USDJPY RSI live route；BTC/HFM crypto lane 仍需 request reader 与 broker send release。",
+            "reviewRequirementZh": "单独评审 USDJPY RSI live route，并保持 request reader 与 broker send release 独立审查。",
         },
         "DEPLOYED_PRESET_EA_REQUEST_READER_OFF": {
             "artifact": "deployedPreset",
@@ -372,9 +372,6 @@ def build_release_readiness_refresh(
     receipt_json: str = "",
     request_json: str = "",
     operator_approval_json: str = "",
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
     write: bool = False,
     refresh_sources: bool = False,

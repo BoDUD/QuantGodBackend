@@ -37,6 +37,6 @@ def ga_to_chinese_text(payload: Dict[str, Any]) -> str:
         f"下一步：{_fmt(status.get('nextAction'), '继续下一代 Strategy JSON 评分')}",
         "",
         "安全边界：GA 只生成 Strategy JSON、进入 shadow/tester/paper-live-sim。",
-        "不直接实盘，不改 live preset，不接 crypto 执行授权，不接 Telegram 交易命令。",
+        "不直接实盘，不改 live preset，不接 Telegram 交易命令。",
     ])
     return "\n".join(lines)

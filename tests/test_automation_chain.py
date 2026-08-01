@@ -16,8 +16,34 @@ class AutomationChainTest(unittest.TestCase):
             runner = AutomationChainRunner(Path.cwd(), tmp, ["USDJPYc"], python_bin="python")
             status = runner.build_status()
             self.assertEqual(status["state"], "NOT_RUN")
+            self.assertEqual(status["runStatus"], "NOT_STARTED")
+            self.assertEqual(status["stepCount"], 0)
             self.assertIn("尚未运行", status["stateZh"])
             self.assertFalse(status["safety"]["orderSendAllowed"])
+            self.assertFalse(status["safety"]["executionLaneExists"])
+            self.assertFalse(status["safety"]["unattendedLiveExpansionAllowed"])
+            self.assertTrue(status["safety"]["operatorApprovalRequired"])
+
+    def test_report_write_is_atomic_and_preserves_cycle_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            runner = AutomationChainRunner(Path.cwd(), runtime, ["USDJPYc"], python_bin="python")
+            report = {
+                "cycleId": "cycle-test",
+                "runStatus": "COMPLETED",
+                "generatedAt": "2026-08-01T00:00:00Z",
+                "state": "BLOCKED_BY_USDJPY_POLICY",
+                "stateZh": "策略证据不足",
+                "standardCount": 0,
+                "opportunityCount": 0,
+                "blockedCount": 1,
+                "missingEvidence": [],
+            }
+            runner.write_report(report)
+            latest = json.loads((runtime / "automation" / "QuantGod_AutomationChainLatest.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest["cycleId"], "cycle-test")
+            self.assertEqual(latest["runStatus"], "COMPLETED")
+            self.assertEqual(list((runtime / "automation").glob("*.tmp")), [])
 
     def test_policy_summary_detects_opportunity_and_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -75,6 +101,7 @@ class AutomationChainTest(unittest.TestCase):
     def test_safe_iteration_plan_turns_readiness_gaps_into_shadow_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner = AutomationChainRunner(Path.cwd(), tmp, ["USDJPYc"], python_bin="python")
+            runner._history_production_readiness = lambda: {"ready": True, "status": "PASS", "freshness": "FRESH"}  # type: ignore[method-assign]
             plan = runner._safe_iteration_plan(
                 {
                     "entryReadiness": {
@@ -165,6 +192,44 @@ class AutomationChainTest(unittest.TestCase):
         runner._validate_safe_iteration_command(case_memory_command)
         with self.assertRaises(ValueError):
             runner._validate_safe_iteration_command(["python", str(Path.cwd() / "tools" / "run_strategy_ga.py"), "--send"])
+
+    def test_no_elite_generation_limit_pauses_more_ga_churn(self):
+        runner = AutomationChainRunner(Path.cwd(), "runtime", ["USDJPYc"], python_bin="python")
+        runner._history_production_readiness = lambda: {"ready": True, "status": "PASS", "freshness": "FRESH"}  # type: ignore[method-assign]
+        plan = runner._safe_iteration_plan(
+            {"entryReadiness": {"failedGapIds": ["shadow_sample_non_negative"]}},
+            {"state": "POLICY_BLOCKED"},
+            {"standardCount": 0, "opportunityCount": 0},
+            {
+                "available": True,
+                "currentGeneration": 985,
+                "eliteCount": 0,
+                "graveyardCount": 96,
+                "nextGeneration": {"action": "NO_ELITE_EXPAND_SEARCH"},
+            },
+            "BLOCKED_BY_USDJPY_POLICY",
+        )
+
+        action_ids = [item["actionId"] for item in plan["actions"]]
+        self.assertNotIn("advance_ga_shadow_generation", action_ids)
+        self.assertTrue(plan["gaProgression"]["paused"])
+        self.assertEqual(plan["gaProgression"]["reasonCode"], "NO_ELITE_GENERATION_LIMIT")
+        self.assertTrue(plan["gaProgression"]["requiresNewDataOrHypothesis"])
+
+    def test_stale_history_pauses_ga_even_when_elites_exist(self):
+        runner = AutomationChainRunner(Path.cwd(), "runtime", ["USDJPYc"], python_bin="python")
+        runner._history_production_readiness = lambda: {"ready": False, "status": "PASS", "freshness": "STALE"}  # type: ignore[method-assign]
+        plan = runner._safe_iteration_plan(
+            {"entryReadiness": {"failedGapIds": ["shadow_sample_non_negative"]}},
+            {"state": "POLICY_BLOCKED"},
+            {"standardCount": 0, "opportunityCount": 0},
+            {"available": True, "currentGeneration": 10, "eliteCount": 2},
+            "BLOCKED_BY_USDJPY_POLICY",
+        )
+
+        self.assertTrue(plan["gaProgression"]["paused"])
+        self.assertEqual(plan["gaProgression"]["reasonCode"], "HISTORY_NOT_READY")
+        self.assertNotIn("advance_ga_shadow_generation", [item["actionId"] for item in plan["actions"]])
 
     def test_ga_factory_summary_is_shadow_only(self):
         with tempfile.TemporaryDirectory() as tmp:

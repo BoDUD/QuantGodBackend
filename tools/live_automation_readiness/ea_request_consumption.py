@@ -603,9 +603,6 @@ def build_ea_request_consumption_review(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
     _allow_implementation_spec_rebuild: bool = True,
 ) -> dict[str, Any]:
@@ -617,9 +614,6 @@ def build_ea_request_consumption_review(
         or receipt_json
         or request_json
         or operator_approval_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     kwargs = {
@@ -630,9 +624,6 @@ def build_ea_request_consumption_review(
         "operator_approval_json": operator_approval_json,
         "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots or [],
     }
     implementation_spec = (

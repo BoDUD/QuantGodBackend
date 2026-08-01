@@ -124,13 +124,13 @@ class ExecutionFeedbackProducerTests(unittest.TestCase):
                 "timestamp,symbol,strategy,side,entryPrice,exitPrice,profitR,mfeR,maeR,spreadAtEntry,"
                 "totalScore,dataCoverageScore,professionalScore,marketQualityScore,entryTimingScore,"
                 "fundFlowScore,executionRiskScore,resonanceCount,atrPips,trendScore,sentimentScore,"
-                "openInterestChange,newsScore,smartMoneyScore,predictionMarketScore,kronosScore,"
+                "openInterestChange,newsScore,smartMoneyScore,kronosScore,"
                 "estimatedEV,estimatedWinProbability,estimatedRiskReward,positionScaling,"
                 "stopLossR,takeProfitR,tp1R,tp2R,trailingStartR,mfeGivebackPct,maxHoldMinutes,"
                 "stopLossPips,takeProfitPips,entryReasons,factorAttributionSummary\n"
                 + "\n".join(
                     "2026-06-04T00:{idx:02d}:00Z,USDJPYc,RSI_Reversal,LONG,155.10,155.18,{profit},1.2,-0.4,0.8,"
-                    "0.82,0.93,0.88,0.71,0.66,0.22,0.18,5,1.4,0.41,0.16,0.12,0.08,0.2,0.09,0.31,"
+                    "0.82,0.93,0.88,0.71,0.66,0.22,0.18,5,1.4,0.41,0.16,0.12,0.08,0.2,0.31,"
                     "0.18,0.62,1.8,0.32,1.0,1.9,0.7,1.25,0.9,0.42,180,22,41,"
                     "clean setup|memory rich,full factor context"
                     .format(idx=index, profit="0.24" if index >= 6 else "-0.16")

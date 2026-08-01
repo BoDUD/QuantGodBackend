@@ -106,7 +106,6 @@ def _implementation_steps(cutover: dict[str, Any]) -> list[dict[str, Any]]:
             "MT5 EA request reader 消费路径",
             [
                 "MQL5/Experts/QuantGod_MultiStrategy.mq5",
-                "tests/node/test_hfm_crypto_cfd_guard.mjs",
             ],
             [
                 "EA reader 必须默认关闭，且运行时 status 继续导出 effectiveEnabled=false 直到执行 PR 合并。",
@@ -619,8 +618,6 @@ def _first_dict(rows: Any) -> dict[str, Any]:
 def _canonical_execution_lane_id(value: Any) -> str:
     text = str(value or "").strip()
     mapping = {
-        "hfmCryptoCfd": "HFM_CRYPTO_CFD",
-        "HFM_CRYPTO_CFD": "HFM_CRYPTO_CFD",
         "forexMt5": "FOREX_MT5",
         "FOREX_MT5": "FOREX_MT5",
         "USDJPY_MT5": "USDJPY_MT5",
@@ -898,9 +895,6 @@ def build_live_execution_implementation_spec(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -911,9 +905,6 @@ def build_live_execution_implementation_spec(
         or receipt_json
         or request_json
         or operator_approval_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     cutover = (
@@ -926,9 +917,6 @@ def build_live_execution_implementation_spec(
             operator_approval_json=operator_approval_json,
             write=write,
             refresh_sources=refresh_sources,
-            moss_backtest_json=moss_backtest_json,
-            hfm_simulation_profile_json=hfm_simulation_profile_json,
-            hfm_contract_spec_json=hfm_contract_spec_json,
             extra_bases_roots=extra_bases_roots or [],
         )
         if should_rebuild

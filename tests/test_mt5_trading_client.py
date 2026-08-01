@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from collections import namedtuple
@@ -48,6 +50,7 @@ class FakeMt5:
 
     def __init__(self):
         self.order_send_calls = []
+        self.login_calls = []
 
     def terminal_info(self):
         return TerminalInfo(True, True, False, "Fake HFM MT5", "Fake Broker", "C:\\MT5", "C:\\MT5", "C:\\Common", 65001, 100000)
@@ -70,6 +73,10 @@ class FakeMt5:
         self.order_send_calls.append(request)
         retcode = self.TRADE_RETCODE_PLACED if request.get("action") == self.TRADE_ACTION_PENDING else self.TRADE_RETCODE_DONE
         return OrderSendResult(retcode, 987654, "accepted")
+
+    def login(self, **request):
+        self.login_calls.append(request)
+        return True
 
     def last_error(self):
         return (1, "Success")
@@ -101,33 +108,54 @@ class Mt5TradingClientTests(unittest.TestCase):
         path.write_text(json.dumps(lock), encoding="utf-8")
         return path
 
-    def test_default_order_is_dry_run_and_audited_without_mt5_mutation(self):
+    def test_every_mutating_endpoint_is_blocked_without_side_effects(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
             fake = FakeMt5()
-            result = client.execute_endpoint(
-                "order",
-                {
-                    "route": "MA_Cross",
-                    "symbol": "EURUSDc",
-                    "side": "buy",
-                    "orderType": "buy",
-                    "lots": 0.01,
-                    "dryRun": True,
-                },
-                runtime_dir=runtime,
-                mt5=fake,
-            )
-            self.assertEqual(result["decision"], "DRY_RUN_ACCEPTED")
-            self.assertFalse(result["safety"]["orderSendAllowed"])
-            self.assertEqual(fake.order_send_calls, [])
-            self.assertTrue((runtime / client.AUDIT_LEDGER_NAME).exists())
+            request = {
+                "profileId": "legacy-live",
+                "accountLogin": 123456,
+                "server": "Fake-Live",
+                "password": "must-not-be-read",
+                "route": "MA_Cross",
+                "symbol": "EURUSDc",
+                "side": "buy",
+                "orderType": "buy",
+                "lots": 0.01,
+                "ticket": 777,
+                "dryRun": False,
+            }
 
-    def test_live_order_requires_config_env_and_auth_lock(self):
+            for endpoint in sorted(client.MUTATING_ENDPOINTS):
+                with self.subTest(endpoint=endpoint):
+                    result = client.execute_endpoint(
+                        endpoint,
+                        request,
+                        runtime_dir=runtime,
+                        mt5=fake,
+                    )
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["status"], "BLOCKED")
+                    self.assertEqual(result["decision"], "EXECUTION_LANE_REMOVED")
+                    self.assertEqual(result["reason"], client.EXECUTION_LANE_REMOVED_REASON)
+                    self.assertTrue(result["safety"]["readOnly"])
+                    self.assertFalse(result["safety"]["executionLaneExists"])
+                    self.assertFalse(result["safety"]["orderSendAllowed"])
+                    self.assertFalse(result["safety"]["closeAllowed"])
+                    self.assertFalse(result["safety"]["cancelAllowed"])
+                    self.assertFalse(result["safety"]["loginAllowed"])
+                    self.assertFalse(result["safety"]["mutatesMt5"])
+
+            self.assertEqual(fake.order_send_calls, [])
+            self.assertEqual(fake.login_calls, [])
+            self.assertFalse((runtime / client.AUDIT_LEDGER_NAME).exists())
+            self.assertFalse((runtime / client.DEFAULT_PROFILES_NAME).exists())
+
+    def test_all_legacy_gates_open_still_blocks_dispatch_and_direct_function_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
             lock_path = self.write_lock(runtime)
-            self.write_config(
+            config_path = self.write_config(
                 runtime,
                 tradingEnabled=True,
                 dryRun=False,
@@ -136,49 +164,134 @@ class Mt5TradingClientTests(unittest.TestCase):
                 requireEnvEnable=False,
                 signatureRequired=False,
                 allowDashboardMarketOrders=True,
+                allowDashboardPendingOrders=True,
+                allowDashboardClose=True,
+                allowDashboardCancel=True,
+                allowLogin=True,
                 authLockPath=str(lock_path),
                 maxPortfolioLots=0.03,
                 maxTotalLotsPerCanonical=0.03,
                 maxOrdersPerRouteSymbolDay=5,
             )
+            config = client.load_config(runtime, config_path)
             fake = FakeMt5()
-            result = client.execute_endpoint(
+            request = {
+                "endpoint": "order",
+                "route": "MA_Cross",
+                "symbol": "EURUSDc",
+                "side": "buy",
+                "orderType": "buy",
+                "lots": 0.01,
+                "ticket": 777,
+                "accountLogin": 123456,
+                "server": "Fake-Live",
+                "password": "must-not-be-read",
+                "dryRun": False,
+            }
+            forged_live_state = {
+                "dryRun": False,
+                "liveAllowed": True,
+                "decision": "LIVE_ALLOWED",
+                "reasons": [],
+                "authLock": {"ok": True},
+                "safety": {"orderSendAllowed": True},
+            }
+
+            dispatch = client.execute_endpoint(
                 "order",
-                {
-                    "route": "MA_Cross",
-                    "symbol": "EURUSDc",
-                    "side": "buy",
-                    "orderType": "buy",
-                    "lots": 0.01,
-                    "dryRun": False,
-                },
+                request,
                 runtime_dir=runtime,
+                config_path=config_path,
                 mt5=fake,
             )
-            self.assertEqual(result["decision"], "ORDER_SEND_ACCEPTED")
-            self.assertTrue(result["safety"]["orderSendAllowed"])
-            self.assertEqual(len(fake.order_send_calls), 1)
+            self.assertEqual(dispatch["decision"], "EXECUTION_LANE_REMOVED")
 
-    def test_profile_save_never_persists_password(self):
+            direct_calls = {
+                "login": client.execute_login,
+                "order": client.execute_order,
+                "close": client.execute_close,
+                "cancel": client.execute_cancel,
+            }
+            for endpoint, function in direct_calls.items():
+                with self.subTest(endpoint=endpoint):
+                    result = function(
+                        runtime,
+                        config,
+                        request,
+                        forged_live_state,
+                        fake,
+                        True,
+                    )
+                    self.assertEqual(result["decision"], "EXECUTION_LANE_REMOVED")
+                    self.assertFalse(result["safety"]["executionLaneExists"])
+                    self.assertFalse(result["safety"]["orderSendAllowed"])
+
+            state = client.control_state(config, request, fake.account_info()._asdict(), fake, runtime)
+            self.assertFalse(state["liveAllowed"])
+            self.assertEqual(state["decision"], "BLOCKED")
+            self.assertIn(client.EXECUTION_LANE_REMOVED_REASON, state["reasons"])
+            self.assertEqual(fake.order_send_calls, [])
+            self.assertEqual(fake.login_calls, [])
+            self.assertFalse((runtime / client.AUDIT_LEDGER_NAME).exists())
+
+    def test_cli_mutation_returns_nonzero_even_when_legacy_environment_is_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
-            result = client.execute_endpoint(
-                "save-profile",
-                {
-                    "profileId": "hfm-live",
-                    "accountLogin": 123456,
-                    "server": "Fake-Live",
-                    "terminalPath": "C:\\MT5\\terminal64.exe",
-                    "password": "secret-should-not-be-saved",
-                    "passwordEnvVar": "QG_TEST_PASSWORD",
-                },
-                runtime_dir=runtime,
+            config_path = self.write_config(
+                runtime,
+                tradingEnabled=True,
+                dryRun=False,
+                killSwitch=False,
+                ownerMode="DASHBOARD_TICKET_OPS",
+                requireEnvEnable=False,
+                signatureRequired=False,
+                allowDashboardMarketOrders=True,
             )
-            self.assertTrue(result["ok"])
-            saved = json.loads((runtime / client.DEFAULT_PROFILES_NAME).read_text(encoding="utf-8"))
-            text = json.dumps(saved)
-            self.assertNotIn("secret-should-not-be-saved", text)
-            self.assertFalse(saved["profiles"][0]["passwordPersisted"])
+            env = {**os.environ, "QG_MT5_TRADING_ENABLED": "1"}
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "--endpoint",
+                    "order",
+                    "--runtime-dir",
+                    str(runtime),
+                    "--config",
+                    str(config_path),
+                    "--payload-json",
+                    json.dumps({"symbol": "EURUSDc", "side": "buy", "lots": 0.01, "dryRun": False}),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(completed.returncode, 2, completed.stderr)
+            result = json.loads(completed.stdout)
+            self.assertEqual(result["decision"], "EXECUTION_LANE_REMOVED")
+            self.assertFalse(result["safety"]["orderSendAllowed"])
+            self.assertFalse((runtime / client.AUDIT_LEDGER_NAME).exists())
+
+    def test_read_only_status_and_profile_reads_remain_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            fake = FakeMt5()
+
+            status = client.execute_endpoint("status", {}, runtime_dir=runtime, mt5=fake)
+            profiles = client.execute_endpoint("profiles", {}, runtime_dir=runtime)
+
+            self.assertTrue(status["ok"])
+            self.assertEqual(status["status"], "EXECUTION_LANE_REMOVED")
+            self.assertEqual(status["account"]["login"], 123456)
+            self.assertFalse(status["safety"]["executionLaneExists"])
+            self.assertTrue(profiles["ok"])
+            self.assertEqual(profiles["profiles"]["profiles"], [])
+            self.assertFalse((runtime / client.DEFAULT_PROFILES_NAME).exists())
+
+    def test_retired_client_source_contains_no_broker_mutation_call(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertNotIn(".order_send(", source)
+        self.assertNotRegex(source, r"\.login\s*\(")
 
 
 if __name__ == "__main__":

@@ -108,14 +108,14 @@ def check_secret_file_hygiene() -> None:
 
 def check_backend_split_boundaries() -> None:
     """Backend repo must not depend on checked-in frontend/infra source trees."""
-    forbidden_dirs = ("frontend", "cloudflare")
+    forbidden_dirs = ("frontend",)
     for dirname in forbidden_dirs:
         if (ROOT / dirname).exists():
             fail(f"backend split violation: {dirname}/ must not exist in QuantGodBackend")
 
     for rel in tracked_files():
         normalized = rel.replace("\\", "/")
-        if normalized.startswith(("frontend/", "cloudflare/")):
+        if normalized.startswith(("frontend/",)):
             fail(f"backend split violation: tracked split-out source file {rel}")
         if normalized.startswith("Dashboard/vue-dist/"):
             fail(f"backend split violation: tracked frontend build artifact {rel}")
@@ -127,9 +127,6 @@ def check_backend_split_boundaries() -> None:
             "tools/apply_phase1_full.py",
             "tools/apply_phase2_full.py",
             "tools/apply_phase3_full.py",
-            "Dashboard/cloud_sync_uploader.js",
-            "Dashboard/cloud_sync_uploader.ps1",
-            "Dashboard/quantgod_cloud_sync.example.json",
         }:
             fail(f"backend split violation: split-out helper must not be tracked here: {rel}")
 

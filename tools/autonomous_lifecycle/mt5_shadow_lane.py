@@ -174,15 +174,16 @@ def build_mt5_shadow_lane(runtime_dir: Path, *, write: bool = False) -> Dict[str
         "safety": {
             "shadowOnly": True,
             "liveEligible": False,
-            "liveEligibleAfterStageGates": True,
-            "operatorApprovalRequired": False,
-            "unattendedLiveExpansionAllowed": True,
-            "liveScopeExpansionMode": "autonomous_governance_stage_gated",
+            "liveEligibleAfterStageGates": False,
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
+            "liveScopeExpansionMode": "operator_reviewed_future_lane",
             "orderSendAllowed": False,
             "livePresetMutationAllowed": False,
             "noteZh": (
                 "MT5 Shadow 第一名不等于实盘第一名；只有 shadow→replay→walk-forward→"
-                "硬风控全通过后，Agent 才能无人审批扩大受控实盘范围。"
+                "硬风控全通过后也只形成证据；任何未来实盘车道必须另行人工审核。"
             ),
         },
     }

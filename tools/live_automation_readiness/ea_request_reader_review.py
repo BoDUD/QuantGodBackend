@@ -170,10 +170,9 @@ def _path_from_wine_prefix(raw: str) -> Path | None:
 
 def _secondary_runtime_roots(runtime_dir: Path) -> list[Path]:
     roots: list[Path] = []
-    for env_name in ("QG_HFM_CRYPTO_RUNTIME_DIR", "QG_MT5_SECONDARY_FILES_DIR"):
-        value = str(os.environ.get(env_name, "") or "").strip()
-        if value:
-            roots.append(Path(value).expanduser())
+    value = str(os.environ.get("QG_MT5_SECONDARY_FILES_DIR", "") or "").strip()
+    if value:
+        roots.append(Path(value).expanduser())
     for path in (
         _path_from_root(os.environ.get("QG_MT5_SECONDARY_ROOT", "")),
         _path_from_wine_prefix(os.environ.get("QG_MT5_SECONDARY_WINE_PREFIX", "")),
@@ -210,7 +209,6 @@ def _runtime_status_candidate_paths(runtime_dir: Path, ea_status_json: str = "")
     roots = [
         runtime_dir / "agent",
         runtime_dir,
-        runtime_dir / "hfm_crypto",
         runtime_dir / "mac_import" / "mt5_files_snapshot",
         runtime_dir.parent / "Dashboard",
     ]
@@ -653,9 +651,6 @@ def build_ea_request_reader_review(
     operator_approval_json: str = "",
     write: bool = False,
     refresh_sources: bool = False,
-    moss_backtest_json: str = "",
-    hfm_simulation_profile_json: str = "",
-    hfm_contract_spec_json: str = "",
     extra_bases_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime_dir = Path(runtime_dir)
@@ -667,9 +662,6 @@ def build_ea_request_reader_review(
     )
     upstream_inputs_provided = bool(
         request_json
-        or moss_backtest_json
-        or hfm_simulation_profile_json
-        or hfm_contract_spec_json
         or extra_bases_roots
     )
     receipt_inputs_provided = bool(receipt_json or upstream_inputs_provided)
@@ -680,9 +672,6 @@ def build_ea_request_reader_review(
         "operator_approval_json": operator_approval_json,
         "write": bool(write and refresh_sources),
         "refresh_sources": refresh_sources,
-        "moss_backtest_json": moss_backtest_json,
-        "hfm_simulation_profile_json": hfm_simulation_profile_json,
-        "hfm_contract_spec_json": hfm_contract_spec_json,
         "extra_bases_roots": extra_bases_roots or [],
     }
     activation = _read_existing_json(live_pilot_activation_review_path(runtime_dir)) if prefer_existing_activation else {}

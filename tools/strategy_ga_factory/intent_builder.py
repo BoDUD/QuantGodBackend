@@ -221,8 +221,7 @@ def build_intent_plan(runtime_dir, prompt: str, *, write: bool = True) -> Dict[s
         "scope": {
             "tradableImplementation": "MT5_USDJPY_STRATEGY_JSON_ONLY",
             "symbol": FOCUS_SYMBOL,
-            "externalMarkets": "SHADOW_RESEARCH_ONLY",
-            "reasonZh": "本系统当前只把自然语言意图落到 USDJPY Strategy JSON；外部市场只生成影子研究车道。",
+            "reasonZh": "本系统当前只把自然语言意图落到 USDJPY Strategy JSON。",
         },
         "inferredPersonality": {
             "strategyFamily": family,

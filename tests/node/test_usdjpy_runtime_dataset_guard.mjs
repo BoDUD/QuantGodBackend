@@ -17,10 +17,11 @@ test('USDJPY evolution core remains read-only and focus-only', () => {
   assert.doesNotMatch(cli, /USDJPYc,EURUSDc,XAUUSDc/);
   assert.match(schema, /"orderSendAllowed": False/);
   assert.match(schema, /"livePresetMutationAllowed": False/);
-  assert.match(schema, /"autoApplyAllowed": "stage_gated"/);
+  assert.match(schema, /"autoApplyAllowed": "shadow_only"/);
   assert.match(schema, /"requiresAutonomousGovernance": True/);
-  assert.match(schema, /"operatorApprovalRequired": False/);
-  assert.match(schema, /"unattendedLiveExpansionAllowed": True/);
+  assert.match(schema, /"operatorApprovalRequired": True/);
+  assert.match(schema, /"unattendedLiveExpansionAllowed": False/);
+  assert.match(schema, /"liveExpansionAllowed": False/);
   assert.match(schema, /"completedByAgent": True/);
   assert.doesNotMatch(schema, /requiresManualReview|manualReview|readyForReview/);
   assert.match(replay, /unitPolicy/);

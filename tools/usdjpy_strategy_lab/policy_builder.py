@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # CLI execution from tools/
 from .data_loader import (
     adaptive_policy,
     dynamic_sltp,
+    embedded_rsi_entry_diagnostics,
     entry_trigger_plan,
     fastlane_quality,
     first_json,
@@ -408,7 +409,6 @@ def _usd_deployment_gate(
     usd_lane = _account_lane(account_registry, "standard_usd")
     cent_lane = _account_lane(account_registry, "cent")
     gate_cfg = usd_lane.get("promotionGate") if isinstance(usd_lane.get("promotionGate"), dict) else {}
-    stage_lot = usd_lane.get("stageLot") if isinstance(usd_lane.get("stageLot"), dict) else {}
     blocked: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
 
@@ -492,20 +492,22 @@ def _usd_deployment_gate(
     if feedback_coverage < min_coverage:
         block("USD_FEEDBACK_COVERAGE_LT_MIN", "执行反馈字段覆盖率不足，美元账户继续 mirror。", feedback_coverage, min_coverage)
 
-    live_allowed = not blocked
-    target_stage = "USD_MICRO_LIVE" if live_allowed else "USD_PAPER_MIRROR"
-    recommended_lot = _round_lot(
-        _num(stage_lot.get("USD_MICRO_LIVE") or stage_lot.get("STANDARD_ENTRY"), 0.01),
-        min_lot=0.01,
-        max_lot=_num(usd_lane.get("maxLot"), 0.10),
-    ) if live_allowed else 0.0
+    evidence_eligible = not blocked
+    block(
+        "ACTIVE_SHADOW_READONLY_CONTRACT",
+        "当前活动合同为 Shadow/ReadOnly；证据达标也只能继续 PAPER_MIRROR。",
+    )
+    live_allowed = False
+    target_stage = "USD_PAPER_MIRROR"
+    recommended_lot = 0.0
     return {
         "schema": "quantgod.usdjpy_usd_deployment_gate.v1",
         "stage": str(usd_lane.get("defaultStage") or "USD_PAPER_MIRROR"),
         "targetStage": target_stage,
         "liveAllowed": live_allowed,
-        "action": "USD_MICRO_LIVE" if live_allowed else "PAPER_MIRROR",
-        "allowedLiveEntryModes": ["STANDARD_ENTRY"],
+        "evidenceEligibleForOperatorReview": evidence_eligible,
+        "action": "PAPER_MIRROR",
+        "allowedLiveEntryModes": [],
         "blockedEntryModes": ["OPPORTUNITY_ENTRY"],
         "recommendedLot": recommended_lot,
         "maxLot": _num(usd_lane.get("maxLot"), 0.10),
@@ -531,11 +533,7 @@ def _usd_deployment_gate(
         },
         "blockers": blocked,
         "warnings": warnings,
-        "reasonZh": (
-            "美元账户部署门通过：只允许 STANDARD_ENTRY / NORMAL 点差 / 无新闻风险下极小仓实盘。"
-            if live_allowed
-            else "美元账户继续 mirror；只有美分账户验证和严格 STANDARD_ENTRY 条件全部通过后才切 USD_MICRO_LIVE。"
-        ),
+        "reasonZh": "美元账户维持 PAPER_MIRROR；证据通过仅表示可提交未来人工审核。",
     }
 
 
@@ -579,17 +577,12 @@ def _runtime_ok(snapshot: Dict[str, Any]) -> tuple[bool, List[str]]:
 
 def _load_rsi_entry_diagnostics(runtime_dir: Path) -> Dict[str, Any]:
     diagnostics = first_json(runtime_dir, "QuantGod_USDJPYRsiEntryDiagnostics.json") or {}
-    dashboard = focus_runtime_snapshot(runtime_dir) or {}
-    embedded = dashboard.get("usdJpyRsiEntryDiagnostics")
-    if isinstance(embedded, dict) and embedded:
-        dashboard_age = _num(dashboard.get("_fileAgeSeconds"), 999999.0)
+    embedded = embedded_rsi_entry_diagnostics(runtime_dir) or {}
+    if embedded:
+        dashboard_age = _num(embedded.get("_fileAgeSeconds"), 999999.0)
         diagnostics_age = _num(diagnostics.get("_fileAgeSeconds"), 999999.0)
         if not diagnostics or dashboard_age < diagnostics_age:
-            result = dict(embedded)
-            result.setdefault("_source", "QuantGod_Dashboard.json.usdJpyRsiEntryDiagnostics")
-            result.setdefault("_dashboardFilePath", dashboard.get("_filePath"))
-            result.setdefault("_fileAgeSeconds", dashboard.get("_fileAgeSeconds"))
-            return result
+            return embedded
     if diagnostics:
         return diagnostics
     return {}
@@ -1036,11 +1029,12 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
             "requiresBacktestBeforeLive": True,
             "requiresGovernanceBeforeLive": True,
             "requiresAutonomousGovernance": True,
-            "operatorApprovalRequired": False,
-            "unattendedLiveExpansionAllowed": True,
-            "liveScopeExpansionMode": "autonomous_governance_stage_gated",
-            "autoApplyAllowed": "stage_gated",
-            "patchWritable": True,
+            "operatorApprovalRequired": True,
+            "unattendedLiveExpansionAllowed": False,
+            "liveExpansionAllowed": False,
+            "liveScopeExpansionMode": "operator_reviewed_future_lane",
+            "autoApplyAllowed": "shadow_only",
+            "patchWritable": False,
             "liveMutationAllowed": False,
             "rsiLiveRoutePreserved": True,
             "newsGateDefaultMode": news_gate.get("mode"),
@@ -1063,7 +1057,6 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
             "centOpportunitySamplingGate": cent_sampling_gate,
             "centOpportunityLotCap": cent_sampling_gate.get("maxOpportunityLot"),
             "centOpportunityLiveAccountOnly": True,
-            "externalMarketRemoved": True,
         },
         "maxLot": max_lot,
         "standardEntryCount": sum(1 for item in policies if item.entryMode == ENTRY_STANDARD),

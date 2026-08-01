@@ -2,8 +2,8 @@ param(
     [string[]]$Symbols = @("EURUSDc", "USDJPYc"),
     [string]$FromDate = (Get-Date).AddMonths(-3).ToString("yyyy.MM.dd"),
     [string]$ToDate = (Get-Date).ToString("yyyy.MM.dd"),
-    [string]$Login = "186054398",
-    [string]$Server = "HFMarketsGlobal-Live12",
+    [string]$Login = "90000001",
+    [string]$Server = "SyntheticBroker-Demo",
     [switch]$RunTerminal
 )
 

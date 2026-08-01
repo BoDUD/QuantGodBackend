@@ -199,8 +199,12 @@ def has_raw_secret(payload: dict[str, Any]) -> bool:
 
 def connect_db(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -548,6 +552,9 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
 
 
 def seed_static_symbol_catalog(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "DELETE FROM qd_market_symbols WHERE lower(COALESCE(market_category, '')) <> 'forex'"
+    )
     for row in mt5_symbol_registry.static_symbol_catalog():
         upsert_symbol_mapping(conn, row, source="quantdinger_static_catalog")
 
@@ -1338,13 +1345,18 @@ def run_db_pending_worker(conn: sqlite3.Connection, runtime_dir: Path, payload: 
     return {**summary, "task": task, "rows": rows, "safety": {**SAFETY, "mutatesMt5": sent > 0, "orderSendAllowed": sent > 0}}
 
 
-def upsert_symbol_mapping(conn: sqlite3.Connection, row: dict[str, Any], *, source: str = "registry") -> None:
+def upsert_symbol_mapping(conn: sqlite3.Connection, row: dict[str, Any], *, source: str = "registry") -> bool:
     broker_symbol = clean(first_value(row.get("brokerSymbol"), row.get("name"), row.get("symbol")), 80)
     if not broker_symbol:
-        return
-    normalized = row if row.get("canonicalSymbol") else mt5_symbol_registry.normalize_symbol_row({"name": broker_symbol, **row})
+        return False
+    normalized_input = dict(row)
+    normalized_input["name"] = broker_symbol
+    normalized = mt5_symbol_registry.normalize_symbol_row(normalized_input)
+    market_category = clean(normalized.get("marketCategory"), 80).lower()
+    if market_category != "forex":
+        return False
     canonical = clean(normalized.get("canonicalSymbol"), 80).upper()
-    market = clean(first_value(normalized.get("marketCategory"), normalized.get("assetClass"), default="Forex"), 80)
+    market = "forex"
     symbol_id = stable_id("sym", market, broker_symbol, "mt5")
     conn.execute(
         """
@@ -1402,6 +1414,7 @@ def upsert_symbol_mapping(conn: sqlite3.Connection, row: dict[str, Any], *, sour
             utc_now(),
         ),
     )
+    return True
 
 
 def sync_symbol_catalog(conn: sqlite3.Connection, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1427,11 +1440,10 @@ def sync_symbol_catalog(conn: sqlite3.Connection, payload: dict[str, Any] | None
         mappings = registry.get("mappings", [])
         source = "live_mt5"
 
-    for row in mappings:
-        upsert_symbol_mapping(conn, row, source=source)
-    audit = audit_platform_event(conn, decision="SYMBOL_CATALOG_SYNCED", action="symbols", payload={"source": source, "count": len(mappings)})
+    synced = sum(1 for row in mappings if upsert_symbol_mapping(conn, row, source=source))
+    audit = audit_platform_event(conn, decision="SYMBOL_CATALOG_SYNCED", action="symbols", payload={"source": source, "count": synced})
     conn.commit()
-    return {"ok": True, "source": source, "synced": len(mappings), "audit": audit}
+    return {"ok": True, "source": source, "synced": synced, "audit": audit}
 
 
 def extract_position_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1755,6 +1767,7 @@ def build_state(conn: sqlite3.Connection, runtime_dir: Path, db_path: Path, sync
                max_lot AS maxLot, contract_unit AS contractUnit,
                source, updated_at AS updatedAt
         FROM qd_market_symbols
+        WHERE lower(COALESCE(market_category, '')) = 'forex'
         ORDER BY market, canonical_symbol, broker_symbol
         LIMIT 200
         """,
@@ -1806,7 +1819,11 @@ def build_state(conn: sqlite3.Connection, runtime_dir: Path, db_path: Path, sync
         "platformPositions": table_count(conn, "qd_strategy_positions"),
         "platformTrades": table_count(conn, "qd_strategy_trades"),
         "quickTrades": table_count(conn, "qd_quick_trades"),
-        "symbolCatalog": table_count(conn, "qd_market_symbols"),
+        "symbolCatalog": int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM qd_market_symbols WHERE lower(COALESCE(market_category, ''))='forex'"
+            ).fetchone()["c"]
+        ),
         "connectionSessions": table_count(conn, "mt5_connection_sessions"),
     }
     ledger_summary = {

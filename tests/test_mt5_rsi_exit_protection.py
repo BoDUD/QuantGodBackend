@@ -15,6 +15,7 @@ SHADOW_PRESET_PATH = ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_Shadow.set"
 SECONDARY_PRESET_PATH = ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_LiveSecondary.set"
 USD_DEPLOY_PRESET_PATH = ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_UsdDeployMicro.set"
 MAC_LAUNCHER_PATH = ROOT / "Start_QuantGod_mac.sh"
+SHADOW_HYDRATOR_PATH = ROOT / "tools" / "hydrate_mt5_shadow_config.py"
 
 USDJPY_SHADOW_ROUTES = (
     "USDJPY_TOKYO_RANGE_BREAKOUT",
@@ -293,7 +294,7 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("Symbol=USDJPYc", start_text)
         self.assertNotIn("Symbol=EURUSD", start_text)
 
-    def test_mac_launcher_defaults_to_usdjpy_live_and_agent_v25(self):
+    def test_mac_launcher_defaults_to_usdjpy_shadow_and_agent_v25(self):
         config_text = SHADOW_CONFIG_PATH.read_text(encoding="utf-8")
         self.assertIn("AllowLiveTrading=0", config_text)
         self.assertIn("Symbol=USDJPYc", config_text)
@@ -308,8 +309,10 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
             self.assertIn(switch, preset_text)
 
         launcher_text = MAC_LAUNCHER_PATH.read_text(encoding="utf-8")
-        self.assertIn('MT5_START_MODE="${QG_MT5_START_MODE:-live}"', launcher_text)
-        self.assertIn('MT5_LIVE_LAUNCH_ALLOWED="${QG_MT5_LIVE_LAUNCH_ALLOWED:-1}"', launcher_text)
+        self.assertIn('MT5_START_MODE="${QG_MT5_START_MODE:-shadow}"', launcher_text)
+        self.assertIn('MT5_LIVE_LAUNCH_ALLOWED="${QG_MT5_LIVE_LAUNCH_ALLOWED:-0}"', launcher_text)
+        self.assertNotIn('MT5_START_MODE="${QG_MT5_START_MODE:-live}"', launcher_text)
+        self.assertNotIn('MT5_LIVE_LAUNCH_ALLOWED="${QG_MT5_LIVE_LAUNCH_ALLOWED:-1}"', launcher_text)
         self.assertIn("QG_FOCUS_SYMBOL", launcher_text)
         self.assertIn("QG_AUTOMATION_SYMBOLS", launcher_text)
         self.assertIn("QG_ACCOUNT_MODE", launcher_text)
@@ -326,7 +329,10 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("patch_ini_section_key", launcher_text)
         self.assertIn('patch_ini_section_key "$target_config" "Charts" "MaxBars" "$max_bars"', launcher_text)
         self.assertIn('prepare_live_config "$MT5_LIVE_CONFIG" "$MT5_START_SYMBOL" "$QG_MT5_MAX_BARS"', launcher_text)
-        self.assertIn('patch_ini_section_key "$MT5_SHADOW_CONFIG" "Charts" "MaxBars" "$QG_MT5_MAX_BARS"', launcher_text)
+        self.assertIn("tools/hydrate_mt5_shadow_config.py", launcher_text)
+        self.assertIn('--target "$MT5_SHADOW_CONFIG"', launcher_text)
+        self.assertIn('--common-ini "$MT5_ROOT/config/common.ini"', launcher_text)
+        self.assertIn('--max-bars "$QG_MT5_MAX_BARS"', launcher_text)
         self.assertIn("terminal.ini", launcher_text)
         self.assertIn("QG_USDJPY_HISTORY_SYNC_ENABLED", launcher_text)
         self.assertIn("QG_USDJPY_HISTORY_MAX_LAG_HOURS", launcher_text)
@@ -350,7 +356,8 @@ class Mt5RsiExitProtectionTests(unittest.TestCase):
         self.assertIn("QuantGod_MT5_HFM_Shadow_mac.ini", launcher_text)
         self.assertIn("QuantGod_MT5_HFM_LivePilot_mac.ini", launcher_text)
         self.assertNotIn("Password=", launcher_text)
-        self.assertIn("AllowLiveTrading=0", launcher_text)
+        hydrator_text = SHADOW_HYDRATOR_PATH.read_text(encoding="utf-8")
+        self.assertIn('("Experts", "AllowLiveTrading", "0")', hydrator_text)
         self.assertTrue(
             launcher_text.rstrip().endswith(
                 'echo "Screens: $BACKEND_API_SCREEN, $FRONTEND_SCREEN, $AGENT_V25_SUPERVISOR_SCREEN, $AGENT_V25_SCREEN, $HISTORY_SYNC_SCREEN, $MT5_LIVE_SCREEN, $MT5_SECONDARY_SCREEN"'

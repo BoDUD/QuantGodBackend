@@ -22,7 +22,7 @@ def ga_factory_to_chinese_text(state: Dict[str, Any]) -> str:
             f"Lineage 节点：{state.get('lineageNodeCount', 0)}",
             f"下一代：{next_generation.get('status', 'WAITING_GA_TRACE')}",
             next_generation.get("reasonZh") or "等待 GA trace 生成。",
-            "安全边界：GA 可无人审批推进到 SHADOW / FAST_SHADOW / TESTER_ONLY / PAPER_LIVE_SIM；MICRO_LIVE 仍需 autonomous governance 全链路通过。",
+            "安全边界：GA 仅可自动推进到 SHADOW / FAST_SHADOW / TESTER_ONLY / PAPER_LIVE_SIM；任何未来实盘车道都需另行人工审核。",
             f"直接实盘：{bool(safety.get('gaFactoryDirectLiveAllowed'))}",
         ]
     )

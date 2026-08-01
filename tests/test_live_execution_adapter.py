@@ -31,15 +31,15 @@ class LiveExecutionAdapterWriterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
             request = {
-                "requestId": "sandbox-review-btc-001",
+                "requestId": "sandbox-review-fx-001",
                 "schema": "quantgod.mt5_reviewed_order_request.v1",
                 "createdAtIso": "1970-01-01T00:00:00Z",
                 "reviewPacketHash": "review-hash",
                 "runtimePreflightHash": "preflight-hash",
                 "operatorApprovalId": "review-only-operator-approval",
-                "lane": "HFM_CRYPTO_CFD",
-                "brokerSymbol": "#BTCUSD",
-                "canonicalSymbol": "BTCUSD",
+                "lane": "FOREX_MT5",
+                "brokerSymbol": "USDJPYc",
+                "canonicalSymbol": "USDJPY",
                 "side": "BUY",
                 "orderType": "MARKET",
                 "volumeLots": 0.0,
@@ -89,7 +89,7 @@ class LiveExecutionAdapterWriterTests(unittest.TestCase):
                 "contractExecutionModeOnlyBlocked": True,
                 "validationResults": [
                     {
-                        "requestId": "sandbox-review-btc-001",
+                        "requestId": "sandbox-review-fx-001",
                         "passed": True,
                     }
                 ],
@@ -102,15 +102,15 @@ class LiveExecutionAdapterWriterTests(unittest.TestCase):
                 "executionModeOnlyBlocked": True,
                 "plannedWrites": [
                     {
-                        "requestId": "sandbox-review-btc-001",
+                        "requestId": "sandbox-review-fx-001",
                         "targetRequestDir": "runtime/agent/mt5_order_requests",
                         "targetReceiptDir": "runtime/agent/mt5_order_receipts",
-                        "requestFilename": "sandbox-review-btc-001.json",
-                        "plannedRequestPath": "runtime/agent/mt5_order_requests/sandbox-review-btc-001.json",
-                        "plannedReceiptPath": "runtime/agent/mt5_order_receipts/sandbox-review-btc-001.receipt.json",
-                        "atomicTempFilePattern": "sandbox-review-btc-001.json.tmp.<pid>",
+                        "requestFilename": "sandbox-review-fx-001.json",
+                        "plannedRequestPath": "runtime/agent/mt5_order_requests/sandbox-review-fx-001.json",
+                        "plannedReceiptPath": "runtime/agent/mt5_order_receipts/sandbox-review-fx-001.receipt.json",
+                        "atomicTempFilePattern": "sandbox-review-fx-001.json.tmp.<pid>",
                         "atomicWriteRequired": True,
-                        "idempotencyKey": "sandbox-review-btc-001",
+                        "idempotencyKey": "sandbox-review-fx-001",
                     }
                 ],
             })
@@ -164,15 +164,15 @@ class LiveExecutionAdapterWriterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
             request = {
-                "requestId": "sandbox-review-btc-existing",
+                "requestId": "sandbox-review-fx-existing",
                 "schema": "quantgod.mt5_reviewed_order_request.v1",
                 "createdAtIso": "1970-01-01T00:00:00Z",
                 "reviewPacketHash": "review-hash",
                 "runtimePreflightHash": "preflight-hash",
                 "operatorApprovalId": "review-only-operator-approval",
-                "lane": "HFM_CRYPTO_CFD",
-                "brokerSymbol": "#BTCUSD",
-                "canonicalSymbol": "BTCUSD",
+                "lane": "FOREX_MT5",
+                "brokerSymbol": "USDJPYc",
+                "canonicalSymbol": "USDJPY",
                 "side": "BUY",
                 "orderType": "MARKET",
                 "volumeLots": 0.0,
@@ -189,7 +189,7 @@ class LiveExecutionAdapterWriterTests(unittest.TestCase):
                 "symbolMappingOk": True,
                 "dryRunReplayPassed": True,
             }
-            final_path = "runtime/agent/mt5_order_requests/sandbox-review-btc-existing.json"
+            final_path = "runtime/agent/mt5_order_requests/sandbox-review-fx-existing.json"
             existing = runtime / final_path
             existing.parent.mkdir(parents=True)
             existing.write_text("already-there", encoding="utf-8")
@@ -220,10 +220,10 @@ class LiveExecutionAdapterWriterTests(unittest.TestCase):
                     "requestId": request["requestId"],
                     "targetRequestDir": "runtime/agent/mt5_order_requests",
                     "targetReceiptDir": "runtime/agent/mt5_order_receipts",
-                    "requestFilename": "sandbox-review-btc-existing.json",
+                    "requestFilename": "sandbox-review-fx-existing.json",
                     "plannedRequestPath": final_path,
-                    "plannedReceiptPath": "runtime/agent/mt5_order_receipts/sandbox-review-btc-existing.receipt.json",
-                    "atomicTempFilePattern": "sandbox-review-btc-existing.json.tmp.<pid>",
+                    "plannedReceiptPath": "runtime/agent/mt5_order_receipts/sandbox-review-fx-existing.receipt.json",
+                    "atomicTempFilePattern": "sandbox-review-fx-existing.json.tmp.<pid>",
                     "atomicWriteRequired": True,
                     "idempotencyKey": request["requestId"],
                 }],
@@ -246,7 +246,7 @@ class LiveExecutionAdapterWriterTests(unittest.TestCase):
 
 
 class LiveExecutionRequestWriterImplementationTests(unittest.TestCase):
-    def _request(self, request_id: str = "sandbox-review-btc-writer-001") -> dict:
+    def _request(self, request_id: str = "sandbox-review-fx-writer-001") -> dict:
         return {
             "requestId": request_id,
             "schema": "quantgod.mt5_reviewed_order_request.v1",
@@ -254,9 +254,9 @@ class LiveExecutionRequestWriterImplementationTests(unittest.TestCase):
             "reviewPacketHash": "review-hash",
             "runtimePreflightHash": "preflight-hash",
             "operatorApprovalId": "review-only-operator-approval",
-            "lane": "HFM_CRYPTO_CFD",
-            "brokerSymbol": "#BTCUSD",
-            "canonicalSymbol": "BTCUSD",
+            "lane": "FOREX_MT5",
+            "brokerSymbol": "USDJPYc",
+            "canonicalSymbol": "USDJPY",
             "side": "BUY",
             "orderType": "MARKET",
             "volumeLots": 0.01,
@@ -274,7 +274,7 @@ class LiveExecutionRequestWriterImplementationTests(unittest.TestCase):
             "dryRunReplayPassed": True,
         }
 
-    def _plan(self, request_id: str = "sandbox-review-btc-writer-001") -> dict:
+    def _plan(self, request_id: str = "sandbox-review-fx-writer-001") -> dict:
         return {
             "finalRequestPath": f"runtime/agent/mt5_order_requests/{request_id}.json",
             "plannedReceiptPath": f"runtime/agent/mt5_order_receipts/{request_id}.receipt.json",
@@ -303,7 +303,7 @@ class LiveExecutionRequestWriterImplementationTests(unittest.TestCase):
             runtime = Path(tmp)
             request = self._request()
             plan = self._plan()
-            plan["finalRequestPath"] = "../mt5_order_requests/sandbox-review-btc-writer-001.json"
+            plan["finalRequestPath"] = "../mt5_order_requests/sandbox-review-fx-writer-001.json"
 
             decision = commit_request_file(
                 runtime,
@@ -318,7 +318,7 @@ class LiveExecutionRequestWriterImplementationTests(unittest.TestCase):
             self.assertIn("PATH_PREFIX_MISMATCH", decision.blocker_codes)
             self.assertIn("REQUEST_WRITE_RELEASE_TOKEN_MISSING", decision.blocker_codes)
             self.assertFalse(decision.wrote_request_file)
-            self.assertFalse((runtime / "../mt5_order_requests/sandbox-review-btc-writer-001.json").exists())
+            self.assertFalse((runtime / "../mt5_order_requests/sandbox-review-fx-writer-001.json").exists())
 
     def test_request_writer_requires_review_release_token_even_when_flags_are_true(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

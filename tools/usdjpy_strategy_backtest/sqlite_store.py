@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from .schema import FOCUS_SYMBOL, db_path, ingest_report_path
+from .schema import FOCUS_SYMBOL, atomic_write_json, db_path, ingest_report_path
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,9 @@ def connect(runtime_dir: Path) -> sqlite3.Connection:
         conn = sqlite3.connect(path, timeout=60.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 60000")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         try:
             init_schema(conn)
             return conn
@@ -405,16 +408,14 @@ def ingest_runtime_snapshot(runtime_dir: Path, snapshot_path: Path | None = None
         },
     }
     if not source.exists():
-        ingest_report_path(runtime_dir).parent.mkdir(parents=True, exist_ok=True)
-        ingest_report_path(runtime_dir).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(ingest_report_path(runtime_dir), report)
         return report
 
     try:
         payload = json.loads(source.read_text(encoding="utf-8", errors="ignore"))
     except Exception as exc:
         report.update({"ok": False, "error": f"snapshot_parse_failed: {exc}"})
-        ingest_report_path(runtime_dir).parent.mkdir(parents=True, exist_ok=True)
-        ingest_report_path(runtime_dir).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(ingest_report_path(runtime_dir), report)
         return report
 
     with connect(runtime_dir) as conn:
@@ -426,8 +427,7 @@ def ingest_runtime_snapshot(runtime_dir: Path, snapshot_path: Path | None = None
             report["barCounts"][timeframe] = count_bars(conn, timeframe)
             report["latestBars"][timeframe] = latest_bar_time(conn, timeframe)
 
-    ingest_report_path(runtime_dir).parent.mkdir(parents=True, exist_ok=True)
-    ingest_report_path(runtime_dir).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(ingest_report_path(runtime_dir), report)
     return report
 
 

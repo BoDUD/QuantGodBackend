@@ -351,7 +351,6 @@ def _entry_context_bridge(
             "oiChange": _num(_first(row, "openInterestChange", "oiChange", "openInterest")),
             "news": _num(_first(row, "newsScore", "news")),
             "smartMoney": _num(_first(row, "smartMoneyScore", "smartMoney")),
-            "predictionMarket": _num(_first(row, "predictionMarketScore", "predictionMarket")),
             "kronos": _num(_first(row, "kronosScore", "kronos")),
             "entryRegime": entry_regime,
             "exitRegime": exit_regime,
