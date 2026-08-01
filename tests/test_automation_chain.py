@@ -70,7 +70,7 @@ class AutomationChainTest(unittest.TestCase):
     def test_ready_state_keeps_shadow_blockers_out_of_main_blockers(self):
         runner = AutomationChainRunner(Path.cwd(), "runtime", ["USDJPYc"], python_bin="python")
         blockers = ["影子路线样本不足", "MA_Cross 仍在模拟观察"]
-        self.assertEqual(runner._top_level_blocked_reasons("READY_FOR_EXISTING_EA", blockers), [])
+        self.assertEqual(runner._top_level_blocked_reasons("SHADOW_ADVISORY_READY", blockers), [])
         self.assertEqual(runner._top_level_blocked_reasons("BLOCKED_BY_USDJPY_POLICY", blockers), blockers)
 
     def test_chain_steps_use_usdjpy_live_loop_as_source_of_truth(self):
@@ -358,7 +358,7 @@ class AutomationChainTest(unittest.TestCase):
             "missingEvidence": ["缺少 P3-7 快通道质量证据"],
             "blockedReasons": ["缺少运行快照"],
             "policySummary": {"opportunities": [], "blocked": []},
-            "topLiveEligiblePolicy": {"strategy": "RSI_Reversal", "direction": "LONG", "entryMode": "OPPORTUNITY_ENTRY", "recommendedLot": 0.12},
+            "topAdvisoryPolicy": {"strategy": "RSI_Reversal", "direction": "LONG", "entryMode": "OPPORTUNITY_ENTRY", "recommendedLot": 0.12},
             "dryRunDecision": {"decision": "本应机会入场", "strategy": "RSI_Reversal", "direction": "LONG"},
             "entryLatencyReport": {
                 "summary": {"stateZh": "策略政策", "primaryReasonZh": "政策阻断"},

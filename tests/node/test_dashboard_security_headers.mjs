@@ -98,7 +98,7 @@ test('dashboard applies security headers to static, API, module, preflight, and 
   await waitForDashboard(child);
 
   const responses = await Promise.all([
-    request(port, '/vue/'),
+    request(port, '/api_perf_cache.js'),
     request(port, '/api/daily-autopilot'),
     request(port, '/api/state/status', {
       method: 'POST',

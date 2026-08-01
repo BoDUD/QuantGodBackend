@@ -352,7 +352,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
             "policyReady": usdjpy_live_loop.get("policyReady", False),
             "presetReady": usdjpy_live_loop.get("presetReady", False),
             "runtimeReady": usdjpy_live_loop.get("runtimeReady", False),
-            "allowedLiveRoute": (usdjpy_live_loop.get("intent") or {}).get("allowedLiveRoute", "RSI_Reversal BUY"),
+            "advisoryRoute": usdjpy_live_loop.get("advisoryRouteZh", "所有策略仅做 Shadow/ReadOnly 复核"),
             "whyNoEntry": usdjpy_live_loop.get("whyNoEntry", []),
             "nextActions": usdjpy_live_loop.get("nextActions", []),
         },

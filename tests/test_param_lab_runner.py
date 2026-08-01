@@ -22,7 +22,7 @@ class ParamLabRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
-            tester = root / "tester"
+            tester = repo / "runtime" / "HFM_MT5_Tester_Isolated"
             runtime = tester / "MQL5" / "Files"
             output = runtime / "agent" / "QuantGod_ChampionTesterForwardParamLabStatus.json"
             plan_path = runtime / "agent" / "QuantGod_ChampionTesterForwardRequest.json"
@@ -97,7 +97,7 @@ class ParamLabRunnerTests(unittest.TestCase):
             root = Path(tmp)
             repo = root / "repo"
             live_runtime = root / "live" / "MQL5" / "Files"
-            tester = root / "tester"
+            tester = repo / "runtime" / "HFM_MT5_Tester_Isolated"
             output = tester / "MQL5" / "Files" / "agent" / "QuantGod_ForexLive12RsiTesterParamLabStatus.json"
             plan_path = tester / "MQL5" / "Files" / "agent" / "QuantGod_ForexLive12RsiTesterRequest.json"
             lock_path = tester / "MQL5" / "Files" / "QuantGod_AutoTesterWindow.lock.json"

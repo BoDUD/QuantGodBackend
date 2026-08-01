@@ -87,10 +87,7 @@ class PresetSchemaValidatorTests(unittest.TestCase):
         self.assertIn(self.values.get("PilotStartupEntryGuardMode"), {"H1_STRICT", "FAST_WARMUP", "BACKTEST_OFF"})
 
     def test_shadow_presets_explicitly_disable_pilot_auto_trading(self):
-        presets = (
-            REPO_ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_Shadow.set",
-            REPO_ROOT.parent / "QuantGod" / "MQL5" / "Presets" / "QuantGod_MT5_HFM_Shadow.set",
-        )
+        presets = (REPO_ROOT / "MQL5" / "Presets" / "QuantGod_MT5_HFM_Shadow.set",)
         for preset in presets:
             text = preset.read_text(encoding="utf-8")
             self.assertIn("ShadowMode=true", text)

@@ -1,42 +1,5 @@
 @echo off
-title QuantGod MT5 Launcher
-set "REPO_ROOT=%~dp0"
-if "%REPO_ROOT:~-1%"=="\" set "REPO_ROOT=%REPO_ROOT:~0,-1%"
-set "QG_ROOT=C:\Program Files\HFM Metatrader 5"
-set "QG_FILES=%QG_ROOT%\MQL5\Files"
-set "QG_EXPERTS=%QG_ROOT%\MQL5\Experts"
-set "QG_CONFIG=%REPO_ROOT%\MQL5\Config\QuantGod_MT5_Start.ini"
-
-echo ============================================
-echo   QuantGod MT5 Phase 1 Launcher
-echo ============================================
-echo.
-echo 1. Syncing dashboard assets to MT5 Files...
-if not exist "%QG_FILES%\vue-dist" mkdir "%QG_FILES%\vue-dist"
-xcopy /E /I /Y "%REPO_ROOT%\Dashboard\vue-dist" "%QG_FILES%\vue-dist" >nul
-copy /Y "%REPO_ROOT%\Dashboard\dashboard_server.js" "%QG_FILES%\dashboard_server.js" >nul
-
-echo 2. Syncing MT5 EA source...
-copy /Y "%REPO_ROOT%\MQL5\Experts\QuantGod_MultiStrategy.mq5" "%QG_EXPERTS%\QuantGod_MultiStrategy.mq5" >nul
-if exist "%REPO_ROOT%\MQL5\Experts\QuantGod_MultiStrategy.ex5" (
-copy /Y "%REPO_ROOT%\MQL5\Experts\QuantGod_MultiStrategy.ex5" "%QG_EXPERTS%\QuantGod_MultiStrategy.ex5" >nul
-)
-
-echo 3. Restarting MT5 terminal with the requested config...
-taskkill /IM terminal64.exe /F >nul 2>nul
-timeout /t 2 /nobreak >nul
-start "" "%QG_ROOT%\terminal64.exe" /config:"%QG_CONFIG%"
-
-echo 4. Starting local dashboard server...
-start "QuantGod MT5 Dashboard Server" cmd /k "cd /d ""%QG_FILES%"" && node dashboard_server.js"
-
-for /f %%i in ('powershell -NoProfile -Command "[DateTimeOffset]::Now.ToUnixTimeSeconds()"') do set "QG_TS=%%i"
-timeout /t 2 /nobreak >nul
-
-echo 5. Opening dashboard...
-call "%REPO_ROOT%\tools\open_dashboard_chrome.bat" "http://localhost:8080/vue/?ts=%QG_TS%"
-
-echo.
-echo Note: compile QuantGod_MultiStrategy.mq5 in MetaEditor64 once so the launcher can sync the ex5.
-echo This launcher uses the MT5 startup config to open EURUSD M1 and auto-load QuantGod_MultiStrategy.
-echo MT5 phase 1 currently exports runtime JSON/CSV only. Strategy execution is not ported yet.
+title QuantGod MT5 Windows Launcher Retired
+echo ERROR: The tracked Windows MT5 launcher is retired until a fresh compile and provenance gate exists.
+echo Use the reviewed local Shadow/ReadOnly supervisor; MetaTrader was not restarted.
+exit /b 2

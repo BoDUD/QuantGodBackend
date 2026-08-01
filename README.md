@@ -32,12 +32,12 @@ Related repositories:
 
 ## Current System Model
 
-QuantGod v2.5 is organized as three lanes:
+QuantGod v2.5 is organized as two non-executing lanes:
 
 | Lane | Scope | What it can do | What it cannot do |
 |---|---|---|---|
-| Live Lane | `USDJPYc / RSI_Reversal / LONG` | Cent-account micro live, limited live, autonomous rollback | USDJPY short, non-RSI live, non-USDJPY live |
-| MT5 Shadow Lane | USDJPY strategy pool | Multi-strategy shadow ranking, replay, tester-only validation | Steal the live route or mutate live preset directly |
+| Research Lane | USDJPY strategy pool | Local datasets, replay, GA, advisory policy and isolated tester preparation | Launch a normal MT5 terminal or mutate broker state |
+| MT5 Shadow Lane | USDJPY strategy pool | Read-only monitoring, shadow ranking and evidence export | Place, close, cancel or modify broker orders |
 
 DeepSeek may explain evidence and produce Chinese summaries. It cannot approve live execution, override hard gates, raise lot limits, or cancel rollback.
 
@@ -52,10 +52,10 @@ cd /Users/bowen/Desktop/Quard/QuantGodBackend
 
 The launcher starts the current v2.5 stack:
 
-- MT5 HFM LivePilot preset focused on `USDJPYc`.
+- MT5 HFM Shadow/ReadOnly preset focused on `USDJPYc`; legacy LivePilot-named templates are read-only compatibility files only.
 - Backend API at `http://127.0.0.1:8080`.
 - Frontend Vite workbench at `http://127.0.0.1:5173/vue/?workspace=mt5`.
-- Agent v2.5 loop for USDJPY live-loop, policy generation, EA dry-run, daily todo, daily review, and rollback evidence.
+- Agent v2.5 loop for USDJPY advisory policy generation, EA dry-run, daily todo, daily review, and rollback evidence.
 - USDJPY history sync remains enabled, and you can still privately lower MT5 bar caps on 16 GB Macs through `.env.local`.
 
 The launcher keeps the original full stack and supports local memory controls when you need them:

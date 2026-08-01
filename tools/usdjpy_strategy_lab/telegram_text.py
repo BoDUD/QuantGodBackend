@@ -24,7 +24,7 @@ def policy_to_chinese_text(policy: Dict[str, Any]) -> str:
     lines.append("【QuantGod USDJPY 单品种多策略审查】")
     lines.append("")
     lines.append("研究范围：仅 USDJPYc")
-    lines.append("其他品种：已忽略，不参与模拟盘、实盘或 Telegram 主报告。")
+    lines.append("其他品种：已忽略，不参与 Shadow 研究或 Telegram 主报告。")
     lines.append("")
     lines.append("总体结论：")
     lines.append(f"- 标准入场候选：{policy.get('standardEntryCount', 0)}")
@@ -32,13 +32,13 @@ def policy_to_chinese_text(policy: Dict[str, Any]) -> str:
     lines.append(f"- 阻断策略方向：{policy.get('blockedCount', 0)}")
     lines.append(f"- 最高允许仓位：{_num(policy.get('maxLot', 2.0))}")
     lines.append("")
-    top = policy.get("topLiveEligiblePolicy") or policy.get("liveRecoveryCandidate") or policy.get("topPolicy") or {}
+    top = policy.get("topShadowPolicy") or policy.get("topPolicy") or policy.get("liveRecoveryCandidate") or {}
     if top:
-        lines.append("当前实盘恢复路线：")
+        lines.append("当前 Shadow advisory 路线：")
         lines.append(f"- 策略：{top.get('strategy', 'UNKNOWN')}")
         lines.append(f"- 方向：{direction_cn(top.get('direction'))}")
         lines.append(f"- 状态：{status_cn(top.get('entryMode'))}")
-        lines.append(f"- 建议仓位：{_num(top.get('recommendedLot', 0.0))} / 上限 {_num(top.get('maxLot', policy.get('maxLot', 2.0)))}")
+        lines.append(f"- 研究仓位参数：{_num(top.get('recommendedLot', 0.0))}（不用于 broker execution）")
         lines.append(f"- 评分：{_num(top.get('score', 0.0), 1)}")
         reasons = top.get("reasons") or []
         if reasons:
@@ -48,7 +48,7 @@ def policy_to_chinese_text(policy: Dict[str, Any]) -> str:
     if shadow and shadow != top:
         lines.append("影子研究第一名：")
         lines.append(f"- {shadow.get('strategy', 'UNKNOWN')}｜{direction_cn(shadow.get('direction'))}｜{status_cn(shadow.get('entryMode'))}｜评分 {_num(shadow.get('score', 0.0), 1)}")
-        lines.append("- 说明：影子第一名不会自动抢占实盘 RSI 买入恢复路线。")
+        lines.append("- 说明：影子第一名仅用于研究与证据复核。")
         lines.append("")
     lines.append("策略排名：")
     strategies = policy.get("strategies") or []
@@ -71,9 +71,10 @@ def policy_to_chinese_text(policy: Dict[str, Any]) -> str:
     lines.append(f"- 动态止盈止损：{'已找到' if evidence.get('dynamicSltpFound') else '缺失'}")
     lines.append("")
     lines.append("安全边界：")
+    lines.append("- executionLaneExists=false；现有 EA 不拥有执行权限。")
     lines.append("- 本工具只生成 USDJPY 策略政策和 EA 干跑证据。")
     lines.append("- 不会下单、不会平仓、不会撤单、不会修改订单。")
-    lines.append("- 不会修改实盘 preset，不会写 MT5 OrderRequest。")
+    lines.append("- 不会修改 tracked preset，不会写 MT5 OrderRequest。")
     return "\n".join(lines)
 
 

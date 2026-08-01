@@ -8,16 +8,16 @@ SCHEMA_STATUS = "quantgod.usdjpy_live_loop_status.v1"
 SCHEMA_INTENT = "quantgod.usdjpy_live_intent.v1"
 SCHEMA_DAILY = "quantgod.usdjpy_daily_autopilot.v1"
 
-STATE_READY = "READY_FOR_EXISTING_EA"
+STATE_READY = "SHADOW_ADVISORY_READY"
 STATE_POLICY_READY_PRESET_BLOCKED = "POLICY_READY_PRESET_BLOCKED"
 STATE_POLICY_BLOCKED = "POLICY_BLOCKED"
 STATE_EVIDENCE_MISSING = "EVIDENCE_MISSING"
 
 STATE_ZH = {
-    STATE_READY: "RSI 买入路线已恢复，等待 EA 自身信号",
-    STATE_POLICY_READY_PRESET_BLOCKED: "政策已就绪，但实盘 preset 尚未完全恢复",
-    STATE_POLICY_BLOCKED: "政策仍阻断，EA 不应自动入场",
-    STATE_EVIDENCE_MISSING: "证据链不完整，EA 不应自动入场",
+    STATE_READY: "Shadow advisory 已就绪，可继续观察与复核",
+    STATE_POLICY_READY_PRESET_BLOCKED: "政策已就绪，但 Shadow/ReadOnly preset 未通过",
+    STATE_POLICY_BLOCKED: "政策仍阻断，只保留 Shadow 观察",
+    STATE_EVIDENCE_MISSING: "证据链不完整，只保留 Shadow 观察",
 }
 
 SAFE_EVIDENCE_BOUNDARY = {
@@ -32,7 +32,8 @@ SAFE_EVIDENCE_BOUNDARY = {
     "writesMt5OrderRequest": False,
     "livePresetMutationAllowed": False,
     "telegramCommandExecutionAllowed": False,
-    "existingEaOwnsExecution": True,
+    "executionLaneExists": False,
+    "existingEaOwnsExecution": False,
 }
 
 
@@ -60,4 +61,3 @@ def direction_zh(value: Any) -> str:
     if text in {"SHORT", "SELL"}:
         return "卖出观察"
     return "方向待确认"
-

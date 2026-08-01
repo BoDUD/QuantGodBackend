@@ -7,8 +7,6 @@
 #property version   "3.17"
 #property strict
 
-#include <Trade/Trade.mqh>
-
 input string DashboardBuild      = "QuantGod-v3.17-mt5-startup-entry-guard";
 input string Watchlist           = "USDJPY";
 input string PreferredSymbolSuffix = "AUTO";
@@ -194,8 +192,6 @@ string g_strategyKeys[8] =
    "USDJPY_NIGHT_REVERSION_SAFE",
    "USDJPY_H4_TREND_PULLBACK"
 };
-
-CTrade g_trade;
 
 bool   g_autonomousPatchLoaded = false;
 bool   g_autonomousPatchRuntimeActive = false;
@@ -1587,7 +1583,9 @@ string BuildNewsJson()
 
 bool IsPilotLiveMode()
 {
-   return (EnablePilotAutoTrading && !ShadowMode && !ReadOnlyMode);
+   // The tracked EA has no broker execution lane. Strategy inputs may still be
+   // loaded by legacy presets for read-only telemetry, but cannot enable live mode.
+   return false;
 }
 
 string SymbolTradeModeLabel(long mode)
@@ -1613,25 +1611,7 @@ bool SymbolEntryTradeAllowed(string symbol)
 
 string LiveTradePermissionBlocker(string symbol)
 {
-   if(ShadowMode)
-      return "SHADOW_MODE";
-   if(ReadOnlyMode)
-      return "READ_ONLY_MODE";
-   if(!EnablePilotAutoTrading)
-      return "PILOT_AUTO_TRADING_DISABLED";
-   if(!(bool)TerminalInfoInteger(TERMINAL_CONNECTED))
-      return "TERMINAL_DISCONNECTED";
-   if(!(bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
-      return "TERMINAL_AUTOTRADING_DISABLED";
-   if(!(bool)MQLInfoInteger(MQL_TRADE_ALLOWED))
-      return "EA_LIVE_TRADING_DISABLED";
-   if(!(bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
-      return "ACCOUNT_TRADE_DISABLED_OR_INVESTOR_MODE";
-   if(!(bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
-      return "ACCOUNT_EXPERT_TRADE_DISABLED";
-   if(!SymbolEntryTradeAllowed(symbol))
-      return "SYMBOL_TRADE_MODE_" + SymbolTradeModeLabel(SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE));
-   return "";
+   return "EXECUTION_LANE_REMOVED";
 }
 
 bool IsUsdJpySymbol(string symbol)
@@ -4542,177 +4522,15 @@ void RegisterPilotOrderSendFailure(string symbol, int direction, uint retcode, s
 
 bool SendPilotMarketOrder(string symbol, int direction, double slPrice, double tpPrice, string strategyKey)
 {
-   if(!IsPilotLiveMode())
-   {
-      Print("QuantGod MT5 pilot order blocked: live mode is disabled strategy=", strategyKey,
-            " symbol=", symbol);
-      return false;
-   }
-   if(strategyKey == "MA_Cross")
-   {
-      if(!EnablePilotMA)
-      {
-         Print("QuantGod MT5 pilot order blocked: MA_Cross live switch disabled symbol=", symbol);
-         return false;
-      }
-   }
-   else if(IsNonRsiLegacyPilotRoute(strategyKey) && !NonRsiLegacyLiveAuthorizationActive())
-   {
-      Print("QuantGod MT5 pilot order blocked: non-RSI legacy live authorization lock disabled strategy=", strategyKey,
-            " symbol=", symbol, " state=", NonRsiLegacyLiveAuthorizationState(),
-            " expectedTag=", NonRsiLegacyLiveAuthorizationExpectedTag());
-      return false;
-   }
-   else if(!IsLegacyPilotRouteLiveEnabled(strategyKey))
-   {
-      Print("QuantGod MT5 pilot order blocked: legacy route live switch disabled strategy=", strategyKey,
-            " symbol=", symbol);
-      return false;
-   }
-   if(direction == 0)
-      return false;
-
-   string permissionBlocker = LiveTradePermissionBlocker(symbol);
-   if(StringLen(permissionBlocker) > 0)
-   {
-      Print("QuantGod MT5 pilot order blocked: trade permission disabled strategy=", strategyKey,
-            " symbol=", symbol,
-            " blocker=", permissionBlocker,
-            " accountTradeAllowed=", ((bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) ? "true" : "false"),
-            " accountExpertTradeAllowed=", ((bool)AccountInfoInteger(ACCOUNT_TRADE_EXPERT) ? "true" : "false"),
-            " symbolTradeMode=", SymbolTradeModeLabel(SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE)));
-      return false;
-   }
-
-   double requestedVolume = PilotLotSize;
-   if(strategyKey == "RSI_Reversal" && direction > 0)
-      requestedVolume = AutonomousPatchEffectiveStageLotCap(requestedVolume);
-   requestedVolume = PilotSpreadAdjustedVolume(symbol, requestedVolume);
-   if(requestedVolume <= 0.0)
-   {
-      Print("QuantGod MT5 pilot order blocked: spread hard tier blocks volume strategy=", strategyKey,
-            " symbol=", symbol);
-      return false;
-   }
-   double volume = NormalizeVolumeForSymbol(symbol, requestedVolume);
-   g_trade.SetExpertMagicNumber(PilotMagic);
-   g_trade.SetDeviationInPoints(PilotDeviationPoints);
-   g_trade.SetTypeFillingBySymbol(symbol);
-
-   // Clamp SL to PilotMaxFloatingLossUSC (broker-side sentinel)
-   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   if(tickSize > 0 && tickValue > 0 && volume > 0 && slPrice > 0)
-   {
-      double entryPrice = (direction > 0) ? SymbolInfoDouble(symbol, SYMBOL_ASK) : SymbolInfoDouble(symbol, SYMBOL_BID);
-      double maxLossPriceDist = (PilotMaxFloatingLossUSC / (volume * tickValue)) * tickSize;
-      if(maxLossPriceDist > 0)
-      {
-         if(direction > 0)
-         {
-            double hardFloor = entryPrice - maxLossPriceDist;
-            if(slPrice < hardFloor) slPrice = hardFloor;
-         }
-         else
-         {
-            double hardCeiling = entryPrice + maxLossPriceDist;
-            if(slPrice > hardCeiling) slPrice = hardCeiling;
-         }
-      }
-   }
-   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   if(slPrice > 0.0)
-      slPrice = NormalizeDouble(slPrice, digits);
-   if(tpPrice > 0.0)
-      tpPrice = NormalizeDouble(tpPrice, digits);
-
-   // Circuit breaker check
-   if(TimeCurrent() < g_tradeRetryState.blockedUntil)
-   {
-      Print("QuantGod MT5 pilot order blocked: circuit breaker active until ",
-            TimeToString(g_tradeRetryState.blockedUntil));
-      return false;
-   }
-
-   string comment = PilotTradeComment(strategyKey, direction);
-   for(int attempt = 0; attempt < 3; attempt++)
-   {
-      MqlTick sendTick;
-      ZeroMemory(sendTick);
-      SymbolInfoTick(symbol, sendTick);
-      double expectedPrice = 0.0;
-      if(direction > 0)
-         expectedPrice = sendTick.ask;
-      else if(direction < 0)
-         expectedPrice = sendTick.bid;
-      double spreadAtEntry = (sendTick.ask > 0.0 && sendTick.bid > 0.0) ? CalcSpreadPips(symbol, sendTick.bid, sendTick.ask) : 0.0;
-      uint startedMs = GetTickCount();
-      string intentId = "pilot-" + IntegerToString((long)CurrentServerTime()) + "-" + symbol + "-" + strategyKey + "-" + IntegerToString(direction) + "-" + IntegerToString(attempt + 1);
-      bool ok = false;
-      if(direction > 0)
-         ok = g_trade.Buy(volume, symbol, 0.0, slPrice, tpPrice, comment);
-      else if(direction < 0)
-         ok = g_trade.Sell(volume, symbol, 0.0, slPrice, tpPrice, comment);
-
-      uint retcode = g_trade.ResultRetcode();
-      int latencyMs = (int)(GetTickCount() - startedMs);
-      double fillPrice = g_trade.ResultPrice();
-      if(fillPrice <= 0.0)
-      {
-         if(direction > 0)
-            fillPrice = g_trade.ResultAsk();
-         else if(direction < 0)
-            fillPrice = g_trade.ResultBid();
-      }
-      if(ok && (retcode == TRADE_RETCODE_DONE || retcode == TRADE_RETCODE_PLACED))
-      {
-         AppendPilotTradeResultFeedback(symbol, direction, strategyKey, intentId, attempt + 1, expectedPrice, fillPrice, spreadAtEntry, latencyMs, "ORDER_ACCEPTED");
-         g_tradeRetryState.consecutiveFailures = 0;
-         Print("QuantGod MT5 pilot order sent: strategy=", strategyKey,
-               " symbol=", symbol,
-               " dir=", direction > 0 ? "BUY" : "SELL",
-               " volume=", DoubleToString(volume, 2),
-               " sl=", DoubleToString(slPrice, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
-               " tp=", DoubleToString(tpPrice, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
-               " attempt=", attempt + 1);
-         return true;
-      }
-
-      bool retryable = ShouldRetryRetcode(retcode);
-      bool finalAttempt = (!retryable || attempt >= 2);
-      AppendPilotTradeResultFeedback(symbol,
-                                     direction,
-                                     strategyKey,
-                                     intentId,
-                                     attempt + 1,
-                                     expectedPrice,
-                                     fillPrice,
-                                     spreadAtEntry,
-                                     latencyMs,
-                                     (retryable && !finalAttempt) ? "ORDER_RETRY" : "ORDER_REJECTED");
-
-      if(!retryable)
-      {
-         RegisterPilotOrderSendFailure(symbol, direction, retcode, g_trade.ResultComment(), false);
-         return false;
-      }
-
-      if(!finalAttempt)
-         Sleep(500 * (attempt + 1));
-   }
-
-   RegisterPilotOrderSendFailure(symbol, direction, g_trade.ResultRetcode(), g_trade.ResultComment(), true);
+   Print("QuantGod MT5 broker mutation blocked permanently: execution lane removed strategy=",
+         strategyKey, " symbol=", symbol, " direction=", direction);
    return false;
 }
 
 bool ClosePositionWithExecutionGuard(ulong ticket)
 {
-   if(!IsPilotLiveMode())
-   {
-      Print("QuantGod MT5 position close blocked: execution guard active ticket=", ticket);
-      return false;
-   }
-   return g_trade.PositionClose(ticket);
+   Print("QuantGod MT5 position close blocked permanently: execution lane removed ticket=", ticket);
+   return false;
 }
 
 void ClosePilotPositions(const string reason)
@@ -4731,54 +4549,19 @@ void ClosePilotPositions(const string reason)
       if(!IsPilotManagedPosition(comment, magic))
          continue;
 
-      g_trade.SetExpertMagicNumber(PilotMagic);
-      g_trade.SetDeviationInPoints(PilotDeviationPoints);
-      g_trade.SetTypeFillingBySymbol(PositionGetString(POSITION_SYMBOL));
       bool closed = ClosePositionWithExecutionGuard(ticket);
       Print("QuantGod MT5 pilot emergency close ticket=", ticket,
             " ok=", (closed ? "true" : "false"),
-            " retcode=", g_trade.ResultRetcode(),
+            " blocker=EXECUTION_LANE_REMOVED",
             " reason=", reason);
    }
 }
 
 bool ModifyPilotPositionStops(ulong ticket, string symbol, double slPrice, double tpPrice)
 {
-   if(!IsPilotLiveMode())
-      return false;
-
-   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   MqlTradeRequest request;
-   MqlTradeResult result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-
-   request.action = TRADE_ACTION_SLTP;
-   request.position = ticket;
-   request.symbol = symbol;
-   request.sl = NormalizeDouble(slPrice, digits);
-   request.tp = NormalizeDouble(tpPrice, digits);
-   request.magic = PilotMagic;
-
-   ResetLastError();
-   bool ok = OrderSend(request, result);
-   if(!ok || (result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_PLACED))
-   {
-      static datetime lastWarn = 0;
-      datetime now = CurrentServerTime();
-      if(now - lastWarn >= 60)
-      {
-         lastWarn = now;
-         Print("QuantGod MT5 breakeven modify failed: ticket=", ticket,
-               " symbol=", symbol,
-               " retcode=", result.retcode,
-               " err=", GetLastError(),
-               " comment=", result.comment);
-      }
-      return false;
-   }
-
-   return true;
+   Print("QuantGod MT5 stop modification blocked permanently: execution lane removed ticket=",
+         ticket, " symbol=", symbol);
+   return false;
 }
 
 bool IsPilotRouteLiveEnabledByComment(string comment)
@@ -4824,9 +4607,6 @@ void ManageDemotedPilotRouteExits()
       if(!profitExit && !maxLossExit)
          continue;
 
-      g_trade.SetExpertMagicNumber(PilotMagic);
-      g_trade.SetDeviationInPoints(PilotDeviationPoints);
-      g_trade.SetTypeFillingBySymbol(symbol);
       bool closed = ClosePositionWithExecutionGuard(ticket);
       Print("QuantGod MT5 demoted route exit ticket=", ticket,
             " symbol=", symbol,
@@ -4834,7 +4614,7 @@ void ManageDemotedPilotRouteExits()
             " comment=", comment,
             " reason=", (profitExit ? "profit-or-breakeven" : "demoted-route-max-loss"),
             " ok=", (closed ? "true" : "false"),
-            " retcode=", g_trade.ResultRetcode());
+            " blocker=EXECUTION_LANE_REMOVED");
    }
 }
 
@@ -4878,9 +4658,6 @@ void ManagePilotRsiTimeStops()
          continue;
 
       double netProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      g_trade.SetExpertMagicNumber(PilotMagic);
-      g_trade.SetDeviationInPoints(PilotDeviationPoints);
-      g_trade.SetTypeFillingBySymbol(symbol);
       bool closed = ClosePositionWithExecutionGuard(ticket);
       Print("QuantGod MT5 RSI time stop close ticket=", ticket,
             " symbol=", symbol,
@@ -4889,7 +4666,7 @@ void ManagePilotRsiTimeStops()
             " routeProtect=RSI_TIME_STOP",
             " trigger=", (serverDayChanged ? "server-day-change" : "max-hold"),
             " ok=", (closed ? "true" : "false"),
-            " retcode=", g_trade.ResultRetcode());
+            " blocker=EXECUTION_LANE_REMOVED");
    }
 }
 
@@ -4957,9 +4734,6 @@ void ManagePilotRsiFailFastStops()
 
       if(closeOn && cashTriggered)
       {
-         g_trade.SetExpertMagicNumber(PilotMagic);
-         g_trade.SetDeviationInPoints(PilotDeviationPoints);
-         g_trade.SetTypeFillingBySymbol(symbol);
          bool closed = ClosePositionWithExecutionGuard(ticket);
          Print("QuantGod MT5 RSI failfast close ticket=", ticket,
                " symbol=", symbol,
@@ -4968,7 +4742,7 @@ void ManagePilotRsiFailFastStops()
                " net=", DoubleToString(netProfit, 2),
                " routeProtect=RSI_FAILFAST",
                " ok=", (closed ? "true" : "false"),
-               " retcode=", g_trade.ResultRetcode());
+               " blocker=EXECUTION_LANE_REMOVED");
          continue;
       }
 
@@ -5193,14 +4967,12 @@ void ManageManualSafetyGuard()
          ManualSafetyMaxLossUSC > 0.0 &&
          netProfit <= -MathAbs(ManualSafetyMaxLossUSC))
       {
-         g_trade.SetDeviationInPoints(PilotDeviationPoints);
-         g_trade.SetTypeFillingBySymbol(symbol);
          bool closed = ClosePositionWithExecutionGuard(ticket);
          Print("QuantGod MT5 manual safety close ticket=", ticket,
                " symbol=", symbol,
                " net=", DoubleToString(netProfit, 2),
                " ok=", (closed ? "true" : "false"),
-               " retcode=", g_trade.ResultRetcode());
+               " blocker=EXECUTION_LANE_REMOVED");
          continue;
       }
 
@@ -8065,7 +7837,7 @@ string BuildLiveExecutionFeedbackJsonLine(string feedbackId,
    line += "\"mfeR\":" + FormatNumber(mfeR, 4) + ",";
    line += "\"maeR\":" + FormatNumber(maeR, 4) + ",";
    line += "\"comment\":\"" + JsonEscape(comment) + "\",";
-   line += "\"safety\":{\"eaOwnsExecution\":true,\"frontendCanTrade\":false,\"telegramCommandsAllowed\":false}";
+   line += "\"safety\":{\"eaOwnsExecution\":false,\"executionLaneExists\":false,\"frontendCanTrade\":false,\"telegramCommandsAllowed\":false}";
    line += "}";
    return line;
 }
@@ -8073,55 +7845,6 @@ string BuildLiveExecutionFeedbackJsonLine(string feedbackId,
 void AppendLiveExecutionFeedback(string jsonLine)
 {
    AppendTextFile("QuantGod_LiveExecutionFeedback.jsonl", jsonLine + "\r\n");
-}
-
-void AppendPilotTradeResultFeedback(string symbol,
-                                    int direction,
-                                    string strategyKey,
-                                    string intentId,
-                                    int attempt,
-                                    double expectedPrice,
-                                    double fillPrice,
-                                    double spreadAtEntry,
-                                    int latencyMs,
-                                    string eventType)
-{
-   string side = direction > 0 ? "BUY" : (direction < 0 ? "SELL" : "UNKNOWN");
-   uint retcode = g_trade.ResultRetcode();
-   string rejectReason = "";
-   if(eventType == "ORDER_REJECTED" || eventType == "ORDER_RETRY")
-      rejectReason = g_trade.ResultComment();
-   string feedbackId = "send-" + intentId + "-" + IntegerToString(attempt) + "-" + IntegerToString((long)retcode);
-   double slippagePips = SlippagePipsForSide(symbol, side, expectedPrice, fillPrice);
-   string line = BuildLiveExecutionFeedbackJsonLine(feedbackId,
-                                                    eventType,
-                                                    "QuantGod_MultiStrategy.mq5",
-                                                    symbol,
-                                                    side,
-                                                    strategyKey,
-                                                    "USDJPY_LIVE_LOOP",
-                                                    intentId,
-                                                    g_trade.ResultOrder(),
-                                                    g_trade.ResultDeal(),
-                                                    0,
-                                                    g_trade.ResultVolume(),
-                                                    expectedPrice,
-                                                    fillPrice,
-                                                    slippagePips,
-                                                    spreadAtEntry,
-                                                    latencyMs,
-                                                    retcode,
-                                                    0,
-                                                    rejectReason,
-                                                    "",
-                                                    0.0,
-                                                    0.0,
-                                                    0.0,
-                                                    0.0,
-                                                    CurrentServerTime(),
-                                                    PilotTradeComment(strategyKey, direction),
-                                                    "ORDER_SEND_RESULT");
-   AppendLiveExecutionFeedback(line);
 }
 
 void AppendTradeTransactionFeedback(const MqlTradeTransaction& trans, const MqlTradeRequest& request, const MqlTradeResult& result)

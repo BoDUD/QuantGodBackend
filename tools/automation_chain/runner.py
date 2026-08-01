@@ -52,7 +52,7 @@ class AutomationChainRunner:
             ChainStep("entry_trigger", "P3-9 入场触发", [self.python_bin, self._script("run_entry_trigger_lab.py"), "--runtime-dir", runtime, "build", "--symbols", symbols], required=True),
             ChainStep("usdjpy_strategy_policy", "USDJPY 策略政策", [self.python_bin, self._script("run_usdjpy_strategy_lab.py"), "--runtime-dir", runtime, "build", "--write"], required=True),
             ChainStep("usdjpy_ea_dry_run", "USDJPY EA 干跑决策", [self.python_bin, self._script("run_usdjpy_strategy_lab.py"), "--runtime-dir", runtime, "dry-run", "--write"], required=True),
-            ChainStep("usdjpy_live_loop", "USDJPY 实盘恢复闭环", [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "once"], required=True),
+            ChainStep("usdjpy_live_loop", "USDJPY Shadow advisory 闭环", [self.python_bin, self._script("run_usdjpy_live_loop.py"), "--runtime-dir", runtime, "once"], required=True),
             ChainStep("fastlane_quality_final", "P3-7 快通道质量收尾刷新", [self.python_bin, self._script("run_mt5_fastlane.py"), "--runtime-dir", runtime, "quality", "--symbols", symbols], required=False),
             ChainStep("strategy_parity", "P4-2 Strategy/Replay/EA parity", [self.python_bin, self._script("run_strategy_parity.py"), "--runtime-dir", runtime, "build", "--write"], required=False),
             ChainStep("entry_latency", "USDJPY 入场延迟归因", [self.python_bin, self._script("run_entry_latency.py"), "--runtime-dir", runtime, "build", "--write"], required=False),
@@ -263,7 +263,7 @@ class AutomationChainRunner:
             (self.runtime_dir / "adaptive" / "QuantGod_EntryTriggerPlan.json", "缺少 P3-9 入场触发计划"),
             (self.runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json", "缺少 USDJPY 策略政策"),
             (self.runtime_dir / "adaptive" / "QuantGod_USDJPYEADryRunDecision.json", "缺少 USDJPY EA 干跑决策"),
-            (self.runtime_dir / "live" / "QuantGod_USDJPYLiveLoopStatus.json", "缺少 USDJPY 实盘恢复闭环状态"),
+            (self.runtime_dir / "live" / "QuantGod_USDJPYLiveLoopStatus.json", "缺少 USDJPY Shadow advisory 闭环状态"),
         ]
         missing = [label for path, label in checks if not path.exists()]
         for symbol in self.symbols:
@@ -340,10 +340,10 @@ class AutomationChainRunner:
             return "BLOCKED_MISSING_EVIDENCE", "阻断：USDJPY 证据不完整"
         live_state = str((live_loop or {}).get("state") or "")
         live_state_zh = str((live_loop or {}).get("stateZh") or "")
-        if live_state == "READY_FOR_EXISTING_EA":
-            return "READY_FOR_EXISTING_EA", live_state_zh or "RSI 买入路线已恢复，等待 EA 自身信号"
+        if live_state == "SHADOW_ADVISORY_READY":
+            return "SHADOW_ADVISORY_READY", live_state_zh or "Shadow advisory 已就绪"
         if live_state == "POLICY_READY_PRESET_BLOCKED":
-            return "POLICY_READY_PRESET_BLOCKED", live_state_zh or "政策已就绪，但实盘 preset 尚未完全恢复"
+            return "POLICY_READY_PRESET_BLOCKED", live_state_zh or "政策已就绪，但 Shadow/ReadOnly preset 未通过"
         if live_state == "EVIDENCE_MISSING":
             return "BLOCKED_MISSING_EVIDENCE", live_state_zh or "证据链不完整，EA 不应自动入场"
         if live_state == "POLICY_BLOCKED":
@@ -484,7 +484,7 @@ class AutomationChainRunner:
                     "生成当前信号方向影子策略种子",
                     28,
                     "EA 实时 RSI 已给出 SELL，但 SELL 侧因 live loss review 被降级，不能直接开闸，需要先为当前信号方向补齐影子/回测证据。",
-                    "用 Strategy JSON GA Factory 生成 USDJPY SHORT 影子/回测种子，验证方向一致性、动态止盈止损、样本质量和 live loss review 恢复条件；不改变实盘 preset，不写订单。",
+                    "用 Strategy JSON GA Factory 生成 USDJPY SHORT 影子/回测种子，验证方向一致性、动态止盈止损与样本质量；不改变 tracked preset，不写订单。",
                     [
                         [
                             self.python_bin,
@@ -531,7 +531,7 @@ class AutomationChainRunner:
                 "刷新 Strategy/Replay/EA parity 证据",
                 32,
                 "GA 候选晋级需要最新 Strategy JSON、Python replay 和 MQL5 EA parity 证据；旧 parity 会把高分候选错误归类到缺证据 blocker。",
-                "在推进下一代 GA 前刷新 P4-2 parity，只更新审计证据，不改变实盘 preset，不写订单。",
+                "在推进下一代 GA 前刷新 P4-2 parity，只更新审计证据，不改变 tracked preset，不写订单。",
                 [[self.python_bin, self._script("run_strategy_parity.py"), "--runtime-dir", runtime, "build", "--write"]],
                 ["parity/QuantGod_StrategyParityReport.json", "evidence_os/QuantGod_StrategyParityReport.json", "promotionGate.status"],
             ))
@@ -929,7 +929,7 @@ class AutomationChainRunner:
             "blockedReasons": [x for x in top_level_blocked_reasons if x],
             "shadowBlockedReasons": [x for x in blocked_reasons if x],
             "policySummary": policy_summary,
-            "topLiveEligiblePolicy": (live_loop or {}).get("topLiveEligiblePolicy") or (policy or {}).get("topLiveEligiblePolicy"),
+            "topAdvisoryPolicy": (live_loop or {}).get("topShadowPolicy") or (policy or {}).get("topShadowPolicy") or (policy or {}).get("topPolicy"),
             "topShadowPolicy": (live_loop or {}).get("topShadowPolicy") or (policy or {}).get("topShadowPolicy"),
             "dryRunDecision": dry_run,
             "liveLoopStatus": live_loop,

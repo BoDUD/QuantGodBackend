@@ -155,18 +155,19 @@ def check_mql5_safety_guards() -> None:
         require_contains(ea, marker, label)
 
 
-def check_live_preset_defaults() -> None:
+def check_tracked_preset_is_shadow_readonly() -> None:
     live_preset = ROOT / "MQL5/Presets/QuantGod_MT5_HFM_LivePilot.set"
     check_expected_set_values(
         live_preset,
         {
-            "DashboardBuild": "QuantGod-v3.17-mt5-startup-entry-guard",
+            "DashboardBuild": "QuantGod-v3.17-shadow-readonly-compat",
             "Watchlist": "USDJPY",
-            "ShadowMode": "false",
-            "ReadOnlyMode": "false",
+            "ShadowMode": "true",
+            "ReadOnlyMode": "true",
+            "EnablePilotAutoTrading": "false",
             "EnablePilotMA": "false",
             "EnablePilotRsiH1Candidate": "true",
-            "EnablePilotRsiH1Live": "true",
+            "EnablePilotRsiH1Live": "false",
             "PilotRsiBlockSellInUptrend": "true",
             "PilotRsiRangeTightBuyOnly": "true",
             "EnablePilotBBH1Live": "false",
@@ -190,7 +191,7 @@ def main() -> None:
     check_required_backend_files()
     check_backend_split_boundaries()
     check_mql5_safety_guards()
-    check_live_preset_defaults()
+    check_tracked_preset_is_shadow_readonly()
     check_secret_file_hygiene()
     print("CI_GUARD_OK")
 

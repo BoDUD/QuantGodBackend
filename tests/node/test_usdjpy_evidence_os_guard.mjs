@@ -161,14 +161,13 @@ test('Mac Agent loop sends scheduled reports through the Telegram Gateway collec
   assert.doesNotMatch(source, /run_daily_autopilot_v2\.py[\s\S]*telegram-text[\s\S]*--send/);
 });
 
-test('MT5 EA emits standardized live execution feedback for Evidence OS', () => {
+test('MT5 EA observes standardized broker transaction feedback without an execution lane', () => {
   const eaSource = read('MQL5/Experts/QuantGod_MultiStrategy.mq5');
   for (const marker of [
     'QuantGod_LiveExecutionFeedback.jsonl',
     'QuantGod_LiveExecutionFeedbackHistory.jsonl',
     'quantgod.live_execution_feedback.v1',
     'OnTradeTransaction',
-    'AppendPilotTradeResultFeedback',
     'AppendTradeTransactionFeedback',
     'BuildLiveExecutionFeedbackHistoryJsonl',
     'feedbackId',
@@ -191,10 +190,13 @@ test('MT5 EA emits standardized live execution feedback for Evidence OS', () => 
   ]) {
     assert.match(eaSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
-  assert.match(eaSource, /ORDER_ACCEPTED/);
+  assert.doesNotMatch(eaSource, /AppendPilotTradeResultFeedback/);
+  assert.doesNotMatch(eaSource, /ORDER_ACCEPTED/);
   assert.match(eaSource, /ORDER_REJECTED/);
   assert.match(eaSource, /ORDER_FILL/);
   assert.match(eaSource, /ORDER_CLOSE/);
+  assert.match(eaSource, /eaOwnsExecution\\":false/);
+  assert.match(eaSource, /executionLaneExists\\":false/);
   assert.match(eaSource, /frontendCanTrade\\":false/);
   assert.match(eaSource, /telegramCommandsAllowed\\":false/);
 });

@@ -6,34 +6,33 @@ from .schema import bool_zh, direction_zh, entry_mode_zh
 
 
 def live_loop_to_chinese_text(payload: dict[str, Any]) -> str:
-    top = payload.get("topLiveEligiblePolicy") or payload.get("topPolicy") or {}
+    top = payload.get("topShadowPolicy") or payload.get("topPolicy") or {}
     shadow = payload.get("topShadowPolicy") or {}
     preset = payload.get("preset") or {}
     runtime = payload.get("runtime") or {}
     lines = [
-        "【QuantGod USDJPY 实盘 EA 闭环】",
+        "【QuantGod USDJPY Shadow Advisory 闭环】",
         "",
         f"结论：{payload.get('stateZh', '未知')}",
-        f"实盘路线：{payload.get('liveRouteZh', '仅 RSI 买入路线')}",
+        f"观察范围：{payload.get('advisoryRouteZh', '所有策略仅做 Shadow/ReadOnly 复核')}",
         "",
         "当前优先策略：",
         f"- 策略：{top.get('strategy', 'UNKNOWN')}",
         f"- 方向：{direction_zh(top.get('direction'))}",
         f"- 状态：{entry_mode_zh(top.get('entryMode'))}",
-        f"- 建议仓位：{float(top.get('recommendedLot') or 0):.2f} / 上限 {float(top.get('maxLot') or payload.get('maxEaPositions') or 2):.2f}",
+        f"- 研究仓位参数：{float(top.get('recommendedLot') or 0):.2f}（不用于 broker execution）",
         "",
         "现场证据：",
         f"- 运行快照：{bool_zh(runtime.get('ready'))}",
-        f"- preset 恢复：{bool_zh(preset.get('ready'))}",
-        f"- RSI 买入路线：{'已恢复' if preset.get('rsiBuyRoutePreserved') else '未确认'}",
-        f"- EA 自动仓位上限：{payload.get('maxEaPositions', 2)}；人工仓位不计入政策判断",
+        f"- Shadow/ReadOnly preset：{bool_zh(preset.get('ready'))}",
+        "- executionLaneExists=false；现有 EA 不拥有执行权限",
     ]
     if shadow and shadow != top:
         lines.extend([
             "",
             "影子研究第一名：",
             f"- {shadow.get('strategy', 'UNKNOWN')}｜{direction_zh(shadow.get('direction'))}｜{entry_mode_zh(shadow.get('entryMode'))}",
-            "- 影子第一名只用于研究，不会抢占实盘 RSI 买入路线。",
+            "- 影子第一名只用于研究与证据复核。",
         ])
     why = payload.get("whyNoEntry") or []
     if why:
@@ -46,7 +45,7 @@ def live_loop_to_chinese_text(payload: dict[str, Any]) -> str:
     lines.extend([
         "",
         "安全边界：",
-        "- 本消息只说明现有 MT5 EA 是否具备恢复条件。",
-        "- 工具不会下单、不会平仓、不会撤单、不会修改 preset。",
+        "- 本消息只说明 Shadow/ReadOnly 研究证据是否完整。",
+        "- 系统不存在执行通道，不会下单、平仓、撤单或修改 broker 状态。",
     ])
     return "\n".join(lines)
