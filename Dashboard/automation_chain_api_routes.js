@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const {
+  normalizeTelegramPreviewPayload,
+  rejectGetTelegramSendQuery,
+} = require('./telegram_preview_contract');
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -231,6 +235,7 @@ async function handle(req, res, ctx) {
   const params = parseQuery(req.url || '/');
   const runtimeDir = params.get('runtimeDir') || ctx.defaultRuntimeDir;
   const symbols = normalizeSymbols(params.get('symbols') || process.env.QG_AUTOMATION_SYMBOLS || DEFAULT_SYMBOLS);
+  if (rejectGetTelegramSendQuery(req, res, req.url, sendJson)) return;
 
   if (req.method === 'GET' && (pathname === '/api/automation-chain' || pathname === '/api/automation-chain/status')) {
     const latest = path.join(runtimeDir, 'automation', 'QuantGod_AutomationChainLatest.json');
@@ -273,13 +278,21 @@ async function handle(req, res, ctx) {
 
   if (req.method === 'GET' && pathname === '/api/automation-chain/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, '--symbols', symbols, 'telegram-text'];
-    if (params.get('refresh') === '1') args.push('--refresh');
     const result = await runPython(ctx, args, 180000);
     if (!result.ok) {
-      sendJson(res, 500, { ok: false, endpoint: pathname, result });
+      sendJson(res, 500, normalizeTelegramPreviewPayload({
+        ok: false,
+        endpoint: pathname,
+        result,
+      }));
       return;
     }
-    sendJson(res, 200, { ok: true, endpoint: pathname, text: result.stdout, stderr: result.stderr });
+    sendJson(res, 200, normalizeTelegramPreviewPayload({
+      ok: true,
+      endpoint: pathname,
+      text: result.stdout,
+      stderr: result.stderr,
+    }));
     return;
   }
 

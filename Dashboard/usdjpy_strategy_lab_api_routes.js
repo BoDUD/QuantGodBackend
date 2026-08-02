@@ -2,6 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { runCached, stringifyJson } = require('./api_perf_cache');
+const {
+  isTelegramTextPreviewPath,
+  normalizeTelegramPreviewPayload,
+  rejectGetTelegramSendQuery,
+  telegramSendQueryRejectedPayload,
+} = require('./telegram_preview_contract');
 
 const readonlyRunCache = new Map();
 const READONLY_RUN_CACHE_TTL_MS = (() => {
@@ -46,63 +52,6 @@ function statusCodeForHistoryProductionStatus(payload) {
 function isUSDJPYStrategyLabPath(requestUrl) {
   const pathname = String(requestUrl || '').split('?')[0];
   return pathname === '/api/usdjpy-strategy-lab' || pathname.startsWith('/api/usdjpy-strategy-lab/');
-}
-
-function isTelegramTextPreviewPath(pathname) {
-  return (
-    String(pathname || '').startsWith('/api/usdjpy-strategy-lab/') &&
-    String(pathname || '').endsWith('/telegram-text')
-  );
-}
-
-function normalizeTelegramPreviewPayload(payload) {
-  const normalized = payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? payload
-    : { ok: false, error: 'INVALID_TELEGRAM_PREVIEW_PAYLOAD' };
-  return {
-    ...normalized,
-    previewOnly: true,
-    sendRequested: false,
-    sendRejected: false,
-    sent: false,
-    deliveryOk: false,
-    delivery: {
-      ok: false,
-      skipped: true,
-      status: 'PREVIEW_ONLY',
-      reason: 'get_telegram_text_is_preview_only',
-    },
-  };
-}
-
-function telegramSendQueryRejectedPayload(pathname) {
-  return {
-    ok: false,
-    error: 'TELEGRAM_SEND_REJECTED_ON_GET_PREVIEW',
-    endpoint: pathname,
-    previewOnly: true,
-    sendRequested: true,
-    sendRejected: true,
-    sent: false,
-    deliveryOk: false,
-    delivery: {
-      ok: false,
-      skipped: true,
-      status: 'REJECTED',
-      reason: 'GET telegram-text endpoints never deliver messages; remove the send query parameter',
-    },
-    safety: {
-      readOnlyDataPlane: true,
-      advisoryOnly: true,
-      dryRunOnly: true,
-      telegramCommandExecutionAllowed: false,
-      orderSendAllowed: false,
-      closeAllowed: false,
-      cancelAllowed: false,
-      livePresetMutationAllowed: false,
-      writesMt5OrderRequest: false,
-    },
-  };
 }
 
 function runPythonJson(repoRoot, args, timeoutMs = 45000, scriptName = 'run_usdjpy_strategy_lab.py') {
@@ -260,10 +209,7 @@ async function handle(req, res, ctx) {
   const pathname = url.pathname;
   const runtimeDir = url.searchParams.get('runtimeDir') || ctx.defaultRuntimeDir;
   const baseArgs = ['--runtime-dir', runtimeDir, '--symbol', 'USDJPYc'];
-  if (req.method === 'GET' && isTelegramTextPreviewPath(pathname) && url.searchParams.has('send')) {
-    sendJson(res, 400, telegramSendQueryRejectedPayload(pathname));
-    return;
-  }
+  if (rejectGetTelegramSendQuery(req, res, url, sendJson)) return;
   if (req.method === 'GET' && (pathname === '/api/usdjpy-strategy-lab' || pathname === '/api/usdjpy-strategy-lab/status')) {
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, [...baseArgs, 'status']);
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);

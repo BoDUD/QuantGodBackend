@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const {
+  normalizeTelegramPreviewPayload,
+  rejectGetTelegramSendQuery,
+} = require('./telegram_preview_contract');
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -87,6 +91,7 @@ async function handle(req, res, ctx) {
   const requestUrl = req.url || '';
   const url = new URL(requestUrl, 'http://127.0.0.1');
   const pathname = url.pathname;
+  if (rejectGetTelegramSendQuery(req, res, url, sendJson)) return;
   const runtimeDir = ctx.defaultRuntimeDir;
   if (req.method === 'GET' && (pathname === '/api/telegram-gateway' || pathname === '/api/telegram-gateway/status')) {
     const payload = await runPythonJson(ctx.repoRoot, ['--runtime-dir', runtimeDir, 'status']);
@@ -100,9 +105,8 @@ async function handle(req, res, ctx) {
   }
   if (req.method === 'GET' && pathname === '/api/telegram-gateway/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
-    if (url.searchParams.get('refresh') === '1') args.push('--refresh');
     const payload = await runPythonJson(ctx.repoRoot, args);
-    sendJson(res, statusCodeFor(payload), payload);
+    sendJson(res, statusCodeFor(payload), normalizeTelegramPreviewPayload(payload));
     return;
   }
   sendJson(res, 404, { ok: false, error: 'TELEGRAM_GATEWAY_OPS_NOT_FOUND', endpoint: pathname });
