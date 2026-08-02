@@ -11,7 +11,9 @@ from typing import Dict
 from daily_autopilot_v2.orchestrator import run_daily_autopilot_cycle
 from daily_autopilot_v2.report import build_daily_autopilot_v2
 from daily_autopilot_v2.telegram_text import daily_autopilot_v2_to_chinese_text
-from usdjpy_evidence_os.telegram_gateway import dispatch_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_delivery
+from telegram_digest import build_digest
+from telegram_gateway_cli import dispatch_cli_text
 
 
 def load_env(path: Path) -> None:
@@ -26,31 +28,43 @@ def load_env(path: Path) -> None:
             os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
-def emit(payload) -> int:
+def emit(payload, exit_code: int = 0) -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    return 0
+    return exit_code
+
+
+def attach_delivery(result: Dict[str, object], gateway: Dict[str, object]) -> int:
+    normalized_gateway = normalize_delivery(gateway, send_requested=True)
+    result.update(
+        {
+            "telegramGateway": normalized_gateway,
+            "sendRequested": True,
+            "sent": normalized_gateway["sent"],
+            "deliveryOk": normalized_gateway["deliveryOk"],
+        }
+    )
+    if not normalized_gateway["deliveryOk"]:
+        result["ok"] = False
+        result["error"] = "TELEGRAM_DELIVERY_NOT_CONFIRMED"
+    return explicit_send_exit_code(True, result)
 
 
 def todo_text(payload: Dict[str, object]) -> str:
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     history = payload.get("historyProductionStatus") if isinstance(payload.get("historyProductionStatus"), dict) else {}
-    lines = [
-        "【QuantGod Agent 今日待办】",
-        "",
-        f"状态：{payload.get('status', 'COMPLETED_BY_AGENT')}",
-        f"Agent 版本：{payload.get('agentVersion', 'v2.5')}",
-        "无需人工回灌；每项由 Agent 自动检查、完成、晋级或回滚。",
-        f"GA 历史样本：{history.get('statusZh', '等待生产状态')}；晋级门：{history.get('promotionGateStatus', 'BLOCKED')}",
-        "",
-    ]
-    for item in items[:8]:
-        if not isinstance(item, dict):
-            continue
-        lines.append(
-            f"- {item.get('laneZh') or item.get('lane')}｜{item.get('status')}｜"
-            f"{item.get('summaryZh', '')}"
-        )
-    return "\n".join(lines)
+    rows = [item for item in items if isinstance(item, dict)]
+    completed = sum(1 for item in rows if str(item.get("status") or "").startswith("COMPLETED"))
+    history_passed = str(history.get("promotionGateStatus") or "BLOCKED").upper() == "PASS"
+    waiting = next((item for item in rows if not str(item.get("status") or "").startswith("COMPLETED")), None)
+    return build_digest(
+        title="Agent 待办",
+        level="ok" if history_passed and completed == len(rows) else "warning",
+        conclusion="Agent 已完成本轮自动检查。" if completed == len(rows) else "仍有只读研究任务等待自动处理。",
+        metrics=[f"完成 {completed}/{len(rows)}", f"历史数据 {'通过' if history_passed else '未通过'}"],
+        reasons=[] if history_passed else [history.get("reasonZh") or "历史数据尚未通过生产验收。"],
+        next_action=(waiting or {}).get("summaryZh") or "等待下一轮自动复核，无需人工回灌。",
+        generated_at=payload.get("generatedAtIso"),
+    )
 
 
 def review_text(payload: Dict[str, object]) -> str:
@@ -59,30 +73,49 @@ def review_text(payload: Dict[str, object]) -> str:
     mt5 = payload.get("mt5ShadowLane") if isinstance(payload.get("mt5ShadowLane"), dict) else {}
     history = payload.get("historyProductionStatus") if isinstance(payload.get("historyProductionStatus"), dict) else {}
     consistency = payload.get("executionConsistencyReview") if isinstance(payload.get("executionConsistencyReview"), dict) else {}
-    lines = [
-        "【QuantGod Agent 每日复盘】",
-        "",
-        f"阶段：{live.get('stageZh') or live.get('stage') or payload.get('promotionDecision', 'SHADOW')}",
-        f"回滚：{'是' if payload.get('rollbackTriggered') else '否'}",
-        f"净 R：{metrics.get('netR', 0)}｜最大不利 R：{metrics.get('maxAdverseR', '—')}｜利润捕获：{metrics.get('profitCaptureRatio', '—')}",
-        f"错失机会：{metrics.get('missedOpportunity', 0)}｜早出场改善：{metrics.get('earlyExit', 0)}",
-        f"MT5 模拟路线：{(mt5.get('summary') or {}).get('routeCount', 0)}",
-        f"GA 历史样本：{history.get('statusZh', '等待生产状态')}｜{history.get('reasonZh', '未 PASS 时只允许 shadow/tester 观察')}",
-        "",
-        "【QuantGod 执行一致性复盘】",
-        f"Strategy JSON 与 EA 一致性：{consistency.get('parityStatus', 'MISSING')}｜晋级门：{consistency.get('parityGateStatus', 'MISSING')}",
-        f"实盘执行质量：滑点 {consistency.get('avgSlippagePips', 0)} pips｜延迟 {consistency.get('avgLatencyMs', 0)}ms｜拒单 {consistency.get('rejectCount', 0)}",
-        f"Agent 结论：{consistency.get('agentConclusionZh', '继续收集 parity 和执行反馈。')}",
-        "",
-        "复盘已由 Agent 自动完成；不等待人工确认，不修改 live preset。",
-    ]
-    return "\n".join(lines)
+    history_passed = str(history.get("promotionGateStatus") or "BLOCKED").upper() == "PASS"
+    parity_passed = str(consistency.get("parityGateStatus") or "MISSING").upper() == "PASS"
+    rollback = bool(payload.get("rollbackTriggered"))
+    if rollback:
+        conclusion = "本轮触发硬回滚，所有候选保持只读。"
+        level = "danger"
+    elif history_passed and parity_passed:
+        conclusion = "本轮复盘完成，只读证据链正常。"
+        level = "ok"
+    else:
+        conclusion = "本轮复盘完成，但证据仍未达到晋级条件。"
+        level = "warning"
+    reasons = []
+    if not history_passed:
+        reasons.append(history.get("reasonZh") or "历史数据尚未通过生产验收。")
+    if not parity_passed:
+        reasons.append("策略与 EA 一致性证据尚未通过。")
+    return build_digest(
+        title="每日复盘",
+        level=level,
+        conclusion=conclusion,
+        metrics=[
+            f"验证阶段 {live.get('stageZh') or live.get('stage') or 'Shadow'}",
+            f"样本净 R {metrics.get('netR', 0)}",
+            f"最大不利 R {metrics.get('maxAdverseR', '—')}",
+            f"模拟路线 {(mt5.get('summary') or {}).get('routeCount', 0)}",
+        ],
+        reasons=reasons,
+        next_action=consistency.get("agentConclusionZh") or "继续收集一致性和回放证据。",
+        generated_at=payload.get("generatedAtIso"),
+    )
 
 
 def send_telegram(runtime_dir: Path, topic: str, text: str) -> Dict[str, object]:
     root = Path(__file__).resolve().parents[1]
-    load_env(root / ".env.telegram.local")
-    return dispatch_text(runtime_dir, "daily_autopilot_v2", topic, "INFO", text, send=True)
+    return dispatch_cli_text(
+        runtime_dir=runtime_dir,
+        source="daily_autopilot_v2",
+        topic=topic,
+        severity="INFO",
+        text=text,
+        repo_root=root,
+    )
 
 
 def main(argv=None) -> int:
@@ -177,7 +210,11 @@ def main(argv=None) -> int:
         content = daily_autopilot_v2_to_chinese_text(payload)
         result = {"ok": True, "text": content, "dailyAutopilotV2": payload}
         if args.send:
-            result["telegramGateway"] = send_telegram(runtime_dir, "DAILY_AUTOPILOT_V2_REPORT", content)
+            exit_code = attach_delivery(
+                result,
+                send_telegram(runtime_dir, "DAILY_AUTOPILOT_V2_REPORT", content),
+            )
+            return emit(result, exit_code)
         return emit(result)
     if args.command == "daily-todo-telegram-text":
         payload = build_daily_autopilot_v2(
@@ -189,7 +226,11 @@ def main(argv=None) -> int:
         content = todo_text(daily_todo)
         result = {"ok": True, "text": content, "dailyTodo": daily_todo}
         if args.send:
-            result["telegramGateway"] = send_telegram(runtime_dir, "DAILY_TODO_AGENT_REPORT", content)
+            exit_code = attach_delivery(
+                result,
+                send_telegram(runtime_dir, "DAILY_TODO_AGENT_REPORT", content),
+            )
+            return emit(result, exit_code)
         return emit(result)
     if args.command == "daily-review-telegram-text":
         payload = build_daily_autopilot_v2(
@@ -201,7 +242,11 @@ def main(argv=None) -> int:
         content = review_text(daily_review)
         result = {"ok": True, "text": content, "dailyReview": daily_review}
         if args.send:
-            result["telegramGateway"] = send_telegram(runtime_dir, "DAILY_REVIEW_AGENT_REPORT", content)
+            exit_code = attach_delivery(
+                result,
+                send_telegram(runtime_dir, "DAILY_REVIEW_AGENT_REPORT", content),
+            )
+            return emit(result, exit_code)
         return emit(result)
     return 1
 

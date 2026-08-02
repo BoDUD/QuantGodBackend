@@ -101,6 +101,33 @@ function boolValue(value, fallback = false) {
   return ['1', 'true', 'yes', 'y', 'on'].includes(String(value).trim().toLowerCase());
 }
 
+function strictBoolValue(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function explicitTelegramDelivery(sendValue, dryRunValues = []) {
+  const suppliedDryRunValues = dryRunValues.filter(
+    (value) => value !== undefined && value !== null && value !== '',
+  );
+  const sendExplicitlyRequested = strictBoolValue(sendValue) === true;
+  const dryRunExplicitlyDisabled = (
+    suppliedDryRunValues.length > 0
+    && suppliedDryRunValues.every((value) => strictBoolValue(value) === false)
+  );
+  const send = sendExplicitlyRequested && dryRunExplicitlyDisabled;
+  return {
+    send,
+    dryRun: !send,
+    sendExplicitlyRequested,
+    dryRunExplicitlyDisabled,
+  };
+}
+
 function intInRange(value, fallback, min, max) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -295,8 +322,17 @@ async function handle(req, res, ctx = {}) {
         return true;
       }
       const timeframes = cleanTimeframes(body.timeframes || url.searchParams.get('timeframes')).join(',');
-      const sendTelegram = boolValue(body.send ?? url.searchParams.get('send'), false);
-      const force = boolValue(body.force ?? url.searchParams.get('force'), true);
+      const delivery = explicitTelegramDelivery(
+        body.send ?? url.searchParams.get('send'),
+        [
+          body.dryRun,
+          body.dry_run,
+          url.searchParams.get('dryRun'),
+          url.searchParams.get('dry_run'),
+        ],
+      );
+      const sendTelegram = delivery.send;
+      const force = strictBoolValue(body.force ?? url.searchParams.get('force')) === true;
       const noDeepseek = boolValue(body.noDeepseek ?? url.searchParams.get('noDeepseek'), false);
       const minInterval = intInRange(body.minIntervalSeconds ?? url.searchParams.get('minIntervalSeconds'), force ? 0 : 900, 0, 86400);
       const minConfidence = intInRange(body.minConfidencePct ?? url.searchParams.get('minConfidencePct'), 70, 1, 100);
@@ -476,6 +512,7 @@ async function handle(req, res, ctx = {}) {
 
 module.exports = {
   PHASE1_API_SAFETY,
+  explicitTelegramDelivery,
   handle,
   isPhase1Path,
   sendUnhandledError,

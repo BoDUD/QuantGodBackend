@@ -30,7 +30,10 @@ const PHASE2_API_SAFETY = Object.freeze({
   mode: 'QUANTGOD_PHASE2_API_V1',
   localOnly: true,
   readOnlyDataPlane: true,
+  pushOnly: true,
   notificationPushOnly: true,
+  commandsAllowed: false,
+  telegramCommandsAccepted: false,
   orderSendAllowed: false,
   closeAllowed: false,
   cancelAllowed: false,
@@ -39,7 +42,10 @@ const PHASE2_API_SAFETY = Object.freeze({
   canOverrideKillSwitch: false,
   canMutateGovernanceDecision: false,
   canPromoteOrDemoteRoute: false,
+  gatewayReceivesCommands: false,
   telegramCommandExecutionAllowed: false,
+  writesMt5OrderRequest: false,
+  externalMarketRealMoneyAllowed: false,
 });
 
 const JSON_ENDPOINTS = Object.freeze({
@@ -122,6 +128,22 @@ function sendError(res, statusCode, endpoint, error, extra = {}) {
   });
 }
 
+function withNotifySafety(payload = {}) {
+  const state = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const payloadSafety = (
+    state.safety && typeof state.safety === 'object' && !Array.isArray(state.safety)
+      ? state.safety
+      : {}
+  );
+  return {
+    ...state,
+    safety: {
+      ...PHASE2_API_SAFETY,
+      ...payloadSafety,
+    },
+  };
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -149,6 +171,33 @@ function readJsonBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+function strictBoolValue(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function explicitTelegramDelivery(body = {}) {
+  const suppliedDryRunValues = [body.dryRun, body.dry_run].filter(
+    (value) => value !== undefined && value !== null && value !== '',
+  );
+  const sendExplicitlyRequested = strictBoolValue(body.send) === true;
+  const dryRunExplicitlyDisabled = (
+    suppliedDryRunValues.length > 0
+    && suppliedDryRunValues.every((value) => strictBoolValue(value) === false)
+  );
+  const send = sendExplicitlyRequested && dryRunExplicitlyDisabled;
+  return {
+    send,
+    dryRun: !send,
+    sendExplicitlyRequested,
+    dryRunExplicitlyDisabled,
+  };
 }
 
 function safeBaseDirs(ctx = {}) {
@@ -704,7 +753,7 @@ async function handleNotify(req, res, ctx, endpoint) {
       return true;
     }
     const payload = await runPythonJson(repoRoot, [path.join('tools', 'run_notify.py'), 'config'], notifyEnv(ctx));
-    sendJson(res, payload.ok === false ? 500 : 200, { ...payload, endpoint, safety: PHASE2_API_SAFETY });
+    sendJson(res, payload.ok === false ? 500 : 200, { ...withNotifySafety(payload), endpoint });
     return true;
   }
   if (endpoint === '/api/notify/history') {
@@ -727,7 +776,7 @@ async function handleNotify(req, res, ctx, endpoint) {
     const message = String(body.message || body.text || 'QuantGod Telegram notification test').slice(0, 1500);
     const eventType = String(body.eventType || body.event_type || 'TEST').toUpperCase().replace(/[^A-Z0-9_]/g, '').slice(0, 48) || 'TEST';
     const args = [path.join('tools', 'run_notify.py'), 'test', '--message', message, '--event-type', eventType];
-    if (body.dryRun === true || body.dry_run === true) args.push('--dry-run');
+    args.push(explicitTelegramDelivery(body).send ? '--send' : '--dry-run');
     const payload = await runPythonJson(repoRoot, args, notifyEnv(ctx), 30000);
     sendJson(res, payload.ok === false ? 500 : 200, { ...payload, endpoint, safety: PHASE2_API_SAFETY });
     return true;
@@ -739,7 +788,7 @@ async function handleNotify(req, res, ctx, endpoint) {
     }
     const body = await readJsonBody(req);
     const args = [path.join('tools', 'run_notify.py'), 'daily-digest'];
-    if (body.dryRun === true || body.dry_run === true) args.push('--dry-run');
+    args.push(explicitTelegramDelivery(body).send ? '--send' : '--dry-run');
     const payload = await runPythonJson(repoRoot, args, notifyEnv(ctx), 45000);
     sendJson(res, payload.ok === false ? 500 : 200, { ...payload, endpoint, safety: PHASE2_API_SAFETY });
     return true;
@@ -751,7 +800,7 @@ async function handleNotify(req, res, ctx, endpoint) {
     }
     const body = await readJsonBody(req);
     const args = [path.join('tools', 'run_notify.py'), 'scan-once'];
-    if (body.dryRun === true || body.dry_run === true) args.push('--dry-run');
+    args.push(explicitTelegramDelivery(body).send ? '--send' : '--dry-run');
     const payload = await runPythonJson(repoRoot, args, notifyEnv(ctx), 45000);
     sendJson(res, payload.ok === false ? 500 : 200, { ...payload, endpoint, safety: PHASE2_API_SAFETY });
     return true;
@@ -781,7 +830,6 @@ async function handleNotify(req, res, ctx, endpoint) {
       'scan-once',
       '--repo-root',
       repoRoot,
-      '--force',
     ];
     const symbols = String(body.symbols || '').trim();
     const timeframes = String(body.timeframes || '').trim();
@@ -793,7 +841,8 @@ async function handleNotify(req, res, ctx, endpoint) {
     if (Number.isFinite(minConfidence) && minConfidence >= 1 && minConfidence <= 100) {
       args.push('--min-confidence-pct', String(minConfidence));
     }
-    if (body.send === true && body.dryRun !== true && body.dry_run !== true) args.push('--send');
+    if (strictBoolValue(body.force) === true) args.push('--force');
+    if (explicitTelegramDelivery(body).send) args.push('--send');
     if (body.disableNotification === true || body.disable_notification === true) args.push('--disable-notification');
     if (body.noDeepseek === true || body.no_deepseek === true) args.push('--no-deepseek');
     const payload = await runPythonJson(repoRoot, args, notifyEnv(ctx), 120000);
@@ -836,8 +885,10 @@ module.exports = {
   JSON_ENDPOINTS,
   NOTIFY_ENDPOINTS,
   PHASE2_API_SAFETY,
+  explicitTelegramDelivery,
   latestDashboardFreshness,
   withDashboardFreshnessOverlay,
+  withNotifySafety,
   handle,
   isPhase2Path,
   parseCsv,

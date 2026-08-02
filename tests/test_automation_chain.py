@@ -375,13 +375,14 @@ class AutomationChainTest(unittest.TestCase):
             },
         }
         text = build_automation_telegram_text(report)
-        self.assertIn("【QuantGod USDJPY 自动化闭环巡检】", text)
-        self.assertIn("主状态来源", text)
-        self.assertIn("入场延迟时间线", text)
-        self.assertIn("下一轮安全迭代", text)
-        self.assertIn("GA 精英", text)
-        self.assertIn("刷新政策与影子样本", text)
-        self.assertIn("不会下单", text)
+        self.assertIn("QuantGod · 自动巡检", text)
+        self.assertIn("结论：", text)
+        self.assertIn("关键：", text)
+        self.assertIn("原因：", text)
+        self.assertIn("下一步：", text)
+        self.assertIn("继续刷新影子证据", text)
+        self.assertIn("无执行通道", text)
+        self.assertLessEqual(len(text), 700)
         self.assertNotIn("OrderSend", text)
 
 

@@ -1,15 +1,37 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import ssl
-import time
-import urllib.error
-import urllib.request
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from .config import notify_safety_violations
 from .event_formatter import format_event
+
+try:
+    from telegram_gateway_cli import dispatch_cli_text
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_gateway_cli import dispatch_cli_text
+
+TELEGRAM_MAX_CHARS = 4096
+TELEGRAM_SAFETY_FOOTER = "边界：永久 Shadow｜无执行通道｜Telegram 只推送、不接收命令。"
+TELEGRAM_TRUNCATION_NOTICE = "…（内容已安全裁剪，完整详情见本地面板）"
+
+
+def prepare_telegram_message(text: Any) -> str:
+    """Bound outgoing text while keeping the permanent Shadow footer last."""
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    body = "\n".join(
+        line for line in normalized.splitlines() if line.strip() != TELEGRAM_SAFETY_FOOTER
+    ).rstrip()
+    max_body_chars = TELEGRAM_MAX_CHARS - len(TELEGRAM_SAFETY_FOOTER) - 1
+    if len(body) > max_body_chars:
+        notice = f"\n{TELEGRAM_TRUNCATION_NOTICE}"
+        prefix_budget = max(0, max_body_chars - len(notice))
+        prefix = body[:prefix_budget].rstrip()
+        body = f"{prefix}{notice}" if prefix else TELEGRAM_TRUNCATION_NOTICE[:max_body_chars]
+    return f"{body}\n{TELEGRAM_SAFETY_FOOTER}" if body else TELEGRAM_SAFETY_FOOTER
 
 
 @dataclass
@@ -42,12 +64,16 @@ class TelegramBot:
         parse_mode: str = "HTML",
         disable_notification: bool = False,
     ) -> TelegramSendResult:
+        violations = notify_safety_violations()
+        if violations:
+            self.last_error = "unsafe_telegram_environment:" + ",".join(violations)
+            return TelegramSendResult(ok=False, error=self.last_error)
         if not self.token or not self.chat_id:
             self.last_error = "telegram_not_configured"
             return TelegramSendResult(ok=False, error=self.last_error)
         payload = {
             "chat_id": self.chat_id,
-            "text": str(text)[:4096],
+            "text": prepare_telegram_message(text),
             "parse_mode": parse_mode,
             "disable_notification": bool(disable_notification),
             "disable_web_page_preview": True,
@@ -58,36 +84,20 @@ class TelegramBot:
         return await self.send_message(format_event(event_type, data))
 
     def _post_with_retries(self, payload: dict[str, Any]) -> TelegramSendResult:
-        last = TelegramSendResult(ok=False, error="not_attempted")
-        for attempt in range(self.max_retries + 1):
-            last = self._post_once(payload)
-            if last.ok:
-                self.last_error = ""
-                return last
-            if attempt >= self.max_retries:
-                break
-            time.sleep(min(2.0, 0.4 * (2**attempt)))
-        self.last_error = last.error
-        return last
-
-    def _post_once(self, payload: dict[str, Any]) -> TelegramSendResult:
-        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-        try:
-            try:
-                import certifi  # type: ignore
-
-                context = ssl.create_default_context(cafile=certifi.where())
-            except Exception:
-                context = ssl.create_default_context()
-            with urllib.request.urlopen(req, timeout=self.timeout, context=context) as response:
-                body = response.read().decode("utf-8", errors="replace")
-                parsed = json.loads(body or "{}")
-                ok = bool(parsed.get("ok"))
-                return TelegramSendResult(ok=ok, error="" if ok else "telegram_api_rejected", status_code=response.status)
-        except urllib.error.HTTPError as error:
-            safe_message = f"telegram_http_{error.code}"
-            return TelegramSendResult(ok=False, error=safe_message, status_code=error.code)
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
-            return TelegramSendResult(ok=False, error=type(error).__name__)
+        runtime_dir = Path(
+            os.environ.get("QG_RUNTIME_DIR")
+            or os.environ.get("QG_MT5_FILES_DIR")
+            or Path.cwd() / "runtime"
+        )
+        gateway = dispatch_cli_text(
+            runtime_dir=runtime_dir,
+            source="notify_telegram_bot_adapter",
+            topic="LEGACY_NOTIFY_ADAPTER",
+            severity="INFO",
+            text=str(payload.get("text") or ""),
+        )
+        delivery = gateway.get("delivery") if isinstance(gateway.get("delivery"), dict) else {}
+        confirmed = gateway.get("sent") is True and gateway.get("deliveryOk") is True
+        error = "" if confirmed else str(delivery.get("reason") or "telegram_delivery_not_confirmed")
+        self.last_error = error
+        return TelegramSendResult(ok=confirmed, error=error)

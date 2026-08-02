@@ -19,7 +19,7 @@ class NotifyFormatterTests(unittest.TestCase):
             },
         )
         self.assertIn("EURUSDc", text)
-        self.assertIn("\U0001f3af AI 实盘建议", text)
+        self.assertIn("QuantGod · AI 观察", text)
         self.assertIn("72%", text)
 
     def test_ai_analysis_hold_returns_empty(self) -> None:

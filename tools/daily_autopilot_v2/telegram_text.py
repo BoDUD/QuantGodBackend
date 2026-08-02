@@ -1,178 +1,101 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
+
+try:
+    from telegram_digest import build_digest, clean_text
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import build_digest, clean_text
 
 
-def _fmt(value: Any, default: str = "—") -> str:
-    if value in (None, ""):
-        return default
-    return str(value)
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
-def _num(value: Any, digits: int = 2) -> str:
+def _number(value: Any, digits: int = 2, fallback: str = "—") -> str:
     try:
         return f"{float(value):.{digits}f}"
-    except Exception:
-        return "—"
+    except (TypeError, ValueError):
+        return fallback
 
 
-def _join_entry_modes(lane: Dict[str, Any]) -> str:
-    modes = lane.get("allowedEntryModes")
-    if isinstance(modes, list):
-        return ",".join(str(item) for item in modes)
-    return str(modes) if modes not in (None, "") else ""
+def _stage_label(live: dict[str, Any]) -> str:
+    stage = str(live.get("stage") or "").upper()
+    stage_zh = clean_text(live.get("stageZh"))
+    if stage == "TESTER_ONLY" or "测试器" in stage_zh:
+        return "测试器验证"
+    if "SHADOW" in stage or "影子" in stage_zh:
+        return "Shadow 验证"
+    if "PAPER" in stage or "模拟" in stage_zh:
+        return "模拟验证"
+    return stage_zh or "只读验证"
 
 
-def daily_autopilot_v2_to_chinese_text(payload: Dict[str, Any]) -> str:
-    morning = payload.get("morningPlan") if isinstance(payload.get("morningPlan"), dict) else {}
-    evening = payload.get("eveningReview") if isinstance(payload.get("eveningReview"), dict) else {}
-    daily_todo = payload.get("dailyTodo") if isinstance(payload.get("dailyTodo"), dict) else {}
-    daily_review = payload.get("dailyReview") if isinstance(payload.get("dailyReview"), dict) else {}
-    next_phase = payload.get("nextPhaseTodos") if isinstance(payload.get("nextPhaseTodos"), dict) else {}
-    next_phase_items = next_phase.get("items") if isinstance(next_phase.get("items"), list) else []
-    ga_review = payload.get("gaReview") if isinstance(payload.get("gaReview"), dict) else {}
-    history_production = payload.get("historyProductionStatus") if isinstance(payload.get("historyProductionStatus"), dict) else {}
-    if not history_production:
-        history_production = ga_review.get("historyProductionStatus") if isinstance(ga_review.get("historyProductionStatus"), dict) else {}
-    review_metrics = daily_review.get("metrics") if isinstance(daily_review.get("metrics"), dict) else {}
-    live = morning.get("liveLane") if isinstance(morning.get("liveLane"), dict) else {}
-    mt5 = morning.get("mt5ShadowLane") if isinstance(morning.get("mt5ShadowLane"), dict) else {}
-    mt5_summary = mt5.get("summary") if isinstance(mt5.get("summary"), dict) else {}
-    news_gate = morning.get("newsGate") if isinstance(morning.get("newsGate"), dict) else {}
-    spread_gate = morning.get("spreadGate") if isinstance(morning.get("spreadGate"), dict) else {}
-    usd_deployment_gate = morning.get("usdDeploymentGate") if isinstance(morning.get("usdDeploymentGate"), dict) else {}
-    news_review = evening.get("newsGateReview") if isinstance(evening.get("newsGateReview"), dict) else {}
-    evening_live = evening.get("liveLane") if isinstance(evening.get("liveLane"), dict) else {}
-    evening_mt5 = evening.get("mt5ShadowLane") if isinstance(evening.get("mt5ShadowLane"), dict) else {}
-    fast_shadow = _fmt(mt5_summary.get("fastShadow"), "0")
-    tester_only = _fmt(mt5_summary.get("testerOnly"), "0")
-    paused = _fmt(mt5_summary.get("paused"), "0")
-    net_r = _fmt(review_metrics.get("netR"), "0")
-    max_adverse = _fmt(review_metrics.get("maxAdverseR"))
-    capture = _fmt(review_metrics.get("profitCaptureRatio"))
-    promoted = evening_mt5.get("promotedCount", 0)
-    evening_paused = evening_mt5.get("pausedCount", 0)
-    rejected = evening_mt5.get("rejectedCount", 0)
-    news_mode = _fmt(news_review.get("mode"), "SOFT")
-    news_risk = _fmt(news_review.get("riskLevel"), "UNKNOWN")
-    history_status = _fmt(history_production.get("statusZh"), "等待生产状态")
-    history_gate = _fmt(history_production.get("promotionGateStatus"), "BLOCKED")
-    history_reason = _fmt(
-        history_production.get("reasonZh"),
-        "等待 USDJPY SQLite 历史生产状态；未 PASS 时只允许 shadow/tester 观察。",
-    )
-    consistency = payload.get("executionConsistencyReview") if isinstance(payload.get("executionConsistencyReview"), dict) else {}
-    account_lanes = morning.get("accountLanes") if isinstance(morning.get("accountLanes"), dict) else {}
-    cent_lane = account_lanes.get("centLive") if isinstance(account_lanes.get("centLive"), dict) else {}
-    usd_lane = account_lanes.get("usdDeployment") if isinstance(account_lanes.get("usdDeployment"), dict) else {}
-    exposure_guard = account_lanes.get("globalUsdJpyExposureGuard") if isinstance(account_lanes.get("globalUsdJpyExposureGuard"), dict) else {}
+def daily_autopilot_v2_to_chinese_text(payload: dict[str, Any]) -> str:
+    morning = _dict(payload.get("morningPlan"))
+    evening = _dict(payload.get("eveningReview"))
+    live = _dict(morning.get("liveLane"))
+    mt5_summary = _dict(_dict(morning.get("mt5ShadowLane")).get("summary"))
+    spread_gate = _dict(morning.get("spreadGate"))
+    consistency = _dict(payload.get("executionConsistencyReview"))
+    ga_review = _dict(payload.get("gaReview"))
+    history = _dict(payload.get("historyProductionStatus")) or _dict(ga_review.get("historyProductionStatus"))
 
-    lines = [
-        "【QuantGod 今日自动作战计划】",
-        "",
-        f"账户模式：{_fmt(morning.get('accountMode'), 'cent')} / {_fmt(morning.get('accountCurrencyUnit'), 'USC')}",
-        (
-            f"美分账户：{_fmt(cent_lane.get('accountAlias'), 'hfm_cent')} / "
-            f"{_fmt(cent_lane.get('defaultStage'), 'CENT_PAPER')}；"
-            f"允许 {_fmt(_join_entry_modes(cent_lane), 'OPPORTUNITY_ENTRY,STANDARD_ENTRY')}"
-        ),
-        (
-            f"美元账户：{_fmt(usd_lane.get('accountAlias'), 'hfm_usd')} / "
-            f"{_fmt(usd_deployment_gate.get('targetStage') or usd_lane.get('defaultStage'), 'USD_PAPER_MIRROR')}；"
-            f"严格部署 {_fmt(_join_entry_modes(usd_lane), 'STANDARD_ENTRY')}"
-        ),
-        (
-            f"全局 USDJPY 风险：{_fmt(exposure_guard.get('direction'), 'LONG')} "
-            f"同向预算 {_fmt(exposure_guard.get('sameDirectionMultiAccountRiskBudget'), '0.35')}R，"
-            "美元账户优先。"
-        ),
-        f"实盘车道：{_fmt(live.get('symbol'), 'USDJPYc')} {_fmt(live.get('strategy'), 'RSI_Reversal')} {_fmt(live.get('direction'), 'LONG')}",
-        f"当前阶段：{_fmt(live.get('stageZh') or live.get('stage'))}",
-        f"建议阶段仓位：{_num(live.get('stageMaxLot'))} / 最大上限 {_num(live.get('maxLot') or 2.0)}",
-        "",
-        "MT5 模拟车道：",
-        f"- 路线：{_fmt(mt5_summary.get('routeCount'), '0')} 条",
-        f"- 快速模拟：{fast_shadow}，测试器：{tester_only}，暂停：{paused}",
-        "",
-        "新闻门禁：",
-        f"- 模式：{_fmt(news_gate.get('mode'), 'SOFT')}；风险：{_fmt(news_gate.get('riskLevel'), 'UNKNOWN')}",
-        f"- 普通新闻：不阻断，只降仓/降级；仓位倍率 {_fmt(news_gate.get('lotMultiplier'), '1.0')}",
-        f"- 高冲击新闻：{'硬阻断' if news_gate.get('hardBlock') else '当前无高冲击硬阻断'}",
-        f"- 说明：{_fmt(news_gate.get('reasonZh'), '普通新闻不挡 RSI 买入，高冲击新闻才硬挡。')}",
-        "",
-        "USDJPY 点差门禁：",
-        (
-            f"- 当前点差：{_num(spread_gate.get('spreadPips'), 2)} pips；"
-            f"等级：{_fmt(spread_gate.get('tierZh') or spread_gate.get('tier'), '待同步')}"
-        ),
-        (
-            f"- 正常/轻微/硬阻断：{_num(spread_gate.get('normalLimitPips'), 1)} / "
-            f"{_num(spread_gate.get('softLimitPips'), 1)} / "
-            f"{_num(spread_gate.get('hardLimitPips'), 1)} pips"
-        ),
-        f"- 处理：{_fmt(spread_gate.get('reasonZh'), '2.2 pips 是正常上限，不再单独作为硬阻断线。')}",
-        (
-            f"- 美分账户：{_fmt(spread_gate.get('centActionZh'), '按 quorum 和账户车道处理。')}；"
-            f"美元账户：{_fmt(spread_gate.get('usdActionZh'), '只部署已验证结构。')}"
-        ),
-        (
-            f"- USD 部署门：{_fmt(usd_deployment_gate.get('action'), 'PAPER_MIRROR')}；"
-            f"{_fmt(usd_deployment_gate.get('reasonZh'), 'STANDARD_ENTRY / NORMAL 点差 / 美分验证通过后才小仓实盘。')}"
-        ),
-        "",
-        "今日禁止：",
-    ]
-    for item in morning.get("todayForbiddenZh") or []:
-        lines.append(f"- {item}")
-    lines.extend([
-        "",
-        "Agent 今日待办：",
-        f"- 状态：{_fmt(daily_todo.get('status'), 'COMPLETED_BY_AGENT')}；无需人工回灌。",
-        f"- 自动推动：{'是' if daily_todo.get('autoAppliedByAgent') else '否'}；回滚：{'是' if daily_todo.get('rollbackTriggered') else '否'}。",
-        "",
-        "【QuantGod 今日自动复盘】",
-        f"Agent 版本：{_fmt(payload.get('agentVersion'), 'v2.5')}",
-        f"Live 阶段：{_fmt(evening_live.get('stageZh') or evening_live.get('stage'))}",
-        f"是否触发回滚：{'是' if evening_live.get('rollbackTriggered') else '否'}",
-        f"净 R：{net_r}；最大不利 R：{max_adverse}；利润捕获：{capture}",
-        f"错失机会：{_fmt(review_metrics.get('missedOpportunity'), '0')}；早出场改善：{_fmt(review_metrics.get('earlyExit'), '0')}",
-        f"MT5 模拟：晋级/强化 {promoted}，暂停 {evening_paused}，淘汰 {rejected}",
-        f"新闻风险复盘：{news_mode} / {news_risk}；普通新闻不硬阻断，高冲击新闻硬阻断。",
-        "",
-        "执行一致性复盘：",
-        (
-            f"- Strategy JSON 与 EA 一致性：{_fmt(consistency.get('parityStatus'), 'MISSING')}；"
-            f"晋级门：{_fmt(consistency.get('parityGateStatus'), 'MISSING')}"
-        ),
-        (
-            f"- 实盘执行质量：平均滑点 {_fmt(consistency.get('avgSlippagePips'), '0')} pips；"
-            f"平均延迟 {_fmt(consistency.get('avgLatencyMs'), '0')}ms；"
-            f"拒单 {_fmt(consistency.get('rejectCount'), '0')} 次"
-        ),
-        f"- Agent 结论：{_fmt(consistency.get('agentConclusionZh'), '继续收集 parity 和执行反馈。')}",
-        "",
-        "GA 全过程：",
-        f"- 当前代数：第 {_fmt(ga_review.get('currentGeneration'), '0')} 代；最佳分数：{_fmt(ga_review.get('bestFitness'), '0')}",
-        f"- Elite：{_fmt(ga_review.get('eliteCount'), '0')}；阻断：{_fmt(ga_review.get('blockedCandidates'), '0')}",
-        f"- GA 历史样本：{history_status}；晋级门：{history_gate}",
-        f"- 样本说明：{history_reason}",
-        f"- 下一步：{_fmt(ga_review.get('nextAction'), '运行下一代 Strategy JSON 评分')}",
-        f"明日阶段：{_fmt(evening.get('tomorrowStageZh'))}",
-        "",
-        "下一阶段任务：",
-    ])
-    if next_phase_items:
-        for item in next_phase_items[:3]:
-            if isinstance(item, dict):
-                title = _fmt(item.get("titleZh") or item.get("id"))
-                status = _fmt(item.get("status"), "WAITING_NEXT_PHASE")
-                summary = _fmt(item.get("summaryZh"))
-                lines.append(f"- {title}：{status}，{summary}")
+    history_gate = str(history.get("promotionGateStatus") or "BLOCKED").upper()
+    parity_gate = str(consistency.get("parityGateStatus") or "MISSING").upper()
+    elite_count = int(ga_review.get("eliteCount") or 0)
+    blocked_count = int(ga_review.get("blockedCandidates") or 0)
+
+    reasons: list[str] = []
+    if history_gate != "PASS":
+        timeframes = _dict(history.get("timeframes"))
+        failed_timeframes = [
+            str(name)
+            for name, row in timeframes.items()
+            if isinstance(row, dict) and not bool(row.get("passed"))
+        ]
+        if failed_timeframes:
+            reasons.append(f"{'/'.join(failed_timeframes[:4])} 最新 K 线已过期或不完整。")
+        else:
+            reasons.append("USDJPY 历史数据未通过新鲜度和完整性验收。")
+    if parity_gate != "PASS":
+        reasons.append("策略与 EA 一致性证据尚未通过。")
+    if blocked_count:
+        reasons.append(f"本代 {blocked_count} 个 GA 候选被质量门禁阻断。")
+
+    if history_gate != "PASS":
+        conclusion = "继续 Shadow 观察；历史数据尚未通过生产验收。"
+        next_action = "刷新 M1/M5/M15/H1 历史数据，再重新运行 GA 验证。"
+        level = "warning"
+    elif elite_count <= 0:
+        conclusion = "继续 Shadow 观察；GA 尚未产生合格策略。"
+        next_action = "继续下一代参数搜索，并复核主要阻断原因。"
+        level = "warning"
+    elif parity_gate != "PASS":
+        conclusion = "继续 Shadow 观察；策略一致性证据尚未达标。"
+        next_action = "刷新 Strategy JSON 与 EA 一致性证据。"
+        level = "warning"
     else:
-        lines.append("- Strategy JSON / GA Evolution / Telegram Gateway：已接入 Agent 证据链；下一阶段聚焦高保真样本和 parity 深化。")
-    lines.extend([
-        "",
-        "安全边界：不会下单、不会平仓、不会撤单、不会修改订单或 live preset；",
-        "DeepSeek 只解释，不批准越权；机器硬风控和自动回滚不可被取消。",
-    ])
-    return "\n".join(lines)
+        conclusion = "只读自动链路运行正常，继续积累验证证据。"
+        next_action = clean_text(ga_review.get("nextAction"), "等待下一轮自动复核。")
+        level = "ok"
+
+    symbol = clean_text(payload.get("symbol") or live.get("symbol"), "USDJPYc")
+    spread = _number(spread_gate.get("spreadPips"), 2)
+    generation = int(ga_review.get("currentGeneration") or 0)
+    metrics = [
+        f"{symbol} / {_stage_label(live)}",
+        f"点差 {spread} pips",
+        f"模拟路线 {int(mt5_summary.get('routeCount') or 0)}",
+        f"GA 第 {generation} 代 / 合格策略 {elite_count}",
+    ]
+    generated_at = payload.get("generatedAtIso") or payload.get("timestamp") or evening.get("generatedAtIso")
+    return build_digest(
+        title="每日状态",
+        level=level,
+        conclusion=conclusion,
+        metrics=metrics,
+        reasons=reasons,
+        next_action=next_action,
+        generated_at=generated_at,
+    )

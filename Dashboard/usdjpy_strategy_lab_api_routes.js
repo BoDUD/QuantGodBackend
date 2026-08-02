@@ -48,6 +48,63 @@ function isUSDJPYStrategyLabPath(requestUrl) {
   return pathname === '/api/usdjpy-strategy-lab' || pathname.startsWith('/api/usdjpy-strategy-lab/');
 }
 
+function isTelegramTextPreviewPath(pathname) {
+  return (
+    String(pathname || '').startsWith('/api/usdjpy-strategy-lab/') &&
+    String(pathname || '').endsWith('/telegram-text')
+  );
+}
+
+function normalizeTelegramPreviewPayload(payload) {
+  const normalized = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload
+    : { ok: false, error: 'INVALID_TELEGRAM_PREVIEW_PAYLOAD' };
+  return {
+    ...normalized,
+    previewOnly: true,
+    sendRequested: false,
+    sendRejected: false,
+    sent: false,
+    deliveryOk: false,
+    delivery: {
+      ok: false,
+      skipped: true,
+      status: 'PREVIEW_ONLY',
+      reason: 'get_telegram_text_is_preview_only',
+    },
+  };
+}
+
+function telegramSendQueryRejectedPayload(pathname) {
+  return {
+    ok: false,
+    error: 'TELEGRAM_SEND_REJECTED_ON_GET_PREVIEW',
+    endpoint: pathname,
+    previewOnly: true,
+    sendRequested: true,
+    sendRejected: true,
+    sent: false,
+    deliveryOk: false,
+    delivery: {
+      ok: false,
+      skipped: true,
+      status: 'REJECTED',
+      reason: 'GET telegram-text endpoints never deliver messages; remove the send query parameter',
+    },
+    safety: {
+      readOnlyDataPlane: true,
+      advisoryOnly: true,
+      dryRunOnly: true,
+      telegramCommandExecutionAllowed: false,
+      orderSendAllowed: false,
+      closeAllowed: false,
+      cancelAllowed: false,
+      livePresetMutationAllowed: false,
+      writesMt5OrderRequest: false,
+    },
+  };
+}
+
 function runPythonJson(repoRoot, args, timeoutMs = 45000, scriptName = 'run_usdjpy_strategy_lab.py') {
   return new Promise((resolve) => {
     const pythonBin = process.env.QG_PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
@@ -110,16 +167,22 @@ function canReuseReadonlyRun(req, url, args) {
 
 function runReadonlyPythonJson(req, url, repoRoot, args, timeoutMs = 45000, scriptName = 'run_usdjpy_strategy_lab.py') {
   const readonlyArgs = args.filter((arg) => !['--write', '--refresh', '--send'].includes(arg));
+  let resultPromise;
   if (!canReuseReadonlyRun(req, url, readonlyArgs)) {
-    return runPythonJson(repoRoot, readonlyArgs, timeoutMs, scriptName);
+    resultPromise = runPythonJson(repoRoot, readonlyArgs, timeoutMs, scriptName);
+  } else {
+    const key = JSON.stringify([repoRoot, scriptName, readonlyArgs]);
+    resultPromise = runCached(
+      readonlyRunCache,
+      key,
+      () => runPythonJson(repoRoot, readonlyArgs, timeoutMs, scriptName),
+      { ttlMs: READONLY_RUN_CACHE_TTL_MS },
+    );
   }
-  const key = JSON.stringify([repoRoot, scriptName, readonlyArgs]);
-  return runCached(
-    readonlyRunCache,
-    key,
-    () => runPythonJson(repoRoot, readonlyArgs, timeoutMs, scriptName),
-    { ttlMs: READONLY_RUN_CACHE_TTL_MS },
-  );
+  if (isTelegramTextPreviewPath(url.pathname)) {
+    return resultPromise.then(normalizeTelegramPreviewPayload);
+  }
+  return resultPromise;
 }
 
 function readFreshAgentOpsHealth(runtimeDir, maxAgeSeconds = 360) {
@@ -166,12 +229,41 @@ function readJsonBody(req) {
   });
 }
 
+function strictBoolValue(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function explicitTelegramDelivery(body = {}) {
+  const dryRunValues = [body.dryRun, body.dry_run].filter(
+    (value) => value !== undefined && value !== null && value !== '',
+  );
+  const sendExplicitlyRequested = strictBoolValue(body.send) === true;
+  const dryRunExplicitlyDisabled =
+    dryRunValues.length > 0 && dryRunValues.every((value) => strictBoolValue(value) === false);
+  const send = sendExplicitlyRequested && dryRunExplicitlyDisabled;
+  return {
+    send,
+    dryRun: !send,
+    sendExplicitlyRequested,
+    dryRunExplicitlyDisabled,
+  };
+}
+
 async function handle(req, res, ctx) {
   const requestUrl = req.url || '/';
   const url = new URL(requestUrl, 'http://127.0.0.1');
   const pathname = url.pathname;
   const runtimeDir = url.searchParams.get('runtimeDir') || ctx.defaultRuntimeDir;
   const baseArgs = ['--runtime-dir', runtimeDir, '--symbol', 'USDJPYc'];
+  if (req.method === 'GET' && isTelegramTextPreviewPath(pathname) && url.searchParams.has('send')) {
+    sendJson(res, 400, telegramSendQueryRejectedPayload(pathname));
+    return;
+  }
   if (req.method === 'GET' && (pathname === '/api/usdjpy-strategy-lab' || pathname === '/api/usdjpy-strategy-lab/status')) {
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, [...baseArgs, 'status']);
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
@@ -275,7 +367,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/live-loop/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, '--repo-root', ctx.repoRoot, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 90000, 'run_usdjpy_live_loop.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -326,7 +417,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/evolution/telegram-text') {
     const args = [...baseArgs, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_usdjpy_runtime_dataset.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -357,7 +447,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/bar-replay/telegram-text') {
     const args = [...baseArgs, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_usdjpy_bar_replay.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -388,7 +477,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/walk-forward/telegram-text') {
     const args = [...baseArgs, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_usdjpy_walk_forward.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -443,7 +531,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/autonomous-agent/telegram-text') {
     const args = [...baseArgs, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_usdjpy_autonomous_agent.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -463,7 +550,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/autonomous-agent/daily-autopilot-v2/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, '--repo-root', ctx.repoRoot, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_daily_autopilot_v2.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -483,7 +569,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/daily-todo/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, '--repo-root', ctx.repoRoot, 'daily-todo-telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_daily_autopilot_v2.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -503,7 +588,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/daily-review/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, '--repo-root', ctx.repoRoot, 'daily-review-telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_daily_autopilot_v2.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -511,7 +595,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/telegram-text') {
     const args = [...baseArgs, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args);
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -550,7 +633,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/strategy-backtest/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_usdjpy_strategy_backtest.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -593,7 +675,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/evidence-os/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_usdjpy_evidence_os.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -632,9 +713,26 @@ async function handle(req, res, ctx) {
     return;
   }
   if (req.method === 'POST' && pathname === '/api/usdjpy-strategy-lab/telegram-gateway/dispatch') {
+    const body = await readJsonBody(req);
+    if (body.__jsonError) {
+      sendJson(res, 400, { ok: false, error: 'INVALID_JSON_BODY', detail: body.__jsonError });
+      return;
+    }
+    if (url.searchParams.has('send')) {
+      sendJson(res, 400, {
+        ok: false,
+        error: 'TELEGRAM_SEND_QUERY_REJECTED',
+        sendRequested: true,
+        sent: false,
+        deliveryOk: false,
+        reason: 'Use a JSON body with send=true and dryRun=false for explicit delivery.',
+      });
+      return;
+    }
+    const delivery = explicitTelegramDelivery(body);
     const args = ['--runtime-dir', runtimeDir, 'dispatch'];
-    if (url.searchParams.get('send') === '1') args.push('--send');
-    const limit = url.searchParams.get('limit');
+    if (delivery.send) args.push('--send');
+    const limit = body.limit ?? url.searchParams.get('limit');
     if (limit) args.push('--limit', String(limit));
     const payload = await runPythonJson(ctx.repoRoot, args, 45000, 'run_telegram_gateway.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
@@ -700,7 +798,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/ga/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 120000, 'run_strategy_ga.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -723,7 +820,6 @@ async function handle(req, res, ctx) {
   if (req.method === 'GET' && pathname === '/api/usdjpy-strategy-lab/strategy-contract/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
     if (url.searchParams.get('refresh') === '1') args.push('--refresh');
-    if (url.searchParams.get('send') === '1') args.push('--send');
     const payload = await runReadonlyPythonJson(req, url, ctx.repoRoot, args, 45000, 'run_strategy_contract_adapter.py');
     sendJson(res, payload && payload.ok === false ? 500 : 200, payload);
     return;
@@ -737,7 +833,11 @@ async function handle(req, res, ctx) {
 }
 
 module.exports = {
+  explicitTelegramDelivery,
   isUSDJPYStrategyLabPath,
+  isTelegramTextPreviewPath,
+  normalizeTelegramPreviewPayload,
+  telegramSendQueryRejectedPayload,
   handle,
   sendError,
 };

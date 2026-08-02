@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -15,6 +16,8 @@ if str(CURRENT_DIR) not in sys.path:
 
 from automation_chain.runner import AutomationChainRunner, loop_forever
 from automation_chain.telegram_text import build_automation_telegram_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_delivery
+from telegram_gateway_cli import dispatch_cli_text
 
 
 def parse_symbols(value: str) -> List[str]:
@@ -42,10 +45,40 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def annotate_chain_delivery(report: dict, *, send_requested: bool) -> dict:
+    if not send_requested:
+        report.update({"sendRequested": False, "sent": False, "deliveryOk": False})
+        return report
+    telegram_step = next(
+        (step for step in report.get("steps", []) if step.get("name") == "usdjpy_live_loop_telegram"),
+        {},
+    )
+    stdout = telegram_step.get("stdoutPreview", "")
+    delivery = normalize_delivery(
+        {"ok": True, "telegramGateway": stdout},
+        send_requested=True,
+    )
+    report.update(
+        {
+            "sendRequested": True,
+            "sent": delivery["sent"],
+            "deliveryOk": delivery["deliveryOk"],
+            "telegramGateway": stdout,
+        }
+    )
+    if not delivery["deliveryOk"]:
+        report["ok"] = False
+        report["telegramDeliveryError"] = "TELEGRAM_DELIVERY_NOT_CONFIRMED"
+    return report
+
+
 def cmd_once(args: argparse.Namespace) -> int:
     report = build_runner(args).run_once(send=args.send, write=not args.no_write)
+    report = annotate_chain_delivery(report, send_requested=bool(args.send))
     print_json(report)
-    return 0 if report.get("runStatus") == "COMPLETED" else 2
+    if report.get("runStatus") != "COMPLETED":
+        return 2
+    return explicit_send_exit_code(bool(args.send), report)
 
 
 def cmd_safe_iteration_cycle(args: argparse.Namespace) -> int:
@@ -75,20 +108,34 @@ def cmd_telegram_text(args: argparse.Namespace) -> int:
     text = build_automation_telegram_text(report)
     print(text)
     if args.send:
-        try:
-            from telegram_notifier.client import TelegramClient
-            from telegram_notifier.config import load_telegram_config
-        except Exception as exc:  # pragma: no cover
-            print(f"无法加载 Telegram 推送模块：{exc}", file=sys.stderr)
-            return 2
-        result = TelegramClient(load_telegram_config()).send_message(text)
+        result = dispatch_cli_text(
+            runtime_dir=args.runtime_dir,
+            source="automation_chain",
+            topic="AUTOMATION_CHAIN_REPORT",
+            severity="WARN",
+            text=text,
+            repo_root=REPO_ROOT,
+        )
+        result = normalize_delivery(result, send_requested=True)
         print_json(result)
+        return explicit_send_exit_code(True, result)
     return 0
 
 
 def cmd_loop(args: argparse.Namespace) -> int:
-    loop_forever(build_runner(args), interval_seconds=args.interval_seconds, send=args.send)
-    return 0
+    runner = build_runner(args)
+    if not args.send:
+        loop_forever(runner, interval_seconds=args.interval_seconds, send=False)
+        return 0
+    while True:
+        report = annotate_chain_delivery(
+            runner.run_once(send=True, write=True),
+            send_requested=True,
+        )
+        print_json(report)
+        if explicit_send_exit_code(True, report) != 0:
+            return 2
+        time.sleep(max(5, int(args.interval_seconds)))
 
 
 def build_parser() -> argparse.ArgumentParser:

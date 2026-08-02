@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const routes = require('../../Dashboard/phase2_api_routes.js');
@@ -56,6 +57,61 @@ test('phase2 path registry includes required API domains', () => {
   assert.equal(routes.isPhase2Path('/api/notify/mt5-ai-monitor/run'), true);
   assert.equal(routes.PHASE2_API_SAFETY.orderSendAllowed, false);
   assert.equal(routes.PHASE2_API_SAFETY.telegramCommandExecutionAllowed, false);
+});
+
+test('notify config preserves dynamic command evidence inside complete push-only safety', () => {
+  const payload = routes.withNotifySafety({
+    ok: true,
+    telegramPushAllowed: false,
+    commandsEnvRequested: true,
+    blockedUnsafeEnvironmentKeys: ['QG_TELEGRAM_COMMANDS_ALLOWED'],
+    safety: {
+      commandsEnvRequested: true,
+      unsafeEnvironmentBlocked: true,
+    },
+  });
+
+  assert.equal(payload.safety.pushOnly, true);
+  assert.equal(payload.safety.notificationPushOnly, true);
+  assert.equal(payload.safety.commandsAllowed, false);
+  assert.equal(payload.safety.telegramCommandsAccepted, false);
+  assert.equal(payload.safety.commandsEnvRequested, true);
+  assert.equal(payload.safety.gatewayReceivesCommands, false);
+  assert.equal(payload.safety.telegramCommandExecutionAllowed, false);
+  for (const key of [
+    'orderSendAllowed',
+    'closeAllowed',
+    'cancelAllowed',
+    'livePresetMutationAllowed',
+    'writesMt5OrderRequest',
+    'externalMarketRealMoneyAllowed',
+  ]) {
+    assert.equal(payload.safety[key], false, key);
+  }
+  assert.deepEqual(payload.blockedUnsafeEnvironmentKeys, ['QG_TELEGRAM_COMMANDS_ALLOWED']);
+});
+
+test('notification routes default to dry-run and require two explicit delivery fields', () => {
+  const delivery = routes.explicitTelegramDelivery;
+  for (const body of [
+    {},
+    { send: true },
+    { dryRun: false },
+    { send: false, dryRun: false },
+    { send: true, dryRun: true },
+    { send: true, dryRun: 'invalid' },
+    { send: true, dryRun: false, dry_run: true },
+  ]) {
+    assert.equal(delivery(body).send, false, JSON.stringify(body));
+    assert.equal(delivery(body).dryRun, true, JSON.stringify(body));
+  }
+  assert.equal(delivery({ send: true, dryRun: false }).send, true);
+  assert.equal(delivery({ send: 'true', dry_run: 'false' }).send, true);
+
+  const source = readFileSync(path.join(process.cwd(), 'Dashboard/phase2_api_routes.js'), 'utf8');
+  assert.match(source, /explicitTelegramDelivery\(body\)\.send \? '--send' : '--dry-run'/);
+  assert.match(source, /if \(strictBoolValue\(body\.force\) === true\) args\.push\('--force'\)/);
+  assert.doesNotMatch(source, /'--repo-root',\s*repoRoot,\s*'--force'/);
 });
 
 test('JSON endpoint returns envelope from runtime dir', async () => {

@@ -1,35 +1,69 @@
+"""Compact Chinese text rendering for Telegram Gateway observability."""
+
 from __future__ import annotations
-"""Chinese text rendering for Telegram Gateway observability."""
 
-from typing import Any, Dict
+from typing import Any
+
+try:
+    from telegram_digest import build_digest, clean_text
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import build_digest, clean_text
 
 
-def gateway_ops_to_chinese_text(status: Dict[str, Any]) -> str:
+def gateway_ops_to_chinese_text(status: dict[str, Any]) -> str:
     delivery = status.get("deliveryObservability") if isinstance(status.get("deliveryObservability"), dict) else {}
-    lines = [
-        "【QuantGod Telegram Gateway 运维复盘】",
-        f"状态：{status.get('statusZh') or status.get('status', 'UNKNOWN')}",
-        f"队列：{status.get('queuedCount', 0)}",
-        f"待投递：{status.get('pendingCount', 0)}",
-        f"真实发送：{status.get('actualSentCount', 0)}",
-        f"去重 / 限频抑制：{status.get('suppressedCount', 0)}",
-        f"失败：{status.get('failedCount', 0)}",
-        f"最近 topic：{status.get('lastTopic') or '无'}",
-        f"投递状态：{delivery.get('stateZh') or '等待新报告'}",
-        "",
-        "按 topic 待投递：",
-    ]
-    pending_by_topic = status.get("pendingByTopic") if isinstance(status.get("pendingByTopic"), dict) else {}
-    if pending_by_topic:
-        for topic, count in sorted(pending_by_topic.items()):
-            lines.append(f"- {topic}: {count}")
+    pending = int(status.get("pendingCount") or 0)
+    sent = int(status.get("actualSentCount") or delivery.get("actualSentCount") or 0)
+    failed = int(status.get("failedCount") or delivery.get("failedCount") or 0)
+    push_allowed = bool(status.get("pushAllowed"))
+    commands_requested = bool(status.get("commandsEnvRequested"))
+
+    reasons: list[str] = []
+    if commands_requested:
+        conclusion = "检测到命令开关请求，已硬阻断；网关仍只允许出站推送。"
+        level = "danger"
+        reasons.append("Telegram 命令执行永久关闭。")
+        next_action = "把 QG_TELEGRAM_COMMANDS_ALLOWED 保持为 0。"
+    elif failed:
+        conclusion = f"最近有 {failed} 条推送失败，需要检查通道配置。"
+        level = "danger"
+        failure_reason = delivery.get("lastFailureReason")
+        if failure_reason:
+            reasons.append(clean_text(failure_reason))
+        next_action = "检查 Bot 配置和最近一次失败记录。"
+    elif not push_allowed:
+        conclusion = "推送已关闭；队列、去重和审计仍可正常运行。"
+        level = "info"
+        reasons.append("本机 QG_TELEGRAM_PUSH_ALLOWED=0。")
+        next_action = "保持关闭；需要启用时由操作者明确开启推送。"
+    elif pending:
+        conclusion = f"有 {pending} 条消息等待网关投递。"
+        level = "warning"
+        next_action = "等待网关按去重和限频规则投递。"
     else:
-        lines.append("- 暂无待投递 topic")
-    lines.extend(
-        [
-            "",
-            "安全边界：Telegram Gateway 只做 push-only 观测、排队、去重、限频和 ledger；",
-            "不接收 Telegram 命令，不下单、不平仓、不撤单、不修改 MT5 live preset。",
-        ]
+        conclusion = "推送网关运行正常，目前没有待处理消息。"
+        level = "ok"
+        next_action = "无需处理。"
+
+    delivery_state = clean_text(delivery.get("stateZh"))
+    if delivery_state and delivery_state not in conclusion:
+        reasons.append(delivery_state)
+    generated_at = (
+        delivery.get("lastActualSentAtIso")
+        or delivery.get("lastSuppressedAtIso")
+        or delivery.get("lastFailureAtIso")
     )
-    return "\n".join(lines)
+    return build_digest(
+        title="Telegram 网关",
+        level=level,
+        conclusion=conclusion,
+        metrics=[
+            f"推送 {'开启' if push_allowed else '关闭'}",
+            f"待投递 {pending}",
+            f"已发送 {sent}",
+            f"失败 {failed}",
+        ],
+        reasons=reasons,
+        next_action=next_action,
+        generated_at=generated_at,
+    )

@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 from adaptive_policy.policy_engine import build_adaptive_policy, load_policy_file
 from adaptive_policy.telegram_text import build_policy_telegram_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_delivery
+from telegram_gateway_cli import dispatch_cli_text
 
 def _json(data: object) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -19,25 +17,6 @@ def _symbols(text: str | None) -> list[str] | None:
     if not text:
         return None
     return [part.strip() for part in text.split(",") if part.strip()]
-
-def _send_telegram(text: str) -> dict[str, object]:
-    push_allowed = os.environ.get("QG_TELEGRAM_PUSH_ALLOWED", "0").strip().lower() in {"1", "true", "yes", "y"}
-    commands_allowed = os.environ.get("QG_TELEGRAM_COMMANDS_ALLOWED", "0").strip().lower() in {"1", "true", "yes", "y"}
-    if not push_allowed:
-        return {"sent": False, "reason": "QG_TELEGRAM_PUSH_ALLOWED 未开启"}
-    if commands_allowed:
-        return {"sent": False, "reason": "Telegram 命令执行必须关闭"}
-    token = os.environ.get("QG_TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("QG_TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
-        return {"sent": False, "reason": "缺少 Telegram token 或 chat_id"}
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text, "disable_web_page_preview": "true"}).encode("utf-8")
-    request = urllib.request.Request(url, data=payload, method="POST")
-    with urllib.request.urlopen(request, timeout=20) as response:
-        body = response.read().decode("utf-8", errors="replace")
-    data = json.loads(body)
-    return {"sent": bool(data.get("ok")), "telegramResponse": data}
 
 def cmd_status(args: argparse.Namespace) -> int:
     policy = load_policy_file(args.runtime_dir)
@@ -98,8 +77,16 @@ def cmd_telegram_text(args: argparse.Namespace) -> int:
     text = build_policy_telegram_text(policy, symbol=args.symbol)
     print(text)
     if args.send:
-        result = _send_telegram(text)
+        result = dispatch_cli_text(
+            runtime_dir=args.runtime_dir,
+            source="adaptive_policy",
+            topic="ADAPTIVE_POLICY_REPORT",
+            severity="WARN",
+            text=text,
+        )
+        result = normalize_delivery(result, send_requested=True)
         _json(result)
+        return explicit_send_exit_code(True, result)
     return 0
 
 def build_parser() -> argparse.ArgumentParser:

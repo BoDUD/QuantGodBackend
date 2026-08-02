@@ -18,7 +18,8 @@ from strategy_contract_adapter.builder import (
     refresh_active_strategy_contract,
 )
 from strategy_contract_adapter.telegram_text import contract_to_chinese_text
-from usdjpy_evidence_os.telegram_gateway import dispatch_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_cli_payload
+from telegram_gateway_cli import dispatch_cli_text
 
 
 def load_env(path: Path) -> None:
@@ -40,8 +41,14 @@ def emit(payload: Any) -> int:
 
 def send_telegram(runtime_dir: Path, text: str) -> dict:
     root = Path(__file__).resolve().parents[1]
-    load_env(root / ".env.telegram.local")
-    return dispatch_text(runtime_dir, "strategy_contract_adapter", "STRATEGY_JSON_EA_CONTRACT", "INFO", text, send=True)
+    return dispatch_cli_text(
+        runtime_dir=runtime_dir,
+        source="strategy_contract_adapter",
+        topic="STRATEGY_JSON_EA_CONTRACT",
+        severity="INFO",
+        text=text,
+        repo_root=root,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -132,7 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         result = {"ok": True, "text": content, "contractStatus": payload}
         if args.send:
             result["telegramGateway"] = send_telegram(runtime_dir, content)
-        return emit(result)
+        result = normalize_cli_payload(result, send_requested=args.send)
+        emit(result)
+        return explicit_send_exit_code(args.send, result.get("telegramGateway"))
     return 1
 
 

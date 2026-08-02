@@ -97,7 +97,7 @@ class Mt5AiTelegramMonitorTests(unittest.TestCase):
         self.assertIsNone(msg)
 
     def test_advisory_message_buy_produces_chinese_message(self) -> None:
-        """BUY decision produces a Chinese advisory with 🎯 prefix."""
+        """BUY decision produces a compact Chinese Shadow observation."""
         report = sample_report()
         report["decision"]["action"] = "BUY"
         report["decision"]["entry_price"] = 155.12
@@ -107,13 +107,15 @@ class Mt5AiTelegramMonitorTests(unittest.TestCase):
         payload = monitor._build_render_payload(report)
         msg = render("ai_advisory", payload)
         assert msg is not None
-        self.assertIn("\U0001f3af AI 实盘建议", msg)
+        self.assertIn("QuantGod · AI 观察", msg)
         self.assertIn("USDJPYc", msg)
-        self.assertIn("做多", msg)
-        self.assertIn("仅作建议，不执行交易", msg)
+        self.assertIn("偏多", msg)
+        for forbidden in ("入场", "止损", "目标", "仓位", "持仓"):
+            self.assertNotIn(forbidden, msg)
+        self.assertLessEqual(len(msg), 700)
 
     def test_deepseek_insight_uses_distinct_format(self) -> None:
-        """DeepSeek insight uses 🤖 prefix and includes extra sections."""
+        """DeepSeek insight uses a compact, distinct Shadow format."""
         report = sample_report()
         report["decision"]["action"] = "BUY"
         report["deepseek_advice"] = {
@@ -147,13 +149,14 @@ class Mt5AiTelegramMonitorTests(unittest.TestCase):
         payload = monitor._build_render_payload(report)
         msg = render("deepseek_insight", payload)
         assert msg is not None
-        self.assertIn("\U0001f916 DeepSeek 深度研判", msg)
-        self.assertIn("【市场摘要】", msg)
-        self.assertIn("【多空辩论】", msg)
-        self.assertIn("【新闻与情绪】", msg)
+        self.assertIn("QuantGod · DeepSeek 观察", msg)
+        self.assertIn("结论：", msg)
+        self.assertIn("原因：", msg)
+        self.assertIn("下一步：", msg)
         self.assertIn("deepseek-v4-pro", msg)
         # ai_advisory prefix should NOT appear in deepseek message
-        self.assertNotIn("\U0001f3af AI 实盘建议", msg)
+        self.assertNotIn("AI 实盘建议", msg)
+        self.assertLessEqual(len(msg), 700)
 
     def test_dedupe_waits_for_unchanged_signature(self) -> None:
         report = sample_report()
@@ -176,6 +179,62 @@ class Mt5AiTelegramMonitorTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertTrue(reason.startswith("dedup_wait_"))
+
+    def test_preview_state_never_advances_last_notified_clock(self) -> None:
+        report = sample_report()
+        state = monitor.update_state(
+            {},
+            symbol="USDJPYc",
+            signature=monitor.event_signature(report),
+            status="preview",
+            reason="first_seen",
+            report=report,
+            now_iso="2026-05-03T00:00:00Z",
+        )
+        self.assertNotIn("lastNotifiedAt", state["symbols"]["USDJPYc"])
+
+    def test_scan_counts_only_confirmed_gateway_delivery(self) -> None:
+        def attach_buy(_args, report):
+            report = dict(report)
+            report["decision"] = dict(report["decision"], action="BUY", confidence=0.82)
+            return report
+
+        cases = (
+            ({"ok": True, "status": "preview", "sendRequested": False, "sent": False, "deliveryOk": False}, False, 0),
+            ({"ok": True, "status": "sent", "sendRequested": True, "sent": True, "deliveryOk": True}, True, 1),
+        )
+        for delivery, send, expected_count in cases:
+            with self.subTest(send=send), tempfile.TemporaryDirectory() as tmp_dir:
+                argv = [
+                    "scan-once",
+                    "--symbols",
+                    "USDJPYc",
+                    "--runtime-dir",
+                    tmp_dir,
+                    "--min-interval-seconds",
+                    "0",
+                    "--disable-journal",
+                ]
+                if send:
+                    argv.append("--send")
+                args = monitor.build_parser().parse_args(argv)
+                with mock.patch.object(monitor, "AnalysisServiceV2", FakeAnalysisService), mock.patch.object(
+                    monitor, "attach_deepseek_advice", side_effect=attach_buy
+                ), mock.patch.object(
+                    monitor, "advisory_push_gate", return_value=(True, "passed")
+                ), mock.patch.object(
+                    monitor, "send_or_record", return_value=delivery
+                ):
+                    payload = asyncio.run(monitor.scan_once(args))
+                self.assertEqual(payload["summary"]["notifications"], expected_count)
+                self.assertEqual(payload["deliveryAttemptedCount"], 1 if send else 0)
+                self.assertEqual(payload["failedDeliveryCount"], 0)
+                state = json.loads(Path(payload["statePath"]).read_text(encoding="utf-8"))
+                symbol_state = state["symbols"]["USDJPYc"]
+                if send:
+                    self.assertIn("lastNotifiedAt", symbol_state)
+                else:
+                    self.assertNotIn("lastNotifiedAt", symbol_state)
 
     def test_scan_once_hold_skips_push_with_skipped_hold_status(self) -> None:
         """When action=HOLD, scan_once should record skipped_hold, not push."""
@@ -285,9 +344,63 @@ class Mt5AiTelegramMonitorTests(unittest.TestCase):
         ok, reason = monitor.observation_push_gate(report)
         self.assertTrue(ok, reason)
         message = monitor.build_observation_message(report, gate_reason="action_hold")
-        self.assertIn("AI 观察摘要", message)
-        self.assertIn("不是入场建议", message)
-        self.assertIn("不下单、不平仓、不撤单", message)
+        self.assertIn("QuantGod · AI 观察", message)
+        self.assertIn("本轮只保留观察证据", message)
+        self.assertIn("无执行通道", message)
+        self.assertLessEqual(len(message), 700)
+
+    def test_deepseek_and_observation_scrub_adversarial_execution_prose(self) -> None:
+        report = sample_report("USDJPYc")
+        report["decision"]["action"] = "BUY"
+        report["deepseek_advice"] = {
+            "ok": True,
+            "status": "ok",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "validation": {"status": "pass"},
+            "advice": {
+                "marketSummary": "Buy at 155.10, SL 154.80, TP 155.80, 2 lots, leverage 20x, long now.",
+                "bullCase": "立即下单买入，止损 154.80，止盈 155.80。",
+                "bearCase": "目标 156.00，仓位 2 手。",
+            },
+        }
+        rendered = render("deepseek_insight", monitor._build_render_payload(report))
+        assert rendered is not None
+
+        report["decision"]["action"] = "HOLD"
+        report["deepseek_advice"]["advice"].update(
+            {
+                "verdict": "立即开仓做多",
+                "headline": "Buy at 155.10 with SL 154.80 and TP 155.80",
+                "watchPoints": ["建议买入 2 lots，leverage 20x"],
+            }
+        )
+        observation = monitor.build_observation_message(report, gate_reason="action_hold")
+        for message in (rendered, observation):
+            lowered = message.lower()
+            for forbidden in (
+                "buy at",
+                "sl 154",
+                "tp 155",
+                "lots",
+                "leverage",
+                "long now",
+                "立即下单",
+                "开仓",
+                "止损",
+                "止盈",
+                "目标",
+                "仓位",
+                "买入",
+            ):
+                self.assertNotIn(forbidden, lowered)
+            self.assertIn("交易计划细节", message)
+            self.assertIn("隐藏", message)
+
+        self.assertEqual(
+            monitor.unsafe_advisory_message_reason("Buy at 155.10; SL 154.80; TP 155.80"),
+            "execution_language_blocked",
+        )
 
     def test_build_render_payload_extracts_decision_fields(self) -> None:
         """_build_render_payload correctly maps report fields to renderer payload."""
@@ -339,14 +452,14 @@ class Mt5AiTelegramMonitorTests(unittest.TestCase):
 
         ai_result = render("ai_advisory", payload)
         self.assertIsNotNone(ai_result)
-        self.assertIn("🎯 AI 实盘建议", str(ai_result))
+        self.assertIn("QuantGod · AI 观察", str(ai_result))
         self.assertIn("USDJPYc", str(ai_result))
-        self.assertIn("做多", str(ai_result))
+        self.assertIn("偏多", str(ai_result))
 
         # deepseek_insight kind (even without deepseek_advice — graceful)
         ds_result = render("deepseek_insight", payload)
         self.assertIsNotNone(ds_result)
-        self.assertIn("🤖 DeepSeek 深度研判", str(ds_result))
+        self.assertIn("QuantGod · DeepSeek 观察", str(ds_result))
 
     def test_build_render_payload_with_deepseek_advice_targets(self) -> None:
         """When DeepSeek advice provides targets, they take precedence."""
@@ -401,7 +514,7 @@ class Mt5AiTelegramMonitorTests(unittest.TestCase):
 
         msg = render("ai_advisory", payload)
         self.assertIsNotNone(msg)
-        self.assertIn("AI 共识：一致", str(msg))
+        self.assertIn("共识 一致", str(msg))
 
 
 if __name__ == "__main__":

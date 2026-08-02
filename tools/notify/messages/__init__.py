@@ -39,8 +39,8 @@ RENDERERS: dict[str, Callable[[dict[str, Any]], Optional[str]]] = {
 
 # Used by golden-file tests to assert prefix uniqueness across kinds.
 KIND_TITLE_PREFIX: dict[str, str] = {
-    "ai_advisory": "\U0001f3af AI 实盘建议",
-    "deepseek_insight": "\U0001f916 DeepSeek 深度研判",
+    "ai_advisory": "🟡 QuantGod · AI 观察",
+    "deepseek_insight": "🟡 QuantGod · DeepSeek 观察",
     "daily_digest": "\U0001f4ca 今日复盘",
     "runtime_event:KILL_SWITCH": "⛔ Kill Switch",
     "runtime_event:NEWS_BLOCK": "\U0001f4f0 高影响新闻",

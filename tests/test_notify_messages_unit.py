@@ -30,8 +30,9 @@ def _load_golden(name: str) -> str:
 
 def _strip_time(line: str) -> str:
     """Remove the variable Tokyo time suffix so golden tests are stable."""
-    # "仅作建议，不执行交易｜东京时间 14:30" → "仅作建议，不执行交易｜东京时间 **:**"
+    # "时间：14:30 JST" → "时间：**:** JST"
     import re
+    line = re.sub(r"时间：\d{2}:\d{2} JST", "时间：**:** JST", line)
     return re.sub(r"东京时间 \d{2}:\d{2}", "东京时间 **:**", line)
 
 
@@ -49,18 +50,19 @@ class AiAdvisoryTests(unittest.TestCase):
     def test_buy_contains_required_fields(self) -> None:
         msg = render("ai_advisory", _load_fixture("ai_advisory_buy"))
         assert msg is not None
-        self.assertIn("\U0001f3af AI 实盘建议", msg)
+        self.assertIn("QuantGod · AI 观察", msg)
         self.assertIn("USDJPYc", msg)
-        self.assertIn("做多", msg)
+        self.assertIn("偏多", msg)
         self.assertIn("72%", msg)
-        self.assertIn("153.60", msg)
-        self.assertIn("1H 收盘跌破", msg)
-        self.assertIn("仅作建议，不执行交易", msg)
+        for forbidden in ("入场", "止损", "目标", "仓位", "持仓", "153.60", "1H 收盘跌破"):
+            self.assertNotIn(forbidden, msg)
+        self.assertIn("永久 Shadow", msg)
+        self.assertLessEqual(len(msg), 700)
 
     def test_sell_message(self) -> None:
         msg = render("ai_advisory", _load_fixture("ai_advisory_sell"))
         assert msg is not None
-        self.assertIn("做空", msg)
+        self.assertIn("偏空", msg)
         self.assertIn("EURUSDc", msg)
 
     def test_empty_payload(self) -> None:
@@ -70,7 +72,7 @@ class AiAdvisoryTests(unittest.TestCase):
     def test_minimal_payload_buy(self) -> None:
         msg = render("ai_advisory", {"decision": {"action": "BUY"}})
         assert msg is not None
-        self.assertIn("做多", msg)
+        self.assertIn("偏多", msg)
 
     def test_golden_buy(self) -> None:
         fixture = _load_fixture("ai_advisory_buy")
@@ -105,13 +107,17 @@ class DeepSeekInsightTests(unittest.TestCase):
     def test_buy_contains_deepseek_sections(self) -> None:
         msg = render("deepseek_insight", _load_fixture("deepseek_insight_buy"))
         assert msg is not None
-        self.assertIn("\U0001f916 DeepSeek 深度研判", msg)
-        self.assertIn("【市场摘要】", msg)
-        self.assertIn("【多空辩论】", msg)
-        self.assertIn("【交易计划】", msg)
-        self.assertIn("【新闻与情绪】", msg)
+        self.assertIn("QuantGod · DeepSeek 观察", msg)
+        self.assertIn("结论：", msg)
+        self.assertIn("关键：", msg)
+        self.assertIn("原因：", msg)
+        self.assertIn("下一步：", msg)
         self.assertIn("deepseek-v4-flash", msg)
-        self.assertIn("做多", msg)
+        self.assertIn("偏多", msg)
+        for forbidden in ("入场", "止损", "目标", "仓位", "持仓"):
+            self.assertNotIn(forbidden, msg)
+        self.assertIn("永久 Shadow", msg)
+        self.assertLessEqual(len(msg), 700)
 
     def test_golden_buy(self) -> None:
         fixture = _load_fixture("deepseek_insight_buy")
@@ -169,7 +175,7 @@ class RuntimeEventTests(unittest.TestCase):
         self.assertIn("Non-Farm", msg)
         self.assertIn("12 分钟", msg)
         self.assertIn("阶段：PRE_EVENT", msg)
-        self.assertIn("EA 已自动阻断", msg)
+        self.assertIn("本地风控已标记为阻断", msg)
         self.assertIn("实际 180", msg)
         self.assertIn("预期 175", msg)
         self.assertIn("前值 165", msg)
@@ -227,8 +233,9 @@ class RuntimeEventTests(unittest.TestCase):
             },
         )
         assert msg is not None
-        self.assertIn("开仓", msg)
+        self.assertIn("观察到持仓新增", msg)
         self.assertIn("做多", msg)
+        self.assertIn("未发送此订单", msg)
 
     def test_trade_close(self) -> None:
         msg = render(
@@ -241,7 +248,8 @@ class RuntimeEventTests(unittest.TestCase):
             },
         )
         assert msg is not None
-        self.assertIn("平仓", msg)
+        self.assertIn("观察到持仓结束", msg)
+        self.assertIn("未执行此平仓", msg)
 
     def test_generic_fallback(self) -> None:
         msg = render("runtime_event", {"_event_type": "UNKNOWN_TYPE", "summary": "test"})

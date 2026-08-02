@@ -14,6 +14,8 @@ if str(CURRENT_DIR) not in sys.path:
 from auto_execution_policy.data_loader import write_json
 from auto_execution_policy.policy_engine import AutoExecutionPolicyEngine, load_lot_config
 from auto_execution_policy.telegram_text import build_telegram_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_delivery
+from telegram_gateway_cli import dispatch_cli_text
 
 
 def parse_symbols(value: str) -> List[str]:
@@ -62,16 +64,16 @@ def cmd_telegram_text(args: argparse.Namespace) -> int:
     text = build_telegram_text(document, symbol_filter=args.symbol if args.symbol else None)
     print(text)
     if args.send:
-        try:
-            from telegram_notifier.client import TelegramClient
-            from telegram_notifier.config import load_telegram_config
-        except Exception as exc:  # pragma: no cover
-            print(f"无法加载Telegram推送模块：{exc}", file=sys.stderr)
-            return 2
-        config = load_telegram_config()
-        client = TelegramClient(config)
-        result = client.send_message(text)
+        result = dispatch_cli_text(
+            runtime_dir=args.runtime_dir,
+            source="auto_execution_policy",
+            topic="AUTO_EXECUTION_POLICY_REPORT",
+            severity="WARN",
+            text=text,
+        )
+        result = normalize_delivery(result, send_requested=True)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return explicit_send_exit_code(True, result)
     return 0
 
 

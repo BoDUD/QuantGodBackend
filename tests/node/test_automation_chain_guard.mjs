@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import test from 'node:test';
 
 const root = process.cwd();
+const require = createRequire(import.meta.url);
+const automationChainRoutes = require('../../Dashboard/automation_chain_api_routes.js');
 const files = [
   'tools/run_automation_chain.py',
   'tools/automation_chain/runner.py',
@@ -39,6 +42,20 @@ test('dashboard route stays under api automation chain namespace', () => {
   assert.doesNotMatch(route, /quick-trade/);
 });
 
+test('automation chain Telegram delivery needs body send=true and dryRun=false', () => {
+  for (const body of [{}, { send: true }, { dryRun: false }, { send: true, dryRun: true }]) {
+    assert.equal(automationChainRoutes.explicitTelegramDelivery(body).send, false);
+  }
+  assert.equal(
+    automationChainRoutes.explicitTelegramDelivery({ send: true, dryRun: false }).send,
+    true,
+  );
+  const route = read('Dashboard/automation_chain_api_routes.js');
+  assert.doesNotMatch(route, /params\.get\('send'\)\s*===\s*'1'/);
+  assert.match(route, /params\.has\('send'\)/);
+  assert.match(route, /TELEGRAM_SEND_QUERY_REJECTED/);
+});
+
 test('automation chain defaults to USDJPY scope only', () => {
   const combined = files.map((file) => read(file)).join('\n');
   assert.match(read('tools/run_automation_chain.py'), /USDJPYc/);
@@ -51,6 +68,7 @@ test('automation chain defaults to USDJPY scope only', () => {
 test('automation chain uses the USDJPY shadow advisory loop as source of truth', () => {
   const runner = read('tools/automation_chain/runner.py');
   const text = read('tools/automation_chain/telegram_text.py');
+  const template = read('tools/telegram_digest.py');
   assert.match(runner, /run_usdjpy_strategy_lab\.py/);
   assert.match(runner, /run_usdjpy_live_loop\.py/);
   assert.match(runner, /run_execution_feedback_producer\.py/);
@@ -67,7 +85,9 @@ test('automation chain uses the USDJPY shadow advisory loop as source of truth',
   assert.match(runner, /SHADOW_SIMULATION_ONLY/);
   assert.doesNotMatch(runner, /QuantGod_AutoExecutionPolicy\.json/);
   assert.doesNotMatch(runner, /run_auto_execution_policy\.py/);
-  assert.match(text, /USDJPY Strategy Lab \+ Shadow advisory compatibility loop/);
-  assert.match(text, /executionLaneExists=false/);
-  assert.match(text, /下一轮安全迭代/);
+  assert.match(text, /自动巡检/);
+  assert.match(text + template, /结论/);
+  assert.match(text + template, /下一步/);
+  assert.doesNotMatch(text, /USDJPY Strategy Lab \+ Shadow advisory compatibility loop/);
+  assert.doesNotMatch(text, /executionLaneExists=false/);
 });

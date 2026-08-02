@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
-from usdjpy_evidence_os.telegram_gateway import dispatch_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_cli_payload
+from telegram_gateway_cli import dispatch_cli_text
 from usdjpy_strategy_backtest.history_sync import build_history_production_status, sync_historical_klines
 from usdjpy_strategy_backtest.quality import build_quality_report, write_quality_report
 from usdjpy_strategy_backtest.report import build_sample, run_backtest, status
@@ -47,8 +48,14 @@ def load_strategy(path: str | None) -> Dict[str, Any] | None:
 
 def send_telegram(runtime_dir: Path, text: str) -> Dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
-    load_env(root / ".env.telegram.local")
-    return dispatch_text(runtime_dir, "usdjpy_strategy_backtest", "USDJPY_STRATEGY_BACKTEST_REPORT", "INFO", text, send=True)
+    return dispatch_cli_text(
+        runtime_dir=runtime_dir,
+        source="usdjpy_strategy_backtest",
+        topic="USDJPY_STRATEGY_BACKTEST_REPORT",
+        severity="INFO",
+        text=text,
+        repo_root=root,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -134,7 +141,9 @@ def main(argv: list[str] | None = None) -> int:
         payload: Dict[str, Any] = {"ok": True, "text": content, "report": report}
         if args.send:
             payload["telegramGateway"] = send_telegram(runtime_dir, content)
-        return emit(payload)
+        payload = normalize_cli_payload(payload, send_requested=args.send)
+        emit(payload)
+        return explicit_send_exit_code(args.send, payload.get("telegramGateway"))
     return 1
 
 

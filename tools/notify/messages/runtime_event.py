@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._shared import chinese_risk, fmt_money, fmt_pips, fmt_time_tokyo, safe_truncate
+from ._shared import chinese_risk, fmt_money, fmt_time_tokyo, safe_truncate
 
 
 def render_runtime_event(payload: dict[str, Any]) -> str:
@@ -57,7 +57,7 @@ def _render_news_block(p: dict[str, Any]) -> str:
         "\U0001f4f0 高影响新闻预警",
         f"事件：{safe_truncate(p.get('label') or p.get('event'), 50, '跟踪事件')}{phase_display}",
         f"距离：{p.get('eta') or '--'} 分钟",
-        f"EA 已自动阻断{data_line}",
+        f"本地风控已标记为阻断{data_line}",
     ]
     reason = p.get("reason")
     if reason:
@@ -101,10 +101,11 @@ def _render_trade_open(p: dict[str, Any]) -> str:
     side_zh = "做多" if side_raw in ("BUY", "LONG") else "做空"
     return "\n".join(
         [
-            f"\U0001f7e2 开仓 — {p.get('symbol') or '?'} {side_zh}",
-            f"手数 {p.get('lots') or '0.01'}｜入场 {p.get('price') or '--'}",
+            f"🟡 观察到持仓新增 — {p.get('symbol') or '?'} {side_zh}",
+            f"数量 {p.get('lots') or '—'}｜成交价 {p.get('price') or '--'}",
             f"止损 {p.get('sl') or '--'}｜止盈 {p.get('tp') or '--'}",
             f"路由：{p.get('route') or '--'}｜东京时间 {fmt_time_tokyo()}",
+            "只读观察｜QuantGod 未发送此订单",
         ]
     )
 
@@ -113,9 +114,10 @@ def _render_trade_close(p: dict[str, Any]) -> str:
     pnl_str = fmt_money(p.get("pnl") or p.get("profit") or 0)
     return "\n".join(
         [
-            f"\U0001f534 平仓 — {p.get('symbol') or '?'}",
+            f"🟡 观察到持仓结束 — {p.get('symbol') or '?'}",
             f"盈亏 {pnl_str}｜持仓时长 {p.get('duration') or '--'}",
             f"结束于 {fmt_time_tokyo()}",
+            "只读观察｜QuantGod 未执行此平仓",
         ]
     )
 

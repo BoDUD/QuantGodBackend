@@ -5,16 +5,21 @@ This tool links a local Telegram bot chat and sends push-only notifications.
 It does not run a webhook receiver, parse trading commands, or mutate trading state.
 """
 from __future__ import annotations
+
 import argparse
 import json
+import os
 import time
 import webbrowser
 from pathlib import Path
 from typing import Any
+
+from telegram_digest import build_digest
+from telegram_gateway_cli import dispatch_cli_text
 from telegram_notifier.client import TelegramApiError, TelegramClient, extract_chat_candidates, validate_message_text
 from telegram_notifier.config import TelegramConfig, load_config, update_env_file
 from telegram_notifier.records import record_notification
-from telegram_notifier.safety import assert_telegram_safety, require_chat_id, require_push_enabled, require_token, safety_payload
+from telegram_notifier.safety import assert_telegram_safety, require_token, safety_payload
 
 BOTFATHER_URL = "https://t.me/BotFather"
 
@@ -124,27 +129,72 @@ def command_link(args: argparse.Namespace) -> int:
 def _send_message(args: argparse.Namespace, *, event_type: str, message: str) -> int:
     config = load_config(repo_root=args.repo_root, env_file=args.env_file)
     assert_telegram_safety(config)
-    validate_message_text(message)
-    require_token(config)
-    require_chat_id(config)
-    if args.dry_run:
+    message = validate_message_text(message)
+    if not args.send:
         record = {"ok": True, "recorded": False, "dryRun": True}
         if not args.no_record:
             record = record_notification(config, event_type=event_type, status="dry_run", payload={"messagePreview": message[:160]})
-        emit({"ok": True, "dryRun": True, "messagePreview": message[:160], "record": record, "safety": safety_payload(config)})
+        emit(
+            {
+                "ok": True,
+                "status": "preview",
+                "dryRun": True,
+                "sendRequested": False,
+                "sent": False,
+                "deliveryOk": False,
+                "messagePreview": message,
+                "record": record,
+                "safety": safety_payload(config),
+            }
+        )
         return 0
-    require_push_enabled(config)
-    payload = build_client(config).send_message(chat_id=config.chat_id, text=message, disable_notification=args.disable_notification)
-    result = payload.get("result") or {}
+    gateway = dispatch_cli_text(
+        runtime_dir=Path(os.environ.get("QG_RUNTIME_DIR") or config.repo_root / "runtime"),
+        source="telegram_notifier_cli",
+        topic=event_type,
+        severity="INFO",
+        text=message,
+        repo_root=config.repo_root,
+    )
+    nested_delivery = gateway.get("delivery") if isinstance(gateway.get("delivery"), dict) else {}
+    confirmed = gateway.get("sent") is True and gateway.get("deliveryOk") is True
+    status = "sent" if confirmed else "send_suppressed" if nested_delivery.get("skipped") is True else "send_failed"
     record = {"ok": True, "recorded": False}
     if not args.no_record:
-        record = record_notification(config, event_type=event_type, status="sent", payload={"telegramMessageId": result.get("message_id"), "chatType": (result.get("chat") or {}).get("type"), "messagePreview": message[:160], "disableNotification": args.disable_notification})
-    emit({"ok": True, "sent": True, "telegramMessageId": result.get("message_id"), "record": record, "safety": safety_payload(config)})
-    return 0
+        record = record_notification(
+            config,
+            event_type=event_type,
+            status="sent" if confirmed else status,
+            payload={
+                "telegramMessageId": nested_delivery.get("messageId") if confirmed else None,
+                "messagePreview": message[:160],
+                "reason": nested_delivery.get("reason"),
+            },
+        )
+    gateway.update(
+        {
+            "ok": confirmed,
+            "status": status,
+            "sent": confirmed,
+            "deliveryOk": confirmed,
+            "telegramMessageId": nested_delivery.get("messageId") if confirmed else None,
+            "record": record,
+            "safety": safety_payload(config),
+        }
+    )
+    emit(gateway)
+    return 0 if confirmed else 2
 
 
 def command_test(args: argparse.Namespace) -> int:
-    message = args.message or "QuantGod P3-2 Telegram push-only test: advisory notifications are connected; trading commands remain disabled."
+    message = args.message or build_digest(
+        title="Telegram 预览测试",
+        level="info",
+        conclusion="本地通知格式检查完成；默认未请求外发。",
+        metrics=["模式 Shadow", "命令接收 关闭"],
+        reasons=["该消息仅用于检查中文摘要可读性。"],
+        next_action="确认预览无误后，只有显式使用 --send 才会请求投递。",
+    )
     return _send_message(args, event_type="TELEGRAM_PUSH_TEST", message=message)
 
 
@@ -152,7 +202,14 @@ def command_notify(args: argparse.Namespace) -> int:
     severity = args.severity.strip().lower()
     title = args.title.strip()
     body = args.body.strip()
-    message = f"[QuantGod][{severity}] {title}\n{body}" if body else f"[QuantGod][{severity}] {title}"
+    message = build_digest(
+        title=title,
+        level="danger" if severity == "critical" else severity,
+        conclusion=body or "本地通知已生成，等待操作员复核。",
+        metrics=["模式 Shadow"],
+        reasons=["由本地通知 CLI 生成。"],
+        next_action="在本地面板核对完整上下文。",
+    )
     return _send_message(args, event_type="TELEGRAM_NOTIFICATION", message=message)
 
 
@@ -179,7 +236,10 @@ def build_parser() -> argparse.ArgumentParser:
     link.add_argument("--delete-webhook", action="store_true", help="Delete existing webhook before polling getUpdates")
     link.set_defaults(func=command_link)
     def add_send_args(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--dry-run", action="store_true", help="Validate and record without sending to Telegram")
+        delivery = p.add_mutually_exclusive_group()
+        delivery.add_argument("--send", action="store_true", help="Explicitly request Telegram delivery")
+        delivery.add_argument("--dry-run", dest="send", action="store_false", help="Preview only (default)")
+        p.set_defaults(send=False)
         p.add_argument("--disable-notification", action="store_true", help="Send silently")
         p.add_argument("--no-record", action="store_true", help="Do not write notification evidence to SQLite")
     test = sub.add_parser("test", help="Send a push-only test message")

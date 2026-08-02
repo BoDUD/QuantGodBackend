@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const root = process.cwd();
+const require = createRequire(import.meta.url);
 const files = [
   'tools/ai_analysis/advisory_fusion.py',
   'tools/ai_analysis/deepseek_validator.py',
@@ -75,4 +77,21 @@ test('Phase 1 exposes one-click DeepSeek Telegram route without execution flags'
   assert.match(routes, /--send/);
   assert.match(routes, /orderSendAllowed:\s*false/);
   assert.match(routes, /livePresetMutationAllowed:\s*false/);
+});
+
+test('Phase 1 Telegram delivery requires explicit send and explicit dry-run opt-out', () => {
+  const routes = require(join(root, 'Dashboard/phase1_api_routes.js'));
+  const delivery = routes.explicitTelegramDelivery;
+
+  assert.equal(delivery(undefined, []).send, false);
+  assert.equal(delivery(true, []).send, false);
+  assert.equal(delivery(false, [false]).send, false);
+  assert.equal(delivery(true, [true]).send, false);
+  assert.equal(delivery('true', ['invalid']).send, false);
+  assert.equal(delivery(true, [false]).send, true);
+  assert.equal(delivery('true', ['false']).send, true);
+
+  const source = read('Dashboard/phase1_api_routes.js');
+  assert.match(source, /const force = strictBoolValue\([^;]+\) === true;/);
+  assert.doesNotMatch(source, /const force = boolValue\([^;]+, true\);/);
 });
