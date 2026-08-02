@@ -122,3 +122,72 @@ test('latest dashboard rejects touched old writer evidence and disables optional
   assert.deepEqual(secondary.payload._freshness.blockers, []);
   assert.equal(secondary.payload.safety.orderSendAllowed, false);
 });
+
+test('secondary Shadow auth diagnostics expose the reason without leaking the raw login', async (t) => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quantgod-dashboard-primary-'));
+  const secondaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'quantgod-dashboard-secondary-'));
+  const secondaryFiles = path.join(secondaryRoot, 'MQL5', 'Files');
+  const logDir = path.join(secondaryRoot, 'logs');
+  fs.mkdirSync(secondaryFiles, { recursive: true });
+  fs.mkdirSync(logDir, { recursive: true });
+  const now = new Date();
+  const dateName = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const logDate = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')}`;
+  const privateLogin = '90000002';
+  const brokerServer = ['HFMarketsGlobal', 'Live16'].join('-');
+  fs.writeFileSync(
+    path.join(secondaryFiles, 'QuantGod_Dashboard.json'),
+    JSON.stringify({
+      timestamp: localTimestamp(now.getTime()),
+      account: {
+        number: privateLogin,
+        server: brokerServer,
+        currency: 'USD',
+        balance: 1000,
+        equity: 1000,
+      },
+      runtime: {
+        terminalConnected: false,
+        brokerConnected: false,
+        accountAuthorized: true,
+        tradeAllowed: false,
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(logDir, `${dateName}.log`),
+    `${logDate} 00:00:01.000 Network '${privateLogin}': authorization on ${brokerServer} failed (Invalid account)\n`,
+  );
+  const port = await freePort();
+  const child = spawn(process.execPath, [dashboardServerPath], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      QG_DASHBOARD_HOST: '127.0.0.1',
+      QG_DASHBOARD_PORT: String(port),
+      QG_RUNTIME_DIR: runtimeDir,
+      QG_MT5_SECONDARY_SHADOW_ENABLED: '1',
+      QG_MT5_SECONDARY_FILES_DIR: secondaryFiles,
+      QG_MT5_TRADING_ENABLED: '0',
+      QG_TELEGRAM_SEND_ENABLED: '0',
+      QG_TELEGRAM_COMMANDS_ALLOWED: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    fs.rmSync(runtimeDir, { recursive: true, force: true });
+    fs.rmSync(secondaryRoot, { recursive: true, force: true });
+  });
+  await waitForDashboard(child);
+
+  const secondary = await requestJson(port, '/api/mt5-readonly-secondary/snapshot');
+  assert.equal(secondary.statusCode, 200);
+  assert.equal(secondary.payload.terminal.authLogStatus, 'AUTH_FAILED');
+  assert.equal(secondary.payload.terminal.lastAuthFailure.reason, 'Invalid account');
+  assert.equal(secondary.payload.terminal.lastAuthFailure.login, undefined);
+  assert.equal(secondary.payload.account.login, undefined);
+  assert.equal(secondary.payload.account.loginMasked, '••••0002');
+  assert.equal(JSON.stringify(secondary.payload).includes(privateLogin), false);
+  assert.equal(secondary.payload.safety.orderSendAllowed, false);
+});

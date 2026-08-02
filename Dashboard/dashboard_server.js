@@ -744,7 +744,7 @@ function parseMt5AuthorizationLine(line, dateName = '') {
 }
 
 function readMt5TerminalStatus(rootOverride = '') {
-  if (process.platform !== 'darwin') return null;
+  if (process.platform !== 'darwin' && !rootOverride) return null;
   const root = rootOverride || getMacMt5RootDir();
   if (!fs.existsSync(root)) return null;
   const candidates = recentMt5LogDateNames(4).flatMap((dateName) => [
@@ -772,10 +772,19 @@ function readMt5TerminalStatus(rootOverride = '') {
   const lastAuthorization = [...events].reverse().find((event) => event.type === 'AUTHORIZED') || null;
   const lastAuthFailure = [...events].reverse().find((event) => event.type === 'AUTH_FAILED') || null;
   const latestEvent = events[events.length - 1] || null;
+  const publicEvent = (event) => event
+    ? {
+        type: event.type,
+        logTime: event.logTime,
+        server: event.server,
+        reason: event.reason,
+        message: event.message
+      }
+    : null;
   return {
     status: latestEvent?.type || 'NO_AUTH_EVENT',
-    lastAuthFailure,
-    lastAuthorization,
+    lastAuthFailure: publicEvent(lastAuthFailure),
+    lastAuthorization: publicEvent(lastAuthorization),
     logFile: latestEvent?.filePath || files[0]?.filePath || '',
     logMtimeIso: files[0]?.stat?.mtime ? files[0].stat.mtime.toISOString() : '',
     readOnly: true,
@@ -845,8 +854,46 @@ function secondaryMt5FilesDir() {
 
 function secondaryMt5Enabled() {
   return ['1', 'true', 'yes', 'on'].includes(
-    String(process.env.QG_MT5_SECONDARY_ENABLED || '').trim().toLowerCase()
+    String(process.env.QG_MT5_SECONDARY_SHADOW_ENABLED || '').trim().toLowerCase()
   );
+}
+
+function secondaryMt5Registration() {
+  const prefix = String(process.env.QG_MT5_SECONDARY_WINE_PREFIX || '').trim()
+    || path.join(
+      os.homedir(),
+      'Library',
+      'Application Support',
+      'net.metaquotes.wine.metatrader5-live16'
+    );
+  const selector = path.join(
+    prefix,
+    'drive_c',
+    'qg',
+    'QuantGod_MT5_HFM_LiveSecondary_mac.ini'
+  );
+  return {
+    registered: fs.existsSync(selector),
+    profileLabel: '美元账户',
+    serverAlias: 'HFM Live16',
+    symbol: 'USDJPY'
+  };
+}
+
+function redactSecondaryMt5Identity(payload) {
+  if (!payload || typeof payload !== 'object' || !payload.account || typeof payload.account !== 'object') {
+    return payload;
+  }
+  const rawLogin = String(payload.account.login ?? '').trim();
+  const digits = rawLogin.replace(/[^0-9]/g, '');
+  const { login: _privateLogin, ...publicAccount } = payload.account;
+  return {
+    ...payload,
+    account: {
+      ...publicAccount,
+      ...(digits ? { loginMasked: `••••${digits.slice(-4)}` } : {})
+    }
+  };
 }
 
 function secondaryMt5RootDir() {
@@ -888,6 +935,7 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
   const normalizedEndpoint = endpoint;
   const scope = options.scope === 'secondary' ? 'secondary' : 'primary';
   if (scope === 'secondary' && !secondaryMt5Enabled()) {
+    const registration = secondaryMt5Registration();
     const optionalPayload = {
       ok: true,
       status: 'DISABLED',
@@ -895,6 +943,7 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
       scope,
       optional: true,
       enabled: false,
+      ...registration,
       snapshotFresh: true,
       account: null,
       runtime: {},
@@ -931,8 +980,8 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
         ageSeconds: null,
         maxAgeSeconds: null,
         blockers: [],
-        nextAction: 'Set QG_MT5_SECONDARY_ENABLED=1 only after the secondary account is valid and its read-only EA writer is ready.',
-        nextActionZh: '第二账号为可选车道；账号重新有效并完成只读 EA 配置后，再显式启用。',
+        nextAction: 'Enable QG_MT5_SECONDARY_SHADOW_ENABLED only after the isolated read-only EA writer is ready.',
+        nextActionZh: '第二账号登记仍保留；独立只读 EA writer 就绪后再启用观察实例。',
         orderSendAllowed: false,
         mt5OrderSendAllowed: false,
         brokerCallsMade: false,
@@ -1014,15 +1063,28 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
       return;
     }
     const payload = result.payload && typeof result.payload === 'object' ? result.payload : {};
-    const terminal =
-      (payload?.ok === false || String(payload?.status || '').toUpperCase() === 'UNAVAILABLE')
-        ? scope === 'secondary'
-          ? readMt5TerminalStatus(secondaryMt5RootDir())
-          : readMt5TerminalStatus()
+    const publicPayload = scope === 'secondary' ? redactSecondaryMt5Identity(payload) : payload;
+    const bridgeTerminal = publicPayload?.terminal && typeof publicPayload.terminal === 'object'
+      ? publicPayload.terminal
+      : null;
+    const terminalLog = scope === 'secondary'
+      ? readMt5TerminalStatus(secondaryMt5RootDir())
+      : payload?.ok === false || String(payload?.status || '').toUpperCase() === 'UNAVAILABLE'
+        ? readMt5TerminalStatus()
         : null;
+    const terminal = terminalLog
+      ? {
+          ...(bridgeTerminal || {}),
+          authLogStatus: terminalLog.status,
+          lastAuthFailure: terminalLog.lastAuthFailure,
+          lastAuthorization: terminalLog.lastAuthorization,
+          authLogMtimeIso: terminalLog.logMtimeIso
+        }
+      : null;
     sendJson(res, 200, {
-      ...payload,
+      ...publicPayload,
       scope,
+      ...(scope === 'secondary' ? secondaryMt5Registration() : {}),
       ...(terminal ? { terminal } : {}),
       _api: {
         service: 'quantgod_dashboard_mt5_readonly_bridge',

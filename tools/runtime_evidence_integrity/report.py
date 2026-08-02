@@ -1313,7 +1313,7 @@ def build_core_evidence_manifest(runtime_dir: Path, *, write: bool = False) -> D
             else (
                 "核心证据文件完整，但 history freshness、Case Memory 样本类型或其他 promotion gate 仍阻断 GA/champion 晋级；按 promotionRecoveryQueue 逐项修复。"
                 if not promotion_gate_passed
-                else "继续把 live-loop、production policy、GA、execution feedback 和 case memory 证据纳入晋级门。"
+                else "继续把 live-loop、USDJPY advisory policy、GA、execution feedback 和 case memory 证据纳入晋级门。"
             )
         ),
     }

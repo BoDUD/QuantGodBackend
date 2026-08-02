@@ -340,16 +340,66 @@ def _check_multi_strategy_coverage(matrix: Any) -> Dict[str, Any]:
     }
 
 
+def _live_policy_candidates(live_loop: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
+    nested_policy = live_loop.get("policy") if isinstance(live_loop.get("policy"), dict) else {}
+    sources = (
+        ("topLiveEligiblePolicy", live_loop.get("topLiveEligiblePolicy")),
+        ("liveRecoveryCandidate", live_loop.get("liveRecoveryCandidate")),
+        ("policy.topLiveEligiblePolicy", nested_policy.get("topLiveEligiblePolicy")),
+        ("policy.liveRecoveryCandidate", nested_policy.get("liveRecoveryCandidate")),
+        ("topPolicy", live_loop.get("topPolicy")),
+        ("policy.topPolicy", nested_policy.get("topPolicy")),
+        ("topShadowPolicy", live_loop.get("topShadowPolicy")),
+        ("policy.topShadowPolicy", nested_policy.get("topShadowPolicy")),
+    )
+    candidates: List[Tuple[str, Dict[str, Any]]] = [
+        (source, candidate)
+        for source, candidate in sources
+        if isinstance(candidate, dict) and candidate
+    ]
+    strategies = nested_policy.get("strategies") if isinstance(nested_policy.get("strategies"), list) else []
+    candidates.extend(
+        (f"policy.strategies[{index}]", candidate)
+        for index, candidate in enumerate(strategies)
+        if isinstance(candidate, dict) and candidate
+    )
+    return candidates
+
+
+def _matching_live_policy(vector: Dict[str, Any], live_loop: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    vector_family = str(vector.get("strategyFamily") or "")
+    vector_direction = _normalize_direction(vector.get("direction"))
+    if not vector_family:
+        return "", {}
+
+    same_family = [
+        (source, candidate)
+        for source, candidate in _live_policy_candidates(live_loop)
+        if _policy_strategy(candidate) == vector_family
+    ]
+    if not same_family:
+        return "", {}
+    for source, candidate in same_family:
+        if not vector_direction or _normalize_direction(candidate.get("direction")) == vector_direction:
+            return source, candidate
+    return same_family[0]
+
+
 def _check_parity_vector_vs_live(backtest: Dict[str, Any], live_loop: Dict[str, Any]) -> Dict[str, Any]:
     vector = ((backtest.get("engine") or {}).get("parityVector") or {}) if isinstance(backtest.get("engine"), dict) else {}
-    top_policy = live_loop.get("topLiveEligiblePolicy") or live_loop.get("topPolicy") or {}
+    policy_source, top_policy = _matching_live_policy(vector, live_loop)
     if not vector or not top_policy:
         return {
             "name": "strategy_json_vs_live_loop_policy",
             "status": "MISSING",
             "required": False,
             "promotionCritical": True,
-            "reasonZh": "等待 Live Loop policy 与 Strategy JSON parity vector 同步；同步前不能晋级。",
+            "actual": {
+                "vectorFamily": vector.get("strategyFamily"),
+                "vectorDirection": vector.get("direction"),
+                "policySource": policy_source,
+            },
+            "reasonZh": "等待 Live Loop 同策略族 policy 与 Strategy JSON parity vector 同步；同步前不能晋级。",
         }
     expected_family = _policy_strategy(top_policy)
     expected_direction = _normalize_direction(top_policy.get("direction"))
@@ -369,6 +419,7 @@ def _check_parity_vector_vs_live(backtest: Dict[str, Any], live_loop: Dict[str, 
             "vectorDirection": vector.get("direction"),
             "policyFamily": expected_family,
             "policyDirection": expected_direction,
+            "policySource": policy_source,
         },
         "reasonZh": "Strategy JSON 与 Live Loop 候选策略方向一致" if status == "PASS" else f"Strategy JSON 与 Live Loop 存在硬口径差异：{', '.join(mismatches)}",
     }

@@ -31,6 +31,8 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             runtime = Path(tmp)
             sample_runtime(runtime, overwrite=True)
             policy = build_usdjpy_policy(runtime, write=True)
+            self.assertEqual(policy["schema"], "quantgod.usdjpy_auto_execution_policy.v1")
+            self.assertEqual(policy["schemaVersion"], 1)
             self.assertEqual(policy["symbol"], FOCUS_SYMBOL)
             self.assertEqual(policy["allowedSymbols"], [FOCUS_SYMBOL])
             self.assertTrue(policy["policyConstraints"]["rsiLiveRoutePreserved"])
@@ -51,6 +53,7 @@ class USDJPYStrategyLabTests(unittest.TestCase):
             self.assertTrue(output.exists())
             self.assertFalse((runtime / "adaptive" / "QuantGod_AutoExecutionPolicy.json").exists())
             saved = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(saved["schemaVersion"], 1)
             self.assertEqual(saved["symbol"], FOCUS_SYMBOL)
             regimes = {item["regime"] for item in policy["strategies"]}
             self.assertNotIn("0.6", regimes)

@@ -1016,6 +1016,7 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
     )
     payload = {
         "schema": "quantgod.usdjpy_auto_execution_policy.v1",
+        "schemaVersion": 1,
         "generatedAt": utc_now_iso(),
         "strategyCatalogVersion": STRATEGY_CATALOG_VERSION,
         "focusOnly": True,

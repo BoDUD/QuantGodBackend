@@ -33,11 +33,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         "generatedAt,state\n2026-06-01T00:00:00Z,EVIDENCE_MISSING\n",
     )
     write_json(
-        runtime_dir / "agent" / "QuantGod_ProductionExecutionPolicy.json",
-        {"schema": "quantgod.production_execution_policy.v1", "version": 1, "status": "BLOCKED"},
-    )
-    write_json(
-        runtime_dir / "adaptive" / "QuantGod_AutoExecutionPolicy.json",
+        runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json",
         {
             "schema": "quantgod.usdjpy_auto_execution_policy.v1",
             "schemaVersion": 1,
@@ -45,7 +41,7 @@ def write_complete_runtime(runtime_dir: Path) -> None:
         },
     )
     write_text(
-        runtime_dir / "adaptive" / "QuantGod_AutoExecutionPolicyLedger.csv",
+        runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicyLedger.csv",
         "generatedAt,symbol,entryMode\n2026-06-01T00:00:00Z,USDJPYc,BLOCKED\n",
     )
     write_json(
@@ -216,16 +212,26 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["promotionBlockerSummary"], [])
             self.assertEqual(manifest["promotionRecoveryQueueCount"], 0)
             self.assertEqual(manifest["promotionRecoveryQueue"], [])
-            self.assertEqual(manifest["jsonArtifactCount"], 11)
-            self.assertEqual(manifest["jsonDeclaredVersionCount"], 11)
+            self.assertEqual(manifest["jsonArtifactCount"], 10)
+            self.assertEqual(manifest["jsonDeclaredVersionCount"], 10)
             self.assertEqual(manifest["versionCoverageStatus"], "PASS")
             self.assertEqual(manifest["versionMissingArtifacts"], [])
-            self.assertEqual(manifest["declaredVersionRequiredCount"], 11)
+            self.assertEqual(manifest["declaredVersionRequiredCount"], 10)
             self.assertEqual(manifest["declaredVersionRequiredMissingCount"], 0)
             self.assertEqual(manifest["declaredVersionRequiredStatus"], "PASS")
             self.assertFalse(manifest["safety"]["orderSendAllowed"])
             self.assertEqual(manifest["hashAlgorithm"], "sha256")
-            self.assertEqual(manifest["artifactCount"], 15)
+            self.assertEqual(manifest["artifactCount"], 14)
+            self.assertNotIn("productionExecutionPolicy", {row["artifactId"] for row in manifest["artifacts"]})
+            auto_policy_row = next(row for row in manifest["artifacts"] if row["artifactId"] == "autoExecutionPolicy")
+            self.assertEqual(auto_policy_row["path"], "adaptive/QuantGod_USDJPYAutoExecutionPolicy.json")
+            auto_policy_ledger_row = next(
+                row for row in manifest["artifacts"] if row["artifactId"] == "autoExecutionPolicyLedger"
+            )
+            self.assertEqual(
+                auto_policy_ledger_row["path"],
+                "adaptive/QuantGod_USDJPYAutoExecutionPolicyLedger.csv",
+            )
             self.assertIn("historyProductionStatus", {row["artifactId"] for row in manifest["artifacts"]})
             ga_stability_row = next(
                 row for row in manifest["artifacts"] if row["artifactId"] == "gaMultiGenerationStabilityReport"
@@ -286,14 +292,15 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
             self.assertFalse(case_memory_row["declaredVersionPresent"])
             self.assertEqual(case_memory_row["versionStatus"], "MISSING_REQUIRED_VERSION")
 
-    def test_legacy_quantgod_absolute_path_blocks_manifest(self) -> None:
+    def test_legacy_quantgod_absolute_path_in_active_policy_blocks_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime_dir = Path(tmp)
             write_complete_runtime(runtime_dir)
             write_json(
-                runtime_dir / "agent" / "QuantGod_ProductionExecutionPolicy.json",
+                runtime_dir / "adaptive" / "QuantGod_USDJPYAutoExecutionPolicy.json",
                 {
-                    "schema": "quantgod.production_execution_policy.v1",
+                    "schema": "quantgod.usdjpy_auto_execution_policy.v1",
+                    "schemaVersion": 1,
                     "legacyPath": "/Users/bowen/Desktop/Quard/" + "QuantGod/runtime/old.json",
                 },
             )
@@ -302,7 +309,7 @@ class RuntimeEvidenceIntegrityTests(unittest.TestCase):
 
             self.assertEqual(manifest["status"], "FAIL")
             self.assertIn(
-                "productionExecutionPolicy:legacy_quantgod_absolute_path",
+                "autoExecutionPolicy:legacy_quantgod_absolute_path",
                 manifest["blockers"],
             )
 

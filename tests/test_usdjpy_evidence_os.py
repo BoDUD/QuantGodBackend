@@ -12,7 +12,7 @@ from tools.strategy_ga.seed_generator import case_memory_seed_pool
 from tools.strategy_json.schema import base_strategy_seed
 from tools.usdjpy_evidence_os.execution_feedback import build_execution_feedback
 from tools.usdjpy_evidence_os.io_utils import append_jsonl_unique, read_jsonl_tail
-from tools.usdjpy_evidence_os.parity import build_parity_report
+from tools.usdjpy_evidence_os.parity import _check_parity_vector_vs_live, build_parity_report
 from tools.usdjpy_evidence_os.report import build_evidence_os
 from tools.usdjpy_evidence_os.telegram_gateway import (
     build_notification_event,
@@ -26,6 +26,54 @@ from tools.usdjpy_strategy_backtest.report import ingest_klines, run_backtest
 
 
 class USDJPYEvidenceOSTests(unittest.TestCase):
+    def test_parity_uses_matching_rsi_recovery_candidate_instead_of_generic_shadow_top(self):
+        backtest = {
+            "engine": {
+                "parityVector": {
+                    "strategyFamily": "RSI_Reversal",
+                    "direction": "LONG",
+                }
+            }
+        }
+        live_loop = {
+            "topPolicy": {"strategy": "BB_Triple", "direction": "LONG"},
+            "topShadowPolicy": {"strategy": "BB_Triple", "direction": "LONG"},
+            "policy": {
+                "liveRecoveryCandidate": {
+                    "strategy": "RSI_Reversal",
+                    "direction": "LONG",
+                    "entryMode": "BLOCKED",
+                }
+            },
+        }
+
+        check = _check_parity_vector_vs_live(backtest, live_loop)
+
+        self.assertEqual(check["status"], "PASS")
+        self.assertFalse(check["required"])
+        self.assertEqual(check["actual"]["policyFamily"], "RSI_Reversal")
+        self.assertEqual(check["actual"]["policySource"], "policy.liveRecoveryCandidate")
+
+    def test_parity_does_not_compare_rsi_vector_to_unrelated_shadow_family(self):
+        backtest = {
+            "engine": {
+                "parityVector": {
+                    "strategyFamily": "RSI_Reversal",
+                    "direction": "LONG",
+                }
+            }
+        }
+        live_loop = {
+            "topPolicy": {"strategy": "BB_Triple", "direction": "LONG"},
+            "topShadowPolicy": {"strategy": "BB_Triple", "direction": "LONG"},
+        }
+
+        check = _check_parity_vector_vs_live(backtest, live_loop)
+
+        self.assertEqual(check["status"], "MISSING")
+        self.assertFalse(check["required"])
+        self.assertEqual(check["actual"]["vectorFamily"], "RSI_Reversal")
+
     def _write_ready_agent_ops_evidence(self, runtime_dir: Path) -> None:
         now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         (runtime_dir / "agent").mkdir(parents=True, exist_ok=True)
