@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const {
+  normalizeTelegramPreviewPayload,
+  rejectGetTelegramSendQuery,
+} = require('./telegram_preview_contract');
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -86,6 +90,7 @@ async function handle(req, res, ctx) {
   const requestUrl = req.url || '';
   const url = new URL(requestUrl, 'http://127.0.0.1');
   const pathname = url.pathname;
+  if (rejectGetTelegramSendQuery(req, res, url, sendJson)) return;
   const runtimeDir = ctx.defaultRuntimeDir;
   if (
     req.method === 'GET' &&
@@ -113,9 +118,8 @@ async function handle(req, res, ctx) {
   }
   if (req.method === 'GET' && pathname === '/api/strategy-ga-factory/telegram-text') {
     const args = ['--runtime-dir', runtimeDir, 'telegram-text'];
-    if (url.searchParams.get('refresh') === '1') args.push('--refresh');
     const payload = await runPythonJson(ctx.repoRoot, args);
-    sendJson(res, statusCodeFor(payload), payload);
+    sendJson(res, statusCodeFor(payload), normalizeTelegramPreviewPayload(payload));
     return;
   }
   sendJson(res, 404, { ok: false, error: 'STRATEGY_GA_FACTORY_NOT_FOUND', endpoint: pathname });
@@ -124,5 +128,6 @@ async function handle(req, res, ctx) {
 module.exports = {
   handle,
   isStrategyGAFactoryPath,
+  sendJson,
   sendError,
 };

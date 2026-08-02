@@ -1,5 +1,9 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const {
+  normalizeTelegramPreviewPayload,
+  rejectGetTelegramSendQuery,
+} = require('./telegram_preview_contract');
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -56,7 +60,9 @@ function runPython(repoRoot, defaultRuntimeDir, command, extraArgs = []) {
 
 async function handle(req, res, context) {
   const requestUrl = req.url || '/';
-  const pathname = requestUrl.split('?')[0];
+  const url = new URL(requestUrl, 'http://127.0.0.1');
+  const pathname = url.pathname;
+  if (rejectGetTelegramSendQuery(req, res, url, sendJson)) return;
   if (req.method === 'GET' && (pathname === '/api/production-evidence-validation' || pathname === '/api/production-evidence-validation/status')) {
     const payload = await runPython(context.repoRoot, context.defaultRuntimeDir, 'status');
     sendJson(res, 200, payload);
@@ -98,9 +104,20 @@ async function handle(req, res, context) {
     return;
   }
   if (req.method === 'GET' && pathname === '/api/production-evidence-validation/telegram-text') {
-    const refresh = requestUrl.includes('refresh=1') || requestUrl.includes('refresh=true');
-    const payload = await runPython(context.repoRoot, context.defaultRuntimeDir, 'telegram-text', refresh ? ['--refresh', '--write'] : []);
-    sendJson(res, 200, payload);
+    try {
+      const payload = await runPython(
+        context.repoRoot,
+        context.defaultRuntimeDir,
+        'telegram-text',
+        [],
+      );
+      sendJson(res, 200, normalizeTelegramPreviewPayload(payload));
+    } catch (error) {
+      sendJson(res, 500, normalizeTelegramPreviewPayload({
+        ok: false,
+        error: error && error.message ? error.message : String(error),
+      }));
+    }
     return;
   }
   sendJson(res, 404, { ok: false, error: 'not_found', endpoint: requestUrl });

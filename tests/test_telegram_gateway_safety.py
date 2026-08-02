@@ -93,6 +93,33 @@ class TelegramGatewaySafetyTests(unittest.TestCase):
         self.assertTrue(status["environmentSafe"])
         self.assertEqual(status["blockedUnsafeEnvironmentKeys"], [])
 
+    def test_gateway_status_confirms_push_only_boundary_without_enabling_push(self) -> None:
+        environment = {key: "0" for key in FORBIDDEN_TELEGRAM_GATEWAY_TRUTHY_ENV}
+        environment["QG_TELEGRAM_PUSH_ALLOWED"] = "0"
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, environment, clear=False):
+            status = gateway_status(Path(tmp))
+
+        self.assertFalse(status["pushAllowed"])
+        self.assertTrue(status["pushOnly"])
+        self.assertTrue(status["notificationPushOnly"])
+        self.assertFalse(status["commandsAllowed"])
+        self.assertFalse(status["executionLaneExists"])
+        safety = status["safety"]
+        self.assertTrue(safety["pushOnly"])
+        self.assertTrue(safety["notificationPushOnly"])
+        self.assertFalse(safety["commandsAllowed"])
+        self.assertFalse(safety["telegramCommandExecutionAllowed"])
+        self.assertFalse(safety["gatewayReceivesCommands"])
+        self.assertFalse(safety["executionLaneExists"])
+        for key in (
+            "orderSendAllowed",
+            "closeAllowed",
+            "cancelAllowed",
+            "livePresetMutationAllowed",
+            "writesMt5OrderRequest",
+        ):
+            self.assertFalse(safety[key], key)
+
     def test_all_supported_truthy_command_values_fail_closed_before_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             for value in ("1", " true ", "TRUE", "yes", "YES", "y", "on", "ON", "allow", "allowed"):
