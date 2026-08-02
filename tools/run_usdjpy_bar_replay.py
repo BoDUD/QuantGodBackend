@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from typing import Dict
 
-from usdjpy_evidence_os.telegram_gateway import dispatch_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_cli_payload
+from telegram_gateway_cli import dispatch_cli_text
 from usdjpy_bar_replay.dataset_loader import sample_runtime
 from usdjpy_bar_replay.replay_engine import build_bar_replay_report, build_entry_comparison, build_exit_comparison
 from usdjpy_bar_replay.schema import FOCUS_SYMBOL, READ_ONLY_SAFETY
@@ -36,8 +37,14 @@ def emit(payload) -> int:
 
 def send_telegram(runtime_dir: Path, text: str) -> Dict[str, object]:
     root = Path(__file__).resolve().parents[1]
-    load_env(root / ".env.telegram.local")
-    return dispatch_text(runtime_dir, "usdjpy_bar_replay", "USDJPY_BAR_REPLAY_REPORT", "INFO", text, send=True)
+    return dispatch_cli_text(
+        runtime_dir=runtime_dir,
+        source="usdjpy_bar_replay",
+        topic="USDJPY_BAR_REPLAY_REPORT",
+        severity="INFO",
+        text=text,
+        repo_root=root,
+    )
 
 
 def main(argv=None) -> int:
@@ -82,7 +89,9 @@ def main(argv=None) -> int:
         result = {"ok": True, "text": content, "report": payload}
         if args.send:
             result["telegramGateway"] = send_telegram(runtime_dir, content)
-        return emit(result)
+        result = normalize_cli_payload(result, send_requested=args.send)
+        emit(result)
+        return explicit_send_exit_code(args.send, result.get("telegramGateway"))
     return 1
 
 

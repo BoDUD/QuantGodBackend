@@ -17,7 +17,8 @@ from autonomous_lifecycle.cent_account_rules import cent_account_config
 from autonomous_lifecycle.ea_reproducibility import build_ea_reproducibility
 from autonomous_lifecycle.lifecycle import build_autonomous_lifecycle
 from autonomous_lifecycle.mt5_shadow_lane import build_mt5_shadow_lane
-from usdjpy_evidence_os.telegram_gateway import dispatch_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_cli_payload
+from telegram_gateway_cli import dispatch_cli_text
 from usdjpy_walk_forward.selector import sample_walk_forward_runtime
 
 
@@ -40,8 +41,14 @@ def emit(payload) -> int:
 
 def send_telegram(runtime_dir: Path, text: str) -> Dict[str, object]:
     root = Path(__file__).resolve().parents[1]
-    load_env(root / ".env.telegram.local")
-    return dispatch_text(runtime_dir, "usdjpy_autonomous_agent", "USDJPY_AUTONOMOUS_AGENT_REPORT", "INFO", text, send=True)
+    return dispatch_cli_text(
+        runtime_dir=runtime_dir,
+        source="usdjpy_autonomous_agent",
+        topic="USDJPY_AUTONOMOUS_AGENT_REPORT",
+        severity="INFO",
+        text=text,
+        repo_root=root,
+    )
 
 
 def main(argv=None) -> int:
@@ -120,7 +127,9 @@ def main(argv=None) -> int:
         result = {"ok": True, "text": content, "state": payload}
         if args.send:
             result["telegramGateway"] = send_telegram(runtime_dir, content)
-        return emit(result)
+        result = normalize_cli_payload(result, send_requested=args.send)
+        emit(result)
+        return explicit_send_exit_code(args.send, result.get("telegramGateway"))
     return 1
 
 

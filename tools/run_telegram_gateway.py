@@ -7,14 +7,24 @@ import os
 import sys
 from pathlib import Path
 
-from usdjpy_evidence_os.telegram_gateway import (
-    SCHEDULED_REPORT_TOPICS,
-    build_notification_event,
-    collect_scheduled_events,
-    dispatch_pending,
-    enqueue_event,
-    gateway_status,
-)
+try:
+    from usdjpy_evidence_os.telegram_gateway import (
+        SCHEDULED_REPORT_TOPICS,
+        build_notification_event,
+        collect_scheduled_events,
+        dispatch_pending,
+        enqueue_event,
+        gateway_status,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.usdjpy_evidence_os.telegram_gateway import (
+        SCHEDULED_REPORT_TOPICS,
+        build_notification_event,
+        collect_scheduled_events,
+        dispatch_pending,
+        enqueue_event,
+        gateway_status,
+    )
 
 
 def load_env(path: Path) -> None:
@@ -29,9 +39,46 @@ def load_env(path: Path) -> None:
             os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
-def emit(payload: dict) -> int:
+def emit(payload: dict, exit_code: int = 0) -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    return 0
+    return exit_code
+
+
+def emit_explicit_send(payload: dict) -> int:
+    """Make the process status match nested Telegram delivery receipts."""
+    normalized = dict(payload)
+    results = normalized.get("dispatchResults")
+    dispatch_results = results if isinstance(results, list) else []
+    failed = [
+        row
+        for row in dispatch_results
+        if not isinstance(row, dict)
+        or not _delivery_result_confirmed(row)
+    ]
+    sent_count = sum(
+        1
+        for row in dispatch_results
+        if isinstance(row, dict) and _delivery_result_confirmed(row)
+    )
+    normalized.update(
+        {
+            "sendRequested": True,
+            "sent": sent_count > 0,
+            "sentCount": sent_count,
+            "deliveryOk": not failed if dispatch_results else None,
+            "failedDeliveryCount": len(failed),
+        }
+    )
+    if failed:
+        normalized["ok"] = False
+        normalized["error"] = "TELEGRAM_DELIVERY_NOT_CONFIRMED"
+        return emit(normalized, exit_code=2)
+    return emit(normalized)
+
+
+def _delivery_result_confirmed(result: dict) -> bool:
+    delivery = result.get("delivery") if isinstance(result.get("delivery"), dict) else {}
+    return delivery.get("ok") is True and delivery.get("messageId") not in (None, "")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -72,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "collect":
         return emit(collect_scheduled_events(runtime_dir, repo_root=repo_root, refresh=args.refresh))
     if args.command == "dispatch":
-        return emit(dispatch_pending(runtime_dir, send=args.send, limit=args.limit))
+        payload = dispatch_pending(runtime_dir, send=args.send, limit=args.limit)
+        return emit_explicit_send(payload) if args.send else emit(payload)
     if args.command == "run-once":
         collect_status = collect_scheduled_events(runtime_dir, repo_root=repo_root, refresh=args.refresh)
         if not args.send:
@@ -85,7 +133,10 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             allowed_topics=list(SCHEDULED_REPORT_TOPICS),
         )
-        return emit({"ok": True, "collect": collect_status, "dispatch": dispatch_status})
+        payload = {"ok": True, "collect": collect_status, "dispatch": dispatch_status}
+        dispatch_results = dispatch_status.get("dispatchResults") if isinstance(dispatch_status, dict) else []
+        payload["dispatchResults"] = dispatch_results if isinstance(dispatch_results, list) else []
+        return emit_explicit_send(payload)
     return 1
 
 

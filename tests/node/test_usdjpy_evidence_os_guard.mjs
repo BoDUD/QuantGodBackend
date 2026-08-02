@@ -215,7 +215,7 @@ test('USDJPY operator reports use Telegram Gateway instead of direct senders', (
   ];
   for (const file of runners) {
     const source = read(file);
-    assert.match(source, /dispatch_text/, `${file} should dispatch through the Telegram Gateway`);
+    assert.match(source, /dispatch_cli_text/, `${file} should dispatch through the canonical Telegram CLI Gateway`);
     assert.match(source, /telegramGateway/, `${file} should expose gateway delivery evidence`);
     assert.doesNotMatch(source, /urllib\.request|urllib\.parse|urlopen|sendMessage/, `${file} should not directly call Telegram`);
   }

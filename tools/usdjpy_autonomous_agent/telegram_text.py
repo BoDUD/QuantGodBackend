@@ -1,69 +1,60 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
+
+try:
+    from telegram_digest import build_digest, clean_text
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import build_digest, clean_text
 
 
-def _fmt(value: Any, fallback: str = "—") -> str:
-    return fallback if value in (None, "") else str(value)
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
-def autonomous_agent_to_chinese_text(payload: Dict[str, Any]) -> str:
-    decision = payload.get("promotionDecision") if isinstance(payload.get("promotionDecision"), dict) else {}
-    patch = payload.get("currentPatch") if isinstance(payload.get("currentPatch"), dict) else {}
-    limits = patch.get("limits") if isinstance(patch.get("limits"), dict) else {}
-    rollback = patch.get("rollback") if isinstance(patch.get("rollback"), dict) else {}
+def _stage_label(payload: dict[str, Any]) -> str:
+    stage = str(payload.get("stage") or "").upper()
+    stage_zh = clean_text(payload.get("stageZh"))
+    if stage == "TESTER_ONLY" or "测试器" in stage_zh:
+        return "测试器验证"
+    if "SHADOW" in stage or "影子" in stage_zh:
+        return "Shadow 验证"
+    if "PAPER" in stage or "模拟" in stage_zh:
+        return "模拟验证"
+    return stage_zh or "只读验证"
+
+
+def autonomous_agent_to_chinese_text(payload: dict[str, Any]) -> str:
+    decision = _dict(payload.get("promotionDecision"))
+    patch = _dict(payload.get("currentPatch"))
+    rollback = _dict(patch.get("rollback"))
     candidates = decision.get("candidates") if isinstance(decision.get("candidates"), list) else []
-    cent = payload.get("centAccount") if isinstance(payload.get("centAccount"), dict) else {}
-    lanes = payload.get("lanes") if isinstance(payload.get("lanes"), dict) else {}
-    mt5_shadow = lanes.get("mt5Shadow") if isinstance(lanes.get("mt5Shadow"), dict) else {}
-    mt5_summary = mt5_shadow.get("summary") if isinstance(mt5_shadow.get("summary"), dict) else {}
-    patch_writable = bool(payload.get("patchWritable"))
-    lines = [
-        "【QuantGod USDJPY 美分账户自主 Agent】",
-        "",
-        f"当前阶段：{_fmt(payload.get('stageZh') or payload.get('stage'))}",
-        f"受控 patch：{'允许写入' if patch_writable else '未放行'}；实盘 preset 修改：禁止。",
-        (
-            f"账户模式：{_fmt(cent.get('accountMode'), 'cent')} / "
-            f"{_fmt(cent.get('accountCurrencyUnit'), 'USC')}；"
-            f"美分加速：{'开启' if cent.get('centAccountAcceleration') else '关闭'}。"
-        ),
-        (
-            f"阶段仓位上限：{_fmt(limits.get('stageMaxLot'), '0')} / "
-            f"系统上限 {_fmt(limits.get('maxLot'), '2.0')}；2.0 只是上限，不是固定仓位。"
-        ),
-        "审批模式：当前仅 Shadow/ReadOnly；任何未来实盘范围都必须另行人工审核。",
-        "",
-        "三车道：",
-        "- Live：禁用；USDJPYc 仅生成 Shadow/Paper 证据。",
-        (
-            f"- MT5 模拟：{_fmt(mt5_summary.get('routeCount'), '0')} 条路线；"
-            f"快速模拟 {_fmt(mt5_summary.get('fastShadow'), '0')}；"
-            f"测试器 {_fmt(mt5_summary.get('testerOnly'), '0')}。"
-        ),
-        "",
-        "候选参数：",
-    ]
-    if candidates:
-        for item in candidates[:4]:
-            summary = item.get("summary") if isinstance(item.get("summary"), dict) else {}
-            lines.append(
-                f"- {_fmt(item.get('labelZh') or item.get('variant'))}：{_fmt(item.get('autonomousStageZh'))}，"
-                f"净变化 {_fmt(summary.get('netRDelta'), '0')}R"
-            )
-    else:
-        lines.append("- 暂无候选，等待回放样本。")
+    mt5_summary = _dict(_dict(_dict(payload.get("lanes")).get("mt5Shadow")).get("summary"))
     blockers = rollback.get("hardBlockers") if isinstance(rollback.get("hardBlockers"), list) else []
-    lines.extend(["", "硬风控："])
+
     if blockers:
-        lines.extend(f"- {item}" for item in blockers[:5])
+        conclusion = "硬风控已触发，Agent 保持只读并停止候选推进。"
+        level = "danger"
+        reasons = [clean_text(item) for item in blockers[:2]]
+        next_action = "等待证据修复后由下一轮 Agent 自动复核。"
     else:
-        lines.append("- 当前未触发硬回滚。")
-    lines.extend([
-        "",
-        (
-            "底线：USDJPY-only；DeepSeek 只解释；"
-            "Telegram 不接交易命令；Agent 只写 EA 白名单运行时 patch。"
-        ),
-    ])
-    return "\n".join(lines)
+        conclusion = "Agent 运行正常；当前仅做测试器与 Shadow 验证。"
+        level = "ok"
+        reasons = ["未触发硬回滚；系统没有订单执行通道。"]
+        next_action = "继续收集回放样本和策略一致性证据。"
+
+    metrics = [
+        f"{clean_text(payload.get('symbol'), 'USDJPYc')} / {_stage_label(payload)}",
+        f"模拟路线 {int(mt5_summary.get('routeCount') or 0)}",
+        f"候选策略 {len(candidates)}",
+        f"暂停路线 {int(mt5_summary.get('paused') or 0)}",
+    ]
+    return build_digest(
+        title="策略 Agent",
+        level=level,
+        conclusion=conclusion,
+        metrics=metrics,
+        reasons=reasons,
+        next_action=next_action,
+        generated_at=payload.get("generatedAtIso"),
+    )

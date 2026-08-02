@@ -14,18 +14,21 @@ Distinct from ``ai_advisory``:
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from ._shared import (
-    chinese_action,
     chinese_risk,
     fmt_pct,
-    fmt_time_tokyo,
     safe_truncate,
 )
 
+try:
+    from telegram_digest import build_digest, sanitize_execution_language
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import build_digest, sanitize_execution_language
 
-def render_deepseek_insight(payload: dict[str, Any]) -> Optional[str]:
+
+def render_deepseek_insight(payload: dict[str, Any]) -> str | None:
     """Render a DeepSeek-powered insight message.
 
     Returns:
@@ -79,61 +82,19 @@ def render_deepseek_insight(payload: dict[str, Any]) -> Optional[str]:
         advice.get("bearCase") or "空方证据待确认", 160
     )
 
-    entry = decision.get("entryZone") or _format_entry(decision)
-    sl = decision.get("stopLoss") or decision.get("sl") or "--"
-    sl_pips = decision.get("stopLossPips")
-    targets = decision.get("targets") or []
-    rr = decision.get("riskReward") or "--"
-    invalidation = safe_truncate(
-        decision.get("invalidation"), 80, "无明确失效条件"
+    direction = "偏多" if action == "BUY" else "偏空"
+    agreement = safe_truncate(fusion_agreement, 36, "待复核")
+    market_reason = _shadow_excerpt(market_summary)
+    debate_reason = _shadow_excerpt(f"多方 {bull_case}；空方 {bear_case}")
+    return build_digest(
+        title="DeepSeek 观察",
+        level="warning",
+        conclusion=f"{symbol} {timeframe} 当前{direction}；仅记录方向性 Shadow 观察。",
+        metrics=[f"置信度 {fmt_pct(confidence)}", f"风险 {risk}", grade, f"模型 {model}"],
+        reasons=[market_reason, f"共识 {agreement}；{debate_reason}"],
+        next_action="在本地面板复核证据来源、风险门禁与多周期一致性。",
+        generated_at=payload.get("generatedAt") or payload.get("generatedAtIso"),
     )
-
-    news_risk = safe_truncate(
-        advice.get("newsRisk") or "暂无高影响事件", 130
-    )
-    sentiment_positioning = safe_truncate(
-        advice.get("sentimentPositioning") or "数据不足", 130
-    )
-
-    direction = chinese_action(action)
-
-    sl_line = (
-        f"止损：{sl}（{sl_pips} 点）" if sl_pips else f"止损：{sl}"
-    )
-    targets_line = (
-        " / ".join(str(t) for t in targets[:3])
-        if targets
-        else "--"
-    )
-
-    lines = [
-        f"\U0001f916 DeepSeek 深度研判 — {symbol}",
-        f"方向：{direction}｜置信度 {fmt_pct(confidence)}",
-        f"信号等级：{grade}｜风险：{risk}",
-        f"AI 共识：{fusion_agreement}" if fusion_agreement else None,
-        "",
-        "【市场摘要】",
-        market_summary,
-        "",
-        "【多空辩论】",
-        f"\U0001f53c 多方：{bull_case}",
-        f"\U0001f53d 空方：{bear_case}",
-        "",
-        "【交易计划】",
-        f"入场：{entry}",
-        sl_line,
-        f"目标：{targets_line}",
-        f"盈亏比：{rr}",
-        f"失效：{invalidation}",
-        "",
-        "【新闻与情绪】",
-        news_risk,
-        sentiment_positioning,
-        "",
-        "仅作研判，不执行交易",
-        f"分析模型：{model}｜东京时间 {fmt_time_tokyo()}",
-    ]
-    return "\n".join(line for line in lines if line is not None)
 
 
 # -----------------------------------------------------------------------
@@ -141,7 +102,7 @@ def render_deepseek_insight(payload: dict[str, Any]) -> Optional[str]:
 # -----------------------------------------------------------------------
 
 
-def _primary_tf(payload: dict[str, Any]) -> Optional[str]:
+def _primary_tf(payload: dict[str, Any]) -> str | None:
     tfs = payload.get("timeframes") or []
     return tfs[0] if tfs else None
 
@@ -161,11 +122,9 @@ def _infer_grade(decision: dict[str, Any]) -> str:
         return "B 级"
 
 
-def _format_entry(decision: dict[str, Any]) -> str:
-    entry = decision.get("entry") or decision.get("price")
-    if entry is None:
-        return "--"
-    spread = decision.get("entrySpread") or 0
-    if spread:
-        return f"{entry} ± {spread}"
-    return str(entry)
+def _shadow_excerpt(value: Any) -> str:
+    text = safe_truncate(value, 88, "模型未给出可用摘要")
+    return sanitize_execution_language(
+        text,
+        "模型给出方向性信号；交易计划细节已从 Telegram 摘要中隐藏。",
+    )

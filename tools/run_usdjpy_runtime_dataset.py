@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 from typing import Dict
 
-from usdjpy_evidence_os.telegram_gateway import dispatch_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_cli_payload
+from telegram_gateway_cli import dispatch_cli_text
 from usdjpy_runtime_dataset.builder import build_runtime_dataset
 from usdjpy_runtime_dataset.config_proposal import build_live_config_proposal
 from usdjpy_runtime_dataset.param_tuner import build_param_tuning_report
@@ -37,8 +38,14 @@ def emit(payload) -> int:
 
 def send_telegram(runtime_dir: Path, text: str) -> Dict[str, object]:
     root = Path(__file__).resolve().parents[1]
-    load_env(root / ".env.telegram.local")
-    return dispatch_text(runtime_dir, "usdjpy_runtime_evolution", "USDJPY_RUNTIME_EVOLUTION_REPORT", "INFO", text, send=True)
+    return dispatch_cli_text(
+        runtime_dir=runtime_dir,
+        source="usdjpy_runtime_evolution",
+        topic="USDJPY_RUNTIME_EVOLUTION_REPORT",
+        severity="INFO",
+        text=text,
+        repo_root=root,
+    )
 
 
 def build_all(runtime_dir: Path, write: bool = False) -> Dict[str, object]:
@@ -106,7 +113,9 @@ def main(argv=None) -> int:
         result = {"ok": True, "text": content, "payload": payload}
         if args.send:
             result["telegramGateway"] = send_telegram(runtime_dir, content)
-        return emit(result)
+        result = normalize_cli_payload(result, send_requested=args.send)
+        emit(result)
+        return explicit_send_exit_code(args.send, result.get("telegramGateway"))
     if args.command == "loop":
         while True:
             payload = build_all(runtime_dir, write=True)
@@ -114,7 +123,10 @@ def main(argv=None) -> int:
             result = {"ok": True, "textPreview": content[:500], "generatedAtIso": payload["dataset"].get("generatedAtIso")}
             if args.send:
                 result["telegramGateway"] = send_telegram(runtime_dir, content)
+            result = normalize_cli_payload(result, send_requested=args.send)
             print(json.dumps(result, ensure_ascii=False), flush=True)
+            if explicit_send_exit_code(args.send, result.get("telegramGateway")):
+                return 2
             time.sleep(max(60, args.interval_seconds))
     return 1
 

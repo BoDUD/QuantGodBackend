@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
-from .schema import zh_direction, zh_entry_mode
+try:
+    from telegram_digest import build_digest
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import build_digest
 
 
 def _fmt(value: Any) -> str:
@@ -11,52 +14,46 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
-def build_telegram_text(document: Dict[str, Any], symbol_filter: str | None = None, limit: int = 8) -> str:
-    rows: List[Dict[str, Any]] = list(document.get("policies", []))
+def build_telegram_text(document: dict[str, Any], symbol_filter: str | None = None, limit: int = 8) -> str:
+    rows: list[dict[str, Any]] = list(document.get("policies", []))
     if symbol_filter:
         rows = [row for row in rows if row.get("symbol") == symbol_filter]
-    lines: List[str] = [
-        "【QuantGod 自动执行策略调参】",
-        "",
-        "说明：本消息用于EA自动交易策略参数复核；它不会下单、不会平仓、不会撤单、不会修改实盘 preset。",
-        "",
-        "策略结论：",
-    ]
-    if not rows:
-        lines.append("- 暂无策略行，默认阻断。")
-    for row in rows[:limit]:
-        mode = zh_entry_mode(row.get("entryMode"))
-        direction = zh_direction(row.get("direction"))
-        symbol = row.get("symbol", "未知品种")
-        lot = row.get("recommendedLot", 0)
-        score = row.get("score", 0)
-        reason = row.get("reason", "无原因")
-        lines.append(
-            f"- {symbol}｜{direction}｜状态：{mode}｜评分：{_fmt(score)}｜建议仓位：{_fmt(lot)}｜原因：{reason}"
-        )
-        blockers = row.get("blockers") or []
-        warnings = row.get("warnings") or []
-        for blocker in blockers[:2]:
-            lines.append(f"  - 阻断原因：{blocker}")
-        for warning in warnings[:2]:
-            lines.append(f"  - 注意：{warning}")
-        if row.get("entryMode") != "BLOCKED":
-            lines.append(
-                f"  - 出场参数：模式={row.get('exitMode')}，保本延后={row.get('breakevenDelayR')}R，移动止损启动={row.get('trailStartR')}R，时间止损={row.get('timeStopBars')}根K线"
-            )
-    summary = document.get("summary", {})
-    lines.extend([
-        "",
-        "汇总：",
-        f"- 标准入场：{summary.get('standardEntries', 0)}",
-        f"- 机会入场：{summary.get('opportunityEntries', 0)}",
-        f"- 阻断：{summary.get('blocked', 0)}",
-        "",
-        "仓位规则：最大仓位可以设为2，但实际建议仓位按风险预算、机会等级和评分计算；机会入场只允许小仓试探。",
-        "",
-        "安全边界：",
-        "- 不会下单、不会平仓、不会撤单。",
-        "- 不会修改订单SL/TP，不会写MT5 OrderRequest。",
-        "- 不接收Telegram交易命令，不开放webhook执行入口。",
-    ])
-    return "\n".join(lines)
+    summary = document.get("summary") if isinstance(document.get("summary"), dict) else {}
+    blocked = int(summary.get("blocked") or sum(row.get("entryMode") == "BLOCKED" for row in rows))
+    candidates = max(0, len(rows) - blocked)
+    conclusion = (
+        "当前策略全部保持阻断；等待数据与风险门禁恢复。"
+        if rows and candidates == 0
+        else f"发现 {candidates} 条候选观察；仅供本地 Shadow 复核。"
+        if rows
+        else "暂无策略证据；系统保持阻断。"
+    )
+    reasons: list[str] = []
+    for row in rows[: max(1, min(limit, 3))]:
+        symbol = row.get("symbol") or "未知品种"
+        direction = {
+            "LONG": "偏多",
+            "BUY": "偏多",
+            "SHORT": "偏空",
+            "SELL": "偏空",
+        }.get(str(row.get("direction") or "").upper(), "方向待定")
+        state = "阻断" if row.get("entryMode") == "BLOCKED" else "候选观察"
+        reason = _shadow_reason(row.get("reason") or (row.get("blockers") or ["等待复核"])[0])
+        reasons.append(f"{symbol} {direction}｜{state}｜评分 {_fmt(row.get('score', 0))}｜{reason}")
+    return build_digest(
+        title="策略观察",
+        level="warning" if blocked else "info",
+        conclusion=conclusion,
+        metrics=[f"策略 {len(rows)}", f"候选 {candidates}", f"阻断 {blocked}"],
+        reasons=reasons or ["未生成可用策略行。"],
+        next_action="在本地面板复核数据新鲜度、评分与风险门禁；不触发交易。",
+        generated_at=document.get("generatedAt") or document.get("generatedAtIso"),
+    )
+
+
+def _shadow_reason(value: Any) -> str:
+    text = str(value or "等待复核")
+    blocked_terms = ("入场", "下单", "开仓", "平仓", "止损", "止盈", "仓位", "持仓", "目标", "place order", "execute trade", "position")
+    if any(term in text.lower() for term in blocked_terms):
+        return "详细策略参数已隐藏，请在本地面板复核。"
+    return text

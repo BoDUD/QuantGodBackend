@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, json, os, sys
+import argparse, json, sys
 from pathlib import Path
 from typing import List
 from entry_trigger_lab.data_loader import sample_runtime
 from entry_trigger_lab.trigger_engine import build_trigger_plan, write_trigger_plan
 from entry_trigger_lab.telegram_text import build_telegram_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_delivery
+from telegram_gateway_cli import dispatch_cli_text
 
 def _symbols(raw: str) -> List[str]: return [part.strip() for part in raw.split(",") if part.strip()]
 def _runtime(path: str) -> Path: return Path(path).expanduser().resolve()
@@ -36,15 +38,26 @@ def cmd_plan(args):
 def cmd_telegram_text(args):
     runtime_dir=_runtime(args.runtime_dir); plan=_load_plan(runtime_dir); text=build_telegram_text(plan, symbol=args.symbol); print(text)
     if args.send:
-        if os.environ.get("QG_TELEGRAM_PUSH_ALLOWED") != "1":
-            print("Telegram 发送被拒绝：QG_TELEGRAM_PUSH_ALLOWED 必须为 1。", file=sys.stderr); return 2
         try:
-            from telegram_notifier.config import load_config
-            from telegram_notifier.client import TelegramClient
-            cfg = load_config(); result = TelegramClient(cfg).send_message(text)
-            print(json.dumps({"telegramSent":True,"result":result}, ensure_ascii=False, indent=2))
+            result = dispatch_cli_text(
+                runtime_dir=runtime_dir,
+                source="entry_trigger_lab",
+                topic="ENTRY_TRIGGER_LAB_REPORT",
+                severity="WARN",
+                text=text,
+            )
+            result = normalize_delivery(result, send_requested=True)
+            output = {
+                "ok": result["deliveryOk"],
+                "sendRequested": True,
+                "sent": result["sent"],
+                "deliveryOk": result["deliveryOk"],
+                "telegramGateway": result,
+            }
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return explicit_send_exit_code(True, output)
         except Exception as exc:
-            print(f"Telegram 发送失败：{exc}", file=sys.stderr); return 3
+            print(f"Telegram 发送失败：{exc}", file=sys.stderr); return 2
     return 0
 
 def build_parser():

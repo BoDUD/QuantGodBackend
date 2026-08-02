@@ -21,9 +21,27 @@ for candidate in (str(REPO_ROOT), str(TOOLS_DIR)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
-from ai_analysis.advisory_fusion import compact_fusion_payload, fuse_advisory_report, fusion_summary_for_message  # noqa: E402
+from ai_analysis.advisory_fusion import (  # noqa: E402
+    compact_fusion_payload,
+    fuse_advisory_report,
+    fusion_summary_for_message,
+)
 from ai_analysis.analysis_service_v2 import AnalysisServiceV2, phase3_ai_safety  # noqa: E402
-from ai_analysis.deepseek_mt5_advisor import DeepSeekAdvisorError, DeepSeekMt5Advisor, load_deepseek_config  # noqa: E402
+from ai_analysis.deepseek_mt5_advisor import (  # noqa: E402
+    DeepSeekAdvisorError,
+    DeepSeekMt5Advisor,
+    load_deepseek_config,
+)
+from telegram_digest import build_digest  # noqa: E402
+from telegram_gateway_cli import dispatch_cli_text  # noqa: E402
+from telegram_notifier.config import load_config  # noqa: E402
+from telegram_notifier.records import record_notification  # noqa: E402
+from telegram_notifier.safety import (  # noqa: E402
+    assert_telegram_safety,
+)
+from telegram_notifier.safety import (  # noqa: E402
+    safety_payload as telegram_safety_payload,
+)
 
 MODE = "QUANTGOD_AI_ADVISORY_FUSION_V1"
 DEFAULT_SYMBOLS = "USDJPYc"
@@ -92,67 +110,88 @@ def attach_deepseek(args: argparse.Namespace, report: dict[str, Any]) -> dict[st
 def build_compact_message(report: dict[str, Any]) -> str:
     compact = compact_fusion_payload(report)
     quality = compact.get("evidenceQuality") if isinstance(compact.get("evidenceQuality"), dict) else {}
-    return "\n".join(
-        [
-            "[QuantGod][AI Advisory Fusion]",
-            f"symbol: {compact.get('symbol')}",
-            f"finalAction: {compact.get('finalAction')}",
-            f"severity: {compact.get('notifySeverity')}",
-            f"validator: {compact.get('validatorStatus')} / {compact.get('validatorReasons')}",
-            f"agreement: {compact.get('agreement')}",
-            f"source: {quality.get('source')} | fallback={quality.get('fallback')} | runtimeFresh={quality.get('runtimeFresh')}",
-            f"headline: {compact.get('headline')}",
-            f"verdict: {compact.get('verdict')}",
-            f"planStatus: {compact.get('planStatus')}",
-            f"entryZone: {compact.get('entryZone')}",
-            f"targets: {compact.get('targets')}",
-            "boundary: advisory-only; Telegram push-only compatible; no order/close/cancel/live preset mutation.",
-        ]
+    action = str(compact.get("finalAction") or "HOLD").upper()
+    action_zh = {
+        "WATCH_LONG": "偏多观察",
+        "WATCH_SHORT": "偏空观察",
+        "BUY": "偏多观察",
+        "SELL": "偏空观察",
+        "HOLD": "继续观望",
+    }.get(action, "继续观望")
+    validator = str(compact.get("validatorStatus") or "unknown")
+    freshness = "新鲜" if quality.get("runtimeFresh") is True else "待刷新"
+    source = str(quality.get("source") or "unknown")
+    agreement = str(compact.get("agreement") or "unknown")
+    fallback = "是" if quality.get("fallback") is True else "否"
+    reasons = [
+        f"校验 {validator}；共识 {agreement}。",
+        f"证据来源 {source}；回退 {fallback}。",
+    ]
+    return build_digest(
+        title="AI 融合观察",
+        level="warning" if action == "HOLD" or validator != "pass" else "info",
+        conclusion=f"{compact.get('symbol') or 'UNKNOWN'} {action_zh}；仅保存只读 Shadow 证据。",
+        metrics=[
+            f"证据 {freshness}",
+            f"风险级别 {compact.get('notifySeverity') or 'unknown'}",
+            f"校验 {validator}",
+        ],
+        reasons=reasons,
+        next_action="在本地面板复核证据新鲜度与风险门禁；不触发任何交易动作。",
+        generated_at=report.get("generatedAt"),
     )
 
 
 def maybe_send(args: argparse.Namespace, report: dict[str, Any]) -> dict[str, Any]:
+    message = build_compact_message(report)
     if not args.send:
-        return {"ok": True, "status": "dry_run", "messagePreview": build_compact_message(report)[:200]}
-
-    from telegram_notifier.client import TelegramClient, validate_message_text  # noqa: WPS433
-    from telegram_notifier.config import load_config  # noqa: WPS433
-    from telegram_notifier.records import record_notification  # noqa: WPS433
-    from telegram_notifier.safety import (  # noqa: WPS433
-        assert_telegram_safety,
-        require_chat_id,
-        require_push_enabled,
-        require_token,
-        safety_payload as telegram_safety_payload,
-    )
+        return {
+            "ok": True,
+            "status": "preview",
+            "dryRun": True,
+            "sendRequested": False,
+            "sent": False,
+            "deliveryOk": False,
+            "messagePreview": message,
+        }
 
     config = load_config(repo_root=args.repo_root, env_file=args.env_file)
     assert_telegram_safety(config)
-    require_token(config)
-    require_chat_id(config)
-    require_push_enabled(config)
-    message = validate_message_text(build_compact_message(report))
-    payload = TelegramClient(token=config.bot_token, api_base_url=config.api_base_url, timeout_seconds=config.timeout_seconds).send_message(
-        chat_id=config.chat_id,
+    gateway = dispatch_cli_text(
+        runtime_dir=runtime_dir_from_args(args),
+        source="ai_advisory_fusion",
+        topic="AI_ADVISORY_FUSION",
+        severity="INFO",
         text=message,
-        disable_notification=args.disable_notification,
+        repo_root=args.repo_root or REPO_ROOT,
     )
-    result = payload.get("result") or {}
+    nested_delivery = gateway.get("delivery") if isinstance(gateway.get("delivery"), dict) else {}
+    confirmed = gateway.get("sent") is True and gateway.get("deliveryOk") is True
+    status = "sent" if confirmed else "send_suppressed" if nested_delivery.get("skipped") is True else "send_failed"
     record = {"ok": True, "recorded": False}
     if not args.no_record:
         record = record_notification(
             config,
             event_type="AI_ADVISORY_FUSION",
-            status="sent",
-            payload={"telegramMessageId": result.get("message_id"), "messagePreview": message[:160]},
+            status="sent" if confirmed else status,
+            payload={
+                "telegramMessageId": nested_delivery.get("messageId") if confirmed else None,
+                "messagePreview": message[:160],
+                "reason": nested_delivery.get("reason"),
+            },
         )
-    return {
-        "ok": True,
-        "status": "sent",
-        "telegramMessageId": result.get("message_id"),
-        "record": record,
-        "safety": telegram_safety_payload(config),
-    }
+    gateway.update(
+        {
+            "ok": confirmed,
+            "status": status,
+            "sent": confirmed,
+            "deliveryOk": confirmed,
+            "telegramMessageId": nested_delivery.get("messageId") if confirmed else None,
+            "record": record,
+            "safety": telegram_safety_payload(config),
+        }
+    )
+    return gateway
 
 
 async def scan_once(args: argparse.Namespace) -> dict[str, Any]:
@@ -173,13 +212,26 @@ async def scan_once(args: argparse.Namespace) -> dict[str, Any]:
                 "delivery": delivery,
             }
         )
+    deliveries = [item.get("delivery") for item in items if isinstance(item.get("delivery"), dict)]
+    attempted = [delivery for delivery in deliveries if delivery.get("sendRequested") is True]
+    confirmed_count = sum(
+        delivery.get("sent") is True and delivery.get("deliveryOk") is True
+        for delivery in attempted
+    )
+    failed_count = len(attempted) - confirmed_count
     payload = {
-        "ok": True,
+        "ok": failed_count == 0,
         "mode": MODE,
         "runtimeDir": str(runtime_dir),
         "symbols": symbols,
         "timeframes": timeframes,
         "items": items,
+        "sendRequested": bool(args.send),
+        "deliveryAttemptedCount": len(attempted),
+        "sent": confirmed_count > 0,
+        "sentCount": confirmed_count,
+        "deliveryOk": (failed_count == 0 and bool(attempted)) if args.send else False,
+        "failedDeliveryCount": failed_count,
         "safety": safety_payload(),
     }
     target = latest_path(args)
@@ -224,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
         if asyncio.iscoroutine(result):
             result = asyncio.run(result)
         emit(result)
+        if isinstance(result, dict) and int(result.get("failedDeliveryCount") or 0) > 0:
+            return 2
         return 0
     except Exception as exc:  # pragma: no cover - CLI boundary
         emit({"ok": False, "mode": MODE, "error": str(exc), "safety": safety_payload()})

@@ -21,6 +21,48 @@ function isAutomationChainPath(url) {
   return pathname === '/api/automation-chain' || pathname.startsWith('/api/automation-chain/');
 }
 
+function readJsonBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk.toString();
+      if (body.length > 1024 * 1024) req.destroy();
+    });
+    req.on('end', () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(body));
+      } catch (error) {
+        resolve({ __jsonError: error.message });
+      }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
+function strictBoolValue(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function explicitTelegramDelivery(body = {}) {
+  const dryRunValues = [body.dryRun, body.dry_run].filter(
+    (value) => value !== undefined && value !== null && value !== '',
+  );
+  const sendExplicitlyRequested = strictBoolValue(body.send) === true;
+  const dryRunExplicitlyDisabled =
+    dryRunValues.length > 0 && dryRunValues.every((value) => strictBoolValue(value) === false);
+  const send = sendExplicitlyRequested && dryRunExplicitlyDisabled;
+  return { send, dryRun: !send, sendExplicitlyRequested, dryRunExplicitlyDisabled };
+}
+
 function readJsonIfExists(filePath) {
   if (!fs.existsSync(filePath)) return null;
   try {
@@ -198,8 +240,24 @@ async function handle(req, res, ctx) {
   }
 
   if (req.method === 'POST' && pathname === '/api/automation-chain/run') {
+    const body = await readJsonBody(req);
+    if (body.__jsonError) {
+      sendJson(res, 400, { ok: false, endpoint: pathname, error: 'INVALID_JSON_BODY', detail: body.__jsonError });
+      return;
+    }
+    if (params.has('send')) {
+      sendJson(res, 400, {
+        ok: false,
+        endpoint: pathname,
+        error: 'TELEGRAM_SEND_QUERY_REJECTED',
+        sendRequested: true,
+        sent: false,
+        deliveryOk: false,
+      });
+      return;
+    }
     const args = ['--runtime-dir', runtimeDir, '--symbols', symbols, 'once'];
-    if (params.get('send') === '1') args.push('--send');
+    if (explicitTelegramDelivery(body).send) args.push('--send');
     const result = await runPython(ctx, args, 240000);
     if (!result.ok) {
       sendJson(res, 500, { ok: false, endpoint: pathname, result });
@@ -228,4 +286,4 @@ async function handle(req, res, ctx) {
   sendJson(res, 404, { ok: false, endpoint: pathname, error: 'automation_chain_route_not_found' });
 }
 
-module.exports = { automationStatus, isAutomationChainPath, handle, sendError };
+module.exports = { automationStatus, explicitTelegramDelivery, isAutomationChainPath, handle, sendError };

@@ -10,7 +10,8 @@ from pathlib import Path
 from strategy_ga.generation_runner import build_ga_status, read_candidate, read_candidates, read_generations, run_generation
 from strategy_ga.schema import BLOCKER_FILE, EVOLUTION_PATH_FILE, ga_dir
 from strategy_ga.telegram_text import ga_to_chinese_text
-from usdjpy_evidence_os.telegram_gateway import dispatch_text
+from telegram_cli_truth import explicit_send_exit_code, normalize_cli_payload
+from telegram_gateway_cli import dispatch_cli_text
 
 
 def load_env(path: Path) -> None:
@@ -41,8 +42,14 @@ def _load_json(path: Path):
 
 def send_telegram(runtime_dir: Path, text: str) -> dict:
     root = Path(__file__).resolve().parents[1]
-    load_env(root / ".env.telegram.local")
-    return dispatch_text(runtime_dir, "strategy_ga", "GA_EVOLUTION_REPORT", "INFO", text, send=True)
+    return dispatch_cli_text(
+        runtime_dir=runtime_dir,
+        source="strategy_ga",
+        topic="GA_EVOLUTION_REPORT",
+        severity="INFO",
+        text=text,
+        repo_root=root,
+    )
 
 
 def main(argv=None) -> int:
@@ -90,7 +97,9 @@ def main(argv=None) -> int:
         result = {"ok": True, "text": content, "ga": payload}
         if args.send:
             result["telegramGateway"] = send_telegram(runtime_dir, content)
-        return emit(result)
+        result = normalize_cli_payload(result, send_requested=args.send)
+        emit(result)
+        return explicit_send_exit_code(args.send, result.get("telegramGateway"))
     return 1
 
 

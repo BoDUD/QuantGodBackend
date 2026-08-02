@@ -82,8 +82,10 @@ class PilotSafetyLockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = evaluate_pilot_safety_lock(Path(tmp), "USDJPYc", "LONG", Path(tmp))
             text = build_telegram_text(report)
-            self.assertIn("实盘试点安全锁", text)
-            self.assertIn("不会下单", text)
+            self.assertIn("安全门禁观察", text)
+            self.assertIn("永久 Shadow", text)
+            for forbidden in ("实盘试点", "建议仓位", "入场", "止损", "目标"):
+                self.assertNotIn(forbidden, text)
             self.assertNotIn("OrderSend", text)
 
 

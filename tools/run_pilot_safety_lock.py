@@ -14,25 +14,39 @@ from tools.pilot_safety_lock.checks import evaluate_pilot_safety_lock
 from tools.pilot_safety_lock.lockfile import read_report, write_report
 from tools.pilot_safety_lock.schema import DEFAULT_CONFIRMATION_PHRASE, SAFETY_DEFAULTS
 from tools.pilot_safety_lock.telegram_text import build_telegram_text
+from tools.telegram_cli_truth import explicit_send_exit_code, normalize_delivery
+from tools.telegram_gateway_cli import dispatch_cli_text
 
 
-def _send_telegram(text: str) -> bool:
+def _send_telegram(runtime_dir: Path, text: str) -> dict:
     try:
-        from tools.telegram_notifier.config import load_telegram_config
-        from tools.telegram_notifier.client import TelegramClient
-        from tools.telegram_notifier.safety import assert_push_only_safety
-        cfg = load_telegram_config()
-        assert_push_only_safety(cfg)
-        if not cfg.push_allowed:
-            print("Telegram push 未开启，仅打印文本。")
-            return False
-        client = TelegramClient(cfg)
-        result = client.send_message(text)
-        print(json.dumps({"sent": True, "telegramResult": result}, ensure_ascii=False, indent=2))
-        return True
+        result = dispatch_cli_text(
+            runtime_dir=runtime_dir,
+            source="pilot_safety_lock",
+            topic="PILOT_SAFETY_LOCK_REPORT",
+            severity="WARN",
+            text=text,
+            repo_root=ROOT,
+        )
+        result = normalize_delivery(result, send_requested=True)
+        output = {
+            "ok": result["deliveryOk"],
+            "sendRequested": True,
+            "sent": result["sent"],
+            "deliveryOk": result["deliveryOk"],
+            "telegramGateway": result,
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return output
     except Exception as exc:
         print(f"Telegram 发送失败：{exc}", file=sys.stderr)
-        return False
+        return {
+            "ok": False,
+            "sendRequested": True,
+            "sent": False,
+            "deliveryOk": False,
+            "error": str(exc),
+        }
 
 
 def cmd_config(args: argparse.Namespace) -> int:
@@ -80,7 +94,8 @@ def cmd_telegram_text(args: argparse.Namespace) -> int:
     text = build_telegram_text(report)
     print(text)
     if args.send:
-        _send_telegram(text)
+        delivery = _send_telegram(Path(args.runtime_dir), text)
+        return explicit_send_exit_code(True, delivery)
     return 0
 
 

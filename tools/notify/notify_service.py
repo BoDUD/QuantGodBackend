@@ -9,7 +9,11 @@ from typing import Any
 
 from .config import NotifyConfig
 from .event_formatter import format_event
-from .telegram_bot import TelegramBot
+
+try:
+    from telegram_gateway_cli import dispatch_cli_text
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_gateway_cli import dispatch_cli_text
 
 
 def utc_now() -> str:
@@ -55,11 +59,19 @@ UNSAFE_AI_TEXT_PATTERNS = (
     ("回退模式", "fallback_evidence_text"),
 )
 
-INCOMPLETE_AI_PLAN_PATTERNS = (
-    "入场区间：--",
-    "止损位：--",
-    "目标位：--",
-    "盈亏比：--",
+UNSAFE_AI_EXECUTION_PATTERNS = (
+    ("立即下单", "execution_instruction"),
+    ("自动下单", "execution_instruction"),
+    ("建议下单", "execution_instruction"),
+    ("执行交易", "execution_instruction"),
+    ("立即开仓", "execution_instruction"),
+    ("自动开仓", "execution_instruction"),
+    ("立即平仓", "execution_instruction"),
+    ("自动平仓", "execution_instruction"),
+    ("place order", "execution_instruction"),
+    ("execute trade", "execution_instruction"),
+    ("open position now", "execution_instruction"),
+    ("close position now", "execution_instruction"),
 )
 
 
@@ -112,9 +124,9 @@ def unsafe_ai_notification_reason(event_type: str, payload: dict[str, Any], text
     for needle, reason in UNSAFE_AI_TEXT_PATTERNS:
         if needle in haystack:
             return reason
-    for marker in INCOMPLETE_AI_PLAN_PATTERNS:
-        if marker.lower() in haystack:
-            return "incomplete_trade_plan"
+    for marker, reason in UNSAFE_AI_EXECUTION_PATTERNS:
+        if marker in haystack:
+            return reason
     return None
 
 
@@ -126,7 +138,7 @@ async def send_event(
     event_type: str,
     data: dict[str, Any] | None = None,
     config: NotifyConfig | None = None,
-    dry_run: bool = False,
+    dry_run: bool = True,
 ) -> dict[str, Any]:
     cfg = config or NotifyConfig.from_env()
     event = str(event_type or "TEST").upper()
@@ -172,6 +184,19 @@ async def send_event(
         append_history(cfg, record)
         return {"ok": True, "sent": False, "skipped": True, "reason": "event_disabled", "record": record}
 
+    if not cfg.telegram_environment_safe:
+        reason = "unsafe_telegram_environment:" + ",".join(cfg.safety_violations)
+        record.update({"ok": False, "sent": False, "status": "blocked_unsafe_environment", "error": reason})
+        append_history(cfg, record)
+        return {
+            "ok": False,
+            "sent": False,
+            "skipped": True,
+            "status": "blocked_unsafe_environment",
+            "error": reason,
+            "record": record,
+        }
+
     if dry_run:
         record.update({"ok": True, "sent": False, "dryRun": True})
         append_history(cfg, record)
@@ -187,14 +212,47 @@ async def send_event(
         append_history(cfg, record)
         return {"ok": False, "sent": False, "error": "telegram_push_disabled", "record": record}
 
-    bot = TelegramBot(cfg.bot_token, cfg.chat_id, timeout=cfg.request_timeout, max_retries=cfg.max_retries)
-    result = await bot.send_message_result(text, disable_notification=_should_disable_notification(event))
-    record.update({"ok": result.ok, "sent": result.ok, "error": result.error, "statusCode": result.status_code})
+    gateway = await asyncio.to_thread(
+        dispatch_cli_text,
+        runtime_dir=cfg.runtime_dir,
+        source="notify_service",
+        topic=event,
+        severity="WARN" if event in {"KILL_SWITCH", "NEWS_BLOCK", "CONSECUTIVE_LOSS"} else "INFO",
+        text=text,
+    )
+    delivery = gateway.get("delivery") if isinstance(gateway.get("delivery"), dict) else {}
+    confirmed = gateway.get("sent") is True and gateway.get("deliveryOk") is True
+    if confirmed:
+        status = "sent"
+        error = ""
+    elif delivery.get("skipped") is True:
+        status = "send_suppressed"
+        error = str(delivery.get("reason") or "telegram_send_suppressed")
+    else:
+        status = "send_failed"
+        error = str(delivery.get("reason") or "telegram_delivery_not_confirmed")
+    record.update(
+        {
+            "ok": confirmed,
+            "sent": confirmed,
+            "status": status,
+            "error": error,
+            "telegramMessageId": delivery.get("messageId") if confirmed else None,
+        }
+    )
     append_history(cfg, record)
-    return {"ok": result.ok, "sent": result.ok, "error": result.error, "record": record}
+    return {
+        "ok": confirmed,
+        "sent": confirmed,
+        "deliveryOk": confirmed,
+        "status": status,
+        "error": error,
+        "gateway": gateway,
+        "record": record,
+    }
 
 
-async def send_ai_analysis_summary(report: dict[str, Any], config: NotifyConfig | None = None, dry_run: bool = False) -> dict[str, Any]:
+async def send_ai_analysis_summary(report: dict[str, Any], config: NotifyConfig | None = None, dry_run: bool = True) -> dict[str, Any]:
     return await send_event("AI_ANALYSIS", _event_payload_from_analysis(report), config=config, dry_run=dry_run)
 
 
@@ -234,7 +292,7 @@ def build_daily_digest(config: NotifyConfig | None = None) -> dict[str, Any]:
     return {"pnl": pnl, "wins": wins, "losses": losses, "routes": route_summary, "shadowSignals": len(shadow)}
 
 
-async def send_daily_digest(config: NotifyConfig | None = None, dry_run: bool = False) -> dict[str, Any]:
+async def send_daily_digest(config: NotifyConfig | None = None, dry_run: bool = True) -> dict[str, Any]:
     cfg = config or NotifyConfig.from_env()
     return await send_event("DAILY_DIGEST", build_daily_digest(cfg), config=cfg, dry_run=dry_run)
 
@@ -265,7 +323,7 @@ def scan_runtime_events(config: NotifyConfig | None = None) -> list[dict[str, An
     return events
 
 
-async def scan_once(config: NotifyConfig | None = None, dry_run: bool = False) -> dict[str, Any]:
+async def scan_once(config: NotifyConfig | None = None, dry_run: bool = True) -> dict[str, Any]:
     cfg = config or NotifyConfig.from_env()
     results = []
     for event in scan_runtime_events(cfg):

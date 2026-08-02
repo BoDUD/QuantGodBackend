@@ -3,18 +3,43 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
+import re
 import sys
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .io_utils import append_jsonl, append_jsonl_unique, read_jsonl_tail, utc_now_iso, write_json
 from .schema import AGENT_VERSION, SAFETY_BOUNDARY, gateway_ledger_path, gateway_queue_path, gateway_status_path
 
+try:
+    from telegram_safety import (
+        FORBIDDEN_TELEGRAM_TRUTHY_ENV,
+        unsafe_telegram_environment_keys,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_safety import (
+        FORBIDDEN_TELEGRAM_TRUTHY_ENV,
+        unsafe_telegram_environment_keys,
+    )
+
+try:
+    from telegram_digest import sanitize_telegram_message
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import sanitize_telegram_message
+
 MAX_EVENTS_PER_RUN = 8
+TELEGRAM_TEXT_MAX_CHARS = 3900
+TELEGRAM_MESSAGE_PREVIEW_MAX_CHARS = 160
+TELEGRAM_SAFETY_FOOTER = "边界：永久 Shadow｜无执行通道｜Telegram 只推送、不接收命令。"
+TELEGRAM_TRUNCATION_NOTICE = "…（内容已安全裁剪，完整详情见本地面板）"
+_TELEGRAM_BOT_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])\d{5,}:[A-Za-z0-9_-]{10,}")
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(token|secret|password|api[_-]?key)\s*([:=])\s*([^\s,;]+)"
+)
+FORBIDDEN_TELEGRAM_GATEWAY_TRUTHY_ENV = FORBIDDEN_TELEGRAM_TRUTHY_ENV
 SCHEDULED_REPORT_TOPICS = (
     "DAILY_AUTOPILOT_V2_REPORT",
     "GA_EVOLUTION_REPORT",
@@ -30,7 +55,8 @@ def build_notification_event(
     payload: Dict[str, Any] | None = None,
     dedupe_key: str | None = None,
 ) -> Dict[str, Any]:
-    digest_material = dedupe_key or f"{source}|{topic}|{severity}|{text[:1000]}"
+    safe_text = _safe_event_text(text)
+    digest_material = dedupe_key or f"{source}|{topic}|{severity}|{safe_text[:1000]}"
     digest = hashlib.sha256(digest_material.encode("utf-8")).hexdigest()
     return {
         "schema": "quantgod.notification.v1",
@@ -42,7 +68,7 @@ def build_notification_event(
         "topic": topic,
         "severity": severity,
         "lang": "zh-CN",
-        "text": text,
+        "text": safe_text,
         "payload": payload or {},
         "safety": dict(SAFETY_BOUNDARY),
     }
@@ -115,6 +141,8 @@ def collect_scheduled_events(
 
 
 def dispatch_event(runtime_dir: Path, event: Dict[str, Any], send: bool = False) -> Dict[str, Any]:
+    event = dict(event)
+    event["text"] = _safe_event_text(event.get("text", ""))
     ledger = gateway_ledger_path(runtime_dir)
     recent_ids = {
         row.get("eventId")
@@ -123,27 +151,18 @@ def dispatch_event(runtime_dir: Path, event: Dict[str, Any], send: bool = False)
     }
     duplicate = event.get("eventId") in recent_ids
     rate_limited = _rate_limited(ledger)
-    delivery = {"ok": False, "skipped": True, "reason": "send_not_requested"}
+    raw_delivery = {"ok": False, "skipped": True, "reason": "send_not_requested"}
     processed_at = utc_now_iso()
     if send and not duplicate and not rate_limited:
-        delivery = _send_telegram(event.get("text", ""))
+        raw_delivery = _send_telegram(event.get("text", ""))
     elif duplicate:
-        delivery = {"ok": False, "skipped": True, "reason": "duplicate_suppressed"}
+        raw_delivery = {"ok": False, "skipped": True, "reason": "duplicate_suppressed"}
     elif rate_limited:
-        delivery = {"ok": False, "skipped": True, "reason": "rate_limited"}
-    delivery.setdefault("processedAtIso", processed_at)
-    if delivery.get("ok"):
-        delivery.setdefault("sentAtIso", processed_at)
-    elif delivery.get("skipped"):
-        delivery.setdefault("suppressedAtIso", processed_at)
-    row = {
-        **event,
-        "duplicateSuppressed": duplicate,
-        "rateLimited": rate_limited,
-        "sendRequested": bool(send),
-        "delivery": delivery,
-    }
+        raw_delivery = {"ok": False, "skipped": True, "reason": "rate_limited"}
+    delivery = _minimal_delivery_summary(raw_delivery, processed_at=processed_at)
+    row = _minimal_ledger_row(event, delivery, processed_at=processed_at)
     append_jsonl(ledger, [row])
+    blocked_environment_keys = _unsafe_environment_keys()
     status = {
         "ok": True,
         "schema": "quantgod.telegram_gateway_status.v1",
@@ -153,6 +172,8 @@ def dispatch_event(runtime_dir: Path, event: Dict[str, Any], send: bool = False)
         "rateLimited": rate_limited,
         "sendRequested": bool(send),
         "delivery": delivery,
+        "environmentSafe": not blocked_environment_keys,
+        "blockedUnsafeEnvironmentKeys": blocked_environment_keys,
         "reasonZh": "独立 Telegram Gateway 统一做中文模板、去重、限频、投递账本；不接收 Telegram 交易命令。",
         "safety": dict(SAFETY_BOUNDARY),
     }
@@ -161,6 +182,8 @@ def dispatch_event(runtime_dir: Path, event: Dict[str, Any], send: bool = False)
 
 
 def enqueue_event(runtime_dir: Path, event: Dict[str, Any]) -> Dict[str, Any]:
+    event = dict(event)
+    event["text"] = _safe_event_text(event.get("text", ""))
     queued = append_jsonl_unique(gateway_queue_path(runtime_dir), [event], "eventId")
     status = gateway_status(runtime_dir)
     status.update(
@@ -200,7 +223,7 @@ def dispatch_pending(
             "pendingCount": post_dispatch_pending,
             "dispatchedCount": len(dispatched),
             "sendRequested": bool(send),
-            "dispatchResults": dispatched[-5:],
+            "dispatchResults": dispatched,
             "reasonZh": "独立 Telegram Gateway 已处理队列；只 push 中文通知，不接收交易命令。",
         }
     )
@@ -216,7 +239,9 @@ def gateway_status(runtime_dir: Path) -> Dict[str, Any]:
     pending = [row for row in queue if row.get("eventId") not in delivered_ids]
     last = ledger[-1] if ledger else {}
     observability = _delivery_observability(queue, ledger, pending)
-    commands_env_requested = os.environ.get("QG_TELEGRAM_COMMANDS_ALLOWED", "0").strip() == "1"
+    blocked_environment_keys = _unsafe_environment_keys()
+    commands_env_requested = "QG_TELEGRAM_COMMANDS_ALLOWED" in blocked_environment_keys
+    last_delivery = last.get("delivery") if isinstance(last.get("delivery"), dict) else None
     return {
         "ok": True,
         "schema": "quantgod.telegram_gateway_status.v1",
@@ -227,19 +252,28 @@ def gateway_status(runtime_dir: Path) -> Dict[str, Any]:
         "pendingCount": len(pending),
         "lastEventId": last.get("eventId"),
         "lastTopic": last.get("topic"),
-        "lastDelivery": last.get("delivery"),
+        "lastDelivery": (
+            _minimal_delivery_summary(
+                last_delivery,
+                processed_at=str(last.get("createdAt") or utc_now_iso()),
+            )
+            if last_delivery
+            else None
+        ),
         **observability,
         "pushAllowed": os.environ.get("QG_TELEGRAM_PUSH_ALLOWED", "0").strip() == "1",
         "commandsAllowed": False,
         "commandsEnvRequested": commands_env_requested,
         "commandsBlockedReason": "telegram_command_execution_disabled" if commands_env_requested else None,
+        "environmentSafe": not blocked_environment_keys,
+        "blockedUnsafeEnvironmentKeys": blocked_environment_keys,
         "reasonZh": "独立 Telegram Gateway 当前可审计；负责去重、限频、投递 ledger，不接收命令。",
         "safety": dict(SAFETY_BOUNDARY),
     }
 
 
 def _delivery_observability(queue: List[Dict[str, Any]], ledger: List[Dict[str, Any]], pending: List[Dict[str, Any]]) -> Dict[str, Any]:
-    actual_sent_rows = [row for row in ledger if (row.get("delivery") or {}).get("ok") is True]
+    actual_sent_rows = [row for row in ledger if _delivery_counts_as_processed(row)]
     suppressed_rows = [
         row
         for row in ledger
@@ -248,7 +282,9 @@ def _delivery_observability(queue: List[Dict[str, Any]], ledger: List[Dict[str, 
     failed_rows = [
         row
         for row in ledger
-        if row.get("delivery") and not (row.get("delivery") or {}).get("ok") and not (row.get("delivery") or {}).get("skipped")
+        if row.get("delivery")
+        and not _delivery_counts_as_processed(row)
+        and not (row.get("delivery") or {}).get("skipped")
     ]
     last_actual = actual_sent_rows[-1] if actual_sent_rows else {}
     last_suppressed = suppressed_rows[-1] if suppressed_rows else {}
@@ -329,7 +365,7 @@ def _latest_delivery_by_topic(ledger: List[Dict[str, Any]]) -> Dict[str, Dict[st
         delivery = row.get("delivery") if isinstance(row.get("delivery"), dict) else {}
         latest[topic] = {
             "eventId": row.get("eventId"),
-            "deliveryOk": bool(delivery.get("ok")),
+            "deliveryOk": _delivery_is_confirmed(delivery),
             "reason": delivery.get("reason") or delivery.get("error"),
             "processedAtIso": _delivery_time(row, delivery, ("sentAtIso", "suppressedAtIso", "processedAtIso")),
         }
@@ -341,7 +377,7 @@ def _rate_limited_rows(ledger: List[Dict[str, Any]]) -> bool:
     sent = [
         row
         for row in ledger[-200:]
-        if (row.get("delivery") or {}).get("ok")
+        if _delivery_counts_as_processed(row)
         and str(row.get("createdAt") or "").startswith(current_hour)
     ]
     return len(sent) >= MAX_EVENTS_PER_RUN
@@ -434,61 +470,173 @@ def _build_autonomous_agent_event(runtime_dir: Path, repo_root: Path, refresh: b
 
 
 def _send_telegram(text: str) -> Dict[str, Any]:
+    blocked_environment_keys = _unsafe_environment_keys()
+    if blocked_environment_keys:
+        reason = "unsafe_environment_flags_enabled: " + ",".join(blocked_environment_keys)
+        if blocked_environment_keys == ["QG_TELEGRAM_COMMANDS_ALLOWED"]:
+            reason = "Telegram command execution must stay disabled"
+        return {
+            "ok": False,
+            "skipped": True,
+            "blocked": True,
+            "reason": reason,
+            "blockedUnsafeEnvironmentKeys": blocked_environment_keys,
+        }
     if os.environ.get("QG_TELEGRAM_PUSH_ALLOWED", "0").strip() != "1":
         return {"ok": False, "skipped": True, "reason": "QG_TELEGRAM_PUSH_ALLOWED is not 1"}
-    if os.environ.get("QG_TELEGRAM_COMMANDS_ALLOWED", "0").strip() == "1":
-        return {"ok": False, "skipped": True, "reason": "Telegram command execution must stay disabled"}
     token = os.environ.get("QG_TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("QG_TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
         return {"ok": False, "skipped": True, "reason": "Telegram token/chat_id missing"}
+    safe_text = prepare_telegram_text(_redact_sensitive_text(text, explicit_secret=token))
     url = f"https://api.telegram.org/bot{urllib.parse.quote(token, safe=':')}/sendMessage"
-    body = urllib.parse.urlencode({"chat_id": chat_id, "text": text[:3900]}).encode("utf-8")
+    body = urllib.parse.urlencode({"chat_id": chat_id, "text": safe_text}).encode("utf-8")
     try:
         with urllib.request.urlopen(url, data=body, timeout=20) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
-            return {"ok": bool(payload.get("ok")), "telegram": payload}
+            telegram_ok = payload.get("ok") is True
+            message_id = _extract_telegram_message_id(payload)
+            if not telegram_ok:
+                return {
+                    "ok": False,
+                    "reason": "telegram_api_rejected",
+                    "transport": "urllib",
+                }
+            if message_id is None:
+                return {
+                    "ok": False,
+                    "reason": "telegram_delivery_unconfirmed_missing_message_id",
+                    "transport": "urllib",
+                }
+            return {
+                "ok": True,
+                "messageId": message_id,
+                "transport": "urllib",
+            }
     except Exception as exc:
-        curl_result = _send_telegram_with_curl(token, chat_id, text[:3900])
-        if curl_result.get("ok"):
-            curl_result["urllibFallbackReason"] = str(exc)
-            return curl_result
-        return {"ok": False, "error": str(exc), "curlFallback": curl_result}
+        return {
+            "ok": False,
+            "error": _redact_sensitive_text(f"{type(exc).__name__}: {exc}", explicit_secret=token)[:300],
+            "transport": "urllib",
+        }
 
 
-def _send_telegram_with_curl(token: str, chat_id: str, text: str) -> Dict[str, Any]:
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        result = subprocess.run(
-            [
-                "curl",
-                "--silent",
-                "--show-error",
-                "--max-time",
-                "20",
-                "--request",
-                "POST",
-                url,
-                "--data-urlencode",
-                f"chat_id={chat_id}",
-                "--data-urlencode",
-                f"text={text}",
-            ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=25,
-        )
-    except Exception as exc:
-        return {"ok": False, "error": f"curl_failed: {type(exc).__name__}: {exc}"}
-    if result.returncode != 0:
-        return {"ok": False, "error": f"curl_exit_{result.returncode}: {result.stderr.strip()[:300]}"}
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {"ok": False, "error": "curl_returned_non_json", "body": result.stdout[:300]}
-    return {"ok": bool(payload.get("ok")), "telegram": payload, "transport": "curl"}
+def prepare_telegram_text(text: Any) -> str:
+    """Bound Telegram text while preserving the permanent push-only boundary."""
+    normalized = sanitize_telegram_message(_redact_sensitive_text(str(text or "")))
+    body = "\n".join(
+        line for line in normalized.splitlines() if line.strip() != TELEGRAM_SAFETY_FOOTER
+    ).rstrip()
+    max_body_chars = TELEGRAM_TEXT_MAX_CHARS - len(TELEGRAM_SAFETY_FOOTER) - 1
+    if len(body) > max_body_chars:
+        notice = f"\n{TELEGRAM_TRUNCATION_NOTICE}"
+        prefix_budget = max(0, max_body_chars - len(notice))
+        prefix = body[:prefix_budget].rstrip()
+        body = f"{prefix}{notice}" if prefix else TELEGRAM_TRUNCATION_NOTICE[:max_body_chars]
+    result = f"{body}\n{TELEGRAM_SAFETY_FOOTER}" if body else TELEGRAM_SAFETY_FOOTER
+    return result
+
+
+def _unsafe_environment_keys() -> List[str]:
+    """Use the shared process + local-file safety scan as the send gate."""
+    return unsafe_telegram_environment_keys()
+
+
+def _minimal_ledger_row(
+    event: Dict[str, Any],
+    delivery: Dict[str, Any],
+    *,
+    processed_at: str,
+) -> Dict[str, Any]:
+    text = str(event.get("text") or "")
+    created_at = str(event.get("createdAt") or processed_at)[:64]
+    return {
+        "schema": "quantgod.telegram_gateway_ledger.v2",
+        "eventId": _bounded_label(event.get("eventId"), 128),
+        "topic": _bounded_label(event.get("topic"), 96),
+        "severity": _bounded_label(event.get("severity"), 32),
+        "messageLength": len(text),
+        "messagePreview": _message_preview(text),
+        "createdAt": created_at,
+        "delivery": delivery,
+    }
+
+
+def _minimal_delivery_summary(delivery: Dict[str, Any], *, processed_at: str) -> Dict[str, Any]:
+    raw = delivery if isinstance(delivery, dict) else {}
+    message_id = _extract_delivery_message_id(raw)
+    ok = _delivery_is_confirmed(raw)
+    skipped = raw.get("skipped") is True and not ok
+    summary: Dict[str, Any] = {
+        "ok": ok,
+        "skipped": skipped,
+        "status": "SENT" if ok else "SUPPRESSED" if skipped else "FAILED",
+        "processedAtIso": _bounded_label(raw.get("processedAtIso") or processed_at, 64),
+    }
+    if ok:
+        summary["sentAtIso"] = _bounded_label(raw.get("sentAtIso") or processed_at, 64)
+    elif skipped:
+        summary["suppressedAtIso"] = _bounded_label(raw.get("suppressedAtIso") or processed_at, 64)
+    reason = raw.get("reason")
+    if raw.get("ok") is True and message_id is None:
+        reason = "telegram_delivery_unconfirmed_missing_message_id"
+    if reason:
+        summary["reason"] = _redact_sensitive_text(str(reason))[:160]
+    elif not ok and not skipped:
+        summary["reason"] = "telegram_delivery_failed"
+    if message_id is not None:
+        summary["messageId"] = message_id
+    transport = str(raw.get("transport") or "").strip().lower()
+    if transport in {"urllib"}:
+        summary["transport"] = transport
+    return summary
+
+
+def _message_preview(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    return _redact_sensitive_text(normalized)[:TELEGRAM_MESSAGE_PREVIEW_MAX_CHARS]
+
+
+def _bounded_label(value: Any, max_chars: int) -> str:
+    return str(value or "")[:max_chars]
+
+
+def _redact_sensitive_text(value: str, *, explicit_secret: str = "") -> str:
+    text = str(value or "")
+    if explicit_secret:
+        text = text.replace(explicit_secret, "[REDACTED]")
+        quoted_secret = urllib.parse.quote(explicit_secret, safe=":")
+        if quoted_secret != explicit_secret:
+            text = text.replace(quoted_secret, "[REDACTED]")
+    text = _TELEGRAM_BOT_TOKEN_RE.sub("[REDACTED_BOT_TOKEN]", text)
+    return _SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", text)
+
+
+def _safe_event_text(value: Any) -> str:
+    return sanitize_telegram_message(_redact_sensitive_text(str(value or "")))
+
+
+def _extract_telegram_message_id(payload: Dict[str, Any]) -> int | str | None:
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    return _safe_message_id(result.get("message_id"))
+
+
+def _extract_delivery_message_id(delivery: Dict[str, Any]) -> int | str | None:
+    for candidate in (delivery.get("messageId"), delivery.get("message_id")):
+        safe = _safe_message_id(candidate)
+        if safe is not None:
+            return safe
+    telegram = delivery.get("telegram") if isinstance(delivery.get("telegram"), dict) else {}
+    return _extract_telegram_message_id(telegram)
+
+
+def _safe_message_id(value: Any) -> int | str | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    return text[:32] if text.isdigit() else None
 
 
 def _fmt(value: Any, default: str = "—") -> str:
@@ -542,12 +690,23 @@ def _rate_limited(ledger: Path) -> bool:
     sent = [
         row
         for row in recent
-        if (row.get("delivery") or {}).get("ok")
+        if _delivery_counts_as_processed(row)
         and str(row.get("createdAt") or "").startswith(current_hour)
     ]
     return len(sent) >= MAX_EVENTS_PER_RUN
 
 
 def _delivery_counts_as_processed(row: Dict[str, Any]) -> bool:
-    delivery = row.get("delivery") or {}
-    return bool(delivery.get("ok"))
+    delivery = row.get("delivery") if isinstance(row.get("delivery"), dict) else {}
+    return _delivery_is_confirmed(delivery)
+
+
+def _delivery_is_confirmed(delivery: Dict[str, Any]) -> bool:
+    """Only a positive Telegram API result with a message receipt is SENT."""
+    telegram = delivery.get("telegram") if isinstance(delivery.get("telegram"), dict) else None
+    telegram_ok = telegram.get("ok") is True if telegram is not None else True
+    return (
+        delivery.get("ok") is True
+        and telegram_ok
+        and _extract_delivery_message_id(delivery) is not None
+    )

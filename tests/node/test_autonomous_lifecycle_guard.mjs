@@ -95,6 +95,7 @@ test('daily autopilot v2 keeps Chinese autonomous reporting and push-only safety
   const report = read('tools/daily_autopilot_v2/report.py');
   const orchestrator = read('tools/daily_autopilot_v2/orchestrator.py');
   const text = read('tools/daily_autopilot_v2/telegram_text.py');
+  const template = read('tools/telegram_digest.py');
   const routes = read('Dashboard/usdjpy_strategy_lab_api_routes.js');
 
   for (const marker of ['今日自动作战计划', '今日自动复盘', 'MT5 模拟车道']) {
@@ -125,14 +126,21 @@ test('daily autopilot v2 keeps Chinese autonomous reporting and push-only safety
     assert.match(runner + orchestrator + routes, new RegExp(marker));
   }
   assert.match(routes, /run-cycle', '--write'/);
-  for (const marker of ['Strategy JSON', 'GA Evolution', 'Telegram Gateway', '下一阶段任务', '独立 Telegram Gateway 已接入']) {
-    assert.match(report + text, new RegExp(marker));
+  for (const marker of ['Strategy JSON', 'GA Evolution', 'Telegram Gateway', '独立 Telegram Gateway 已接入']) {
+    assert.match(report, new RegExp(marker));
   }
-  for (const marker of ['GA 历史样本', '生产级 PASS', '晋级门']) {
-    assert.match(runner + report + text, new RegExp(marker));
+  for (const marker of ['生产级 PASS', 'promotionGateStatus']) {
+    assert.match(runner + report, new RegExp(marker));
+  }
+  for (const marker of ['每日状态', '结论：', '关键：', '下一步：', '永久 Shadow', '无执行通道']) {
+    assert.match(text + template, new RegExp(marker));
+  }
+  for (const marker of ['实盘车道', '建议阶段仓位', 'Live 阶段', '实盘执行质量']) {
+    assert.doesNotMatch(text, new RegExp(marker));
   }
   assert.doesNotMatch(report, /requiresManualReview|manualReview|readyForReview/);
-  assert.match(runner, /dispatch_text/);
+  assert.match(runner, /dispatch_cli_text/);
+  assert.doesNotMatch(runner, /(?<!cli_)dispatch_text\s*\(/);
   assert.match(runner, /telegramGateway/);
   assert.match(read('tools/usdjpy_evidence_os/telegram_gateway.py'), /QG_TELEGRAM_COMMANDS_ALLOWED/);
   assert.doesNotMatch(runner + report + text, /privateKeyAllowed\s*["']?\s*:\s*true/);

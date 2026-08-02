@@ -32,14 +32,14 @@ from ai_analysis.deepseek_mt5_advisor import (  # noqa: E402
     load_deepseek_config,
 )
 from notify.messages import render  # noqa: E402
-from telegram_notifier.client import TelegramClient  # noqa: E402
+from telegram_digest import build_digest, contains_execution_language  # noqa: E402
+from telegram_gateway_cli import dispatch_cli_text  # noqa: E402
 from telegram_notifier.config import load_config  # noqa: E402
 from telegram_notifier.records import record_notification  # noqa: E402
 from telegram_notifier.safety import (  # noqa: E402
     assert_telegram_safety,
-    require_chat_id,
-    require_push_enabled,
-    require_token,
+)
+from telegram_notifier.safety import (  # noqa: E402
     safety_payload as telegram_safety_payload,
 )
 
@@ -202,6 +202,8 @@ def unsafe_advisory_message_reason(message: str) -> str | None:
     for needle, reason in blocked_patterns:
         if needle in text:
             return reason
+    if contains_execution_language(message):
+        return "execution_language_blocked"
     return None
 
 
@@ -644,38 +646,27 @@ def build_observation_message(report: dict[str, Any], *, gate_reason: str) -> st
     headline = advice.get("headline") or decision.get("reasoning") or "AI 已完成只读观察。"
     watch_points = advice.get("watchPoints") if isinstance(advice.get("watchPoints"), list) else []
     risk_notes = advice.get("riskNotes") if isinstance(advice.get("riskNotes"), list) else []
-    model = deepseek_payload.get("model") or advice.get("model") or "deepseek-v4-flash"
     fusion_label = fusion.get("finalAction") or fusion.get("agreement") or "HOLD"
-    lines = [
-        f"🤖 AI 观察摘要 — {symbol}",
-        f"周期：{', '.join(timeframes) or 'M15,H1,H4,D1'}",
-        f"结论：{verdict}｜置信度 {confidence}",
-        f"推送类型：观察摘要，不是入场建议",
-        "",
-        "【核心判断】",
-        str(headline)[:220],
-        "",
-        "【为什么没有发实盘建议】",
-        f"门禁结果：{translate_common_text(gate_reason)}",
-        f"AI 共识：{fusion_label}",
-        f"风险状态：{chinese_risk(source.get('riskLevel'))}",
-        "",
-        "【下一步观察】",
-    ]
     points = [str(item) for item in watch_points[:4] if str(item).strip()]
     if not points:
         points = [str(item) for item in risk_notes[:4] if str(item).strip()]
     if not points:
         points = ["继续等待新鲜快照、风控门禁和多周期信号一致。"]
-    lines.extend(f"{index}. {translate_common_text(point)[:180]}" for index, point in enumerate(points, start=1))
-    lines.extend(
-        [
-            "",
-            "安全边界：只读分析、Telegram 只推送；不下单、不平仓、不撤单、不修改实盘参数。",
-            f"模型：{model}｜东京时间 {format_report_time(report.get('generatedAt'))}",
-        ]
+    next_action = translate_common_text(points[0])
+    return build_digest(
+        title="AI 观察",
+        level="warning",
+        conclusion=f"{symbol} {verdict}；本轮只保留观察证据。",
+        metrics=[
+            f"周期 {', '.join(timeframes) or 'M15,H1,H4,D1'}",
+            f"置信度 {confidence}",
+            f"风险 {chinese_risk(source.get('riskLevel'))}",
+            f"共识 {fusion_label}",
+        ],
+        reasons=[translate_common_text(gate_reason), str(headline)],
+        next_action=next_action,
+        generated_at=report.get("generatedAt"),
     )
-    return "\n".join(lines)
 
 
 def update_state(state: dict[str, Any], *, symbol: str, signature: str, status: str, reason: str, report: dict[str, Any], now_iso: str) -> dict[str, Any]:
@@ -695,7 +686,7 @@ def update_state(state: dict[str, Any], *, symbol: str, signature: str, status: 
             "lastAnalyzedAt": report.get("generatedAt") or now_iso,
         }
     )
-    if status in {"sent", "dry_run"}:
+    if status == "sent":
         previous["lastNotifiedAt"] = now_iso
     symbols[symbol] = previous
     out["symbols"] = symbols
@@ -845,6 +836,10 @@ def _format_target(value: Any) -> str:
     return fmt_price(value)
 
 
+def _delivery_confirmed(delivery: dict[str, Any]) -> bool:
+    return delivery.get("sent") is True and delivery.get("deliveryOk") is True
+
+
 def send_or_record(args: argparse.Namespace, *, message: str, event_type: str, dry_run: bool) -> dict[str, Any]:
     try:
         from ai_journal.telegram_text import ensure_chinese_telegram_text
@@ -854,36 +849,71 @@ def send_or_record(args: argparse.Namespace, *, message: str, event_type: str, d
     unsafe_reason = unsafe_advisory_message_reason(message)
     if unsafe_reason:
         return {
-            "ok": True,
+            "ok": bool(dry_run),
             "status": "blocked_unsafe_message",
             "reason": unsafe_reason,
+            "sendRequested": not dry_run,
+            "sent": False,
+            "deliveryOk": False,
             "safety": monitor_safety(),
         }
     config = load_config(repo_root=args.repo_root, env_file=args.env_file)
     assert_telegram_safety(config)
-    require_token(config)
-    require_chat_id(config)
     if dry_run:
         record = {"ok": True, "recorded": False}
         if not args.no_record:
             record = record_notification(config, event_type=event_type, status="dry_run", payload={"messagePreview": message[:160]})
-        return {"ok": True, "status": "dry_run", "record": record, "safety": telegram_safety_payload(config)}
-    require_push_enabled(config)
-    payload = TelegramClient(token=config.bot_token, api_base_url=config.api_base_url, timeout_seconds=config.timeout_seconds).send_message(
-        chat_id=config.chat_id,
+        return {
+            "ok": True,
+            "status": "preview",
+            "dryRun": True,
+            "sendRequested": False,
+            "sent": False,
+            "deliveryOk": False,
+            "record": record,
+            "safety": telegram_safety_payload(config),
+        }
+
+    gateway = dispatch_cli_text(
+        runtime_dir=runtime_dir_from_args(args),
+        source="mt5_ai_telegram_monitor",
+        topic=event_type,
+        severity="INFO",
         text=message,
-        disable_notification=args.disable_notification,
+        repo_root=args.repo_root or REPO_ROOT,
     )
-    result = payload.get("result") or {}
+    nested_delivery = gateway.get("delivery") if isinstance(gateway.get("delivery"), dict) else {}
+    confirmed = _delivery_confirmed(gateway)
+    if confirmed:
+        status = "sent"
+    elif nested_delivery.get("skipped") is True:
+        status = "send_suppressed"
+    else:
+        status = "send_failed"
     record = {"ok": True, "recorded": False}
     if not args.no_record:
         record = record_notification(
             config,
             event_type=event_type,
-            status="sent",
-            payload={"telegramMessageId": result.get("message_id"), "messagePreview": message[:160]},
+            status="sent" if confirmed else status,
+            payload={
+                "telegramMessageId": nested_delivery.get("messageId") if confirmed else None,
+                "messagePreview": message[:160],
+                "reason": nested_delivery.get("reason"),
+            },
         )
-    return {"ok": True, "status": "sent", "telegramMessageId": result.get("message_id"), "record": record, "safety": telegram_safety_payload(config)}
+    gateway.update(
+        {
+            "ok": confirmed,
+            "status": status,
+            "sent": confirmed,
+            "deliveryOk": confirmed,
+            "telegramMessageId": nested_delivery.get("messageId") if confirmed else None,
+            "record": record,
+            "safety": telegram_safety_payload(config),
+        }
+    )
+    return gateway
 
 
 async def scan_once(args: argparse.Namespace) -> dict[str, Any]:
@@ -935,7 +965,8 @@ async def scan_once(args: argparse.Namespace) -> dict[str, Any]:
                         status = str(delivery.get("status") or "sent_observation")
                         delivery["observation"] = True
                         delivery["gateReason"] = gate_reason
-                        notifications += 1
+                        if _delivery_confirmed(delivery):
+                            notifications += 1
                     else:
                         delivery["observationReason"] = observation_reason
                 items.append(
@@ -991,7 +1022,8 @@ async def scan_once(args: argparse.Namespace) -> dict[str, Any]:
                 except Exception as journal_error:
                     delivery["journal"] = {"ok": False, "status": "journal_error", "error": str(journal_error)[:240]}
             status = str(delivery.get("status") or "sent")
-            notifications += 1
+            if _delivery_confirmed(delivery):
+                notifications += 1
         state = update_state(state, symbol=symbol, signature=signature, status=status, reason=reason, report=report, now_iso=now_iso)
         items.append(
             {
@@ -1007,12 +1039,30 @@ async def scan_once(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
 
+    attempted_deliveries = [
+        item.get("delivery")
+        for item in items
+        if isinstance(item.get("delivery"), dict)
+        and item["delivery"].get("sendRequested") is True
+    ]
+    confirmed_deliveries = [delivery for delivery in attempted_deliveries if _delivery_confirmed(delivery)]
+    failed_delivery_count = len(attempted_deliveries) - len(confirmed_deliveries)
     payload = {
-        "ok": True,
+        "ok": failed_delivery_count == 0,
         "mode": MODE,
         "generatedAt": now_iso,
         "runtimeDir": str(runtime_dir),
         "dryRun": not args.send,
+        "sendRequested": bool(args.send),
+        "deliveryAttemptedCount": len(attempted_deliveries),
+        "sent": bool(confirmed_deliveries),
+        "sentCount": len(confirmed_deliveries),
+        "deliveryOk": (
+            failed_delivery_count == 0 and bool(attempted_deliveries)
+            if args.send
+            else False
+        ),
+        "failedDeliveryCount": failed_delivery_count,
         "items": items,
         "summary": {"symbols": len(symbols), "notifications": notifications},
         "statePath": str(state_path),
@@ -1030,11 +1080,30 @@ async def run_loop(args: argparse.Namespace) -> dict[str, Any]:
     runs: list[dict[str, Any]] = []
     index = 0
     while cycles <= 0 or index < cycles:
-        runs.append(await scan_once(args))
+        run = await scan_once(args)
+        runs.append(run)
         index += 1
+        if bool(args.send) and int(run.get("failedDeliveryCount") or 0) > 0:
+            break
         if cycles <= 0 or index < cycles:
             await asyncio.sleep(interval)
-    return {"ok": True, "mode": MODE, "cycles": cycles, "runs": runs, "safety": monitor_safety()}
+    attempted_count = sum(int(run.get("deliveryAttemptedCount") or 0) for run in runs)
+    sent_count = sum(int(run.get("sentCount") or 0) for run in runs)
+    failed_count = sum(int(run.get("failedDeliveryCount") or 0) for run in runs)
+    return {
+        "ok": failed_count == 0,
+        "mode": MODE,
+        "cycles": cycles,
+        "completedCycles": len(runs),
+        "runs": runs,
+        "sendRequested": bool(args.send),
+        "deliveryAttemptedCount": attempted_count,
+        "sent": sent_count > 0,
+        "sentCount": sent_count,
+        "deliveryOk": bool(args.send) and attempted_count > 0 and failed_count == 0,
+        "failedDeliveryCount": failed_count,
+        "safety": monitor_safety(),
+    }
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -1084,6 +1153,8 @@ def main(argv: list[str] | None = None) -> int:
         if asyncio.iscoroutine(result):
             result = asyncio.run(result)
         emit(result)
+        if isinstance(result, dict) and int(result.get("failedDeliveryCount") or 0) > 0:
+            return 2
         return 0
     except Exception as exc:
         emit({"ok": False, "error": str(exc), "safety": monitor_safety()})

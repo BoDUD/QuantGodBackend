@@ -1399,7 +1399,10 @@ class USDJPYEvidenceOSTests(unittest.TestCase):
                 "【QuantGod 测试】真实发送与去重都要可审计。",
             )
             with patch("tools.usdjpy_evidence_os.telegram_gateway._send_telegram") as sender:
-                sender.return_value = {"ok": True, "telegram": {"ok": True}}
+                sender.return_value = {
+                    "ok": True,
+                    "telegram": {"ok": True, "result": {"message_id": 321}},
+                }
                 first = dispatch_event(runtime_dir, event, send=True)
                 second = dispatch_event(runtime_dir, event, send=True)
 

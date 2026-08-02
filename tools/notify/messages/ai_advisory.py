@@ -9,19 +9,21 @@ skip the push, not the renderer.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from ._shared import (
-    chinese_action,
     chinese_risk,
     fmt_pct,
-    fmt_price,
-    fmt_time_tokyo,
     safe_truncate,
 )
 
+try:
+    from telegram_digest import build_digest
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import build_digest
 
-def render_ai_advisory(payload: dict[str, Any]) -> Optional[str]:
+
+def render_ai_advisory(payload: dict[str, Any]) -> str | None:
     """Render a local AI advisory message.
 
     Returns:
@@ -67,49 +69,17 @@ def render_ai_advisory(payload: dict[str, Any]) -> Optional[str]:
     )
     risk = chinese_risk(decision.get("risk") or risk_val)
 
-    entry = (
-        decision.get("entryZone")
-        or _format_entry(decision)
-        or str(payload.get("entry") or "--")
+    direction = "偏多" if action == "BUY" else "偏空"
+    agreement = safe_truncate(fusion_agreement, 36, "待复核")
+    return build_digest(
+        title="AI 观察",
+        level="warning",
+        conclusion=f"{symbol} {timeframe} 当前{direction}；仅记录方向性 Shadow 观察。",
+        metrics=[f"置信度 {fmt_pct(confidence)}", f"风险 {risk}", grade, f"共识 {agreement}"],
+        reasons=["本地模型与风险证据完成只读汇总；交易计划字段不进入 Telegram。"],
+        next_action="在本地面板复核快照新鲜度、风险门禁与多周期一致性。",
+        generated_at=payload.get("generatedAt") or payload.get("generatedAtIso"),
     )
-    sl = decision.get("stopLoss") or decision.get("sl") or payload.get("stopLoss") or "--"
-    sl_pips = decision.get("stopLossPips") or payload.get("stopLossPips")
-    targets = decision.get("targets") or payload.get("targets") or []
-    rr = decision.get("riskReward") or payload.get("riskReward") or "--"
-    invalidation = safe_truncate(
-        decision.get("invalidation")
-        or payload.get("note")
-        or payload.get("reasoning"),
-        80,
-        "无明确失效条件",
-    )
-
-    direction = chinese_action(action)
-
-    sl_line = (
-        f"止损位：{sl}（{sl_pips} 点）" if sl_pips else f"止损位：{sl}"
-    )
-    targets_line = (
-        "目标位：" + " / ".join(str(t) for t in targets[:3])
-        if targets
-        else "目标位：--"
-    )
-
-    lines = [
-        f"\U0001f3af AI 实盘建议 — {symbol} {timeframe}",
-        f"方向：{direction}｜置信度 {fmt_pct(confidence)}",
-        f"信号等级：{grade}｜风险：{risk}",
-        f"AI 共识：{fusion_agreement}" if fusion_agreement else None,
-        "",
-        f"入场区间：{entry}",
-        sl_line,
-        targets_line,
-        f"盈亏比：{rr}",
-        "",
-        f"失效条件：{invalidation}",
-        f"仅作建议，不执行交易｜东京时间 {fmt_time_tokyo()}",
-    ]
-    return "\n".join(line for line in lines if line is not None)
 
 
 # -----------------------------------------------------------------------
@@ -117,7 +87,7 @@ def render_ai_advisory(payload: dict[str, Any]) -> Optional[str]:
 # -----------------------------------------------------------------------
 
 
-def _primary_tf(payload: dict[str, Any]) -> Optional[str]:
+def _primary_tf(payload: dict[str, Any]) -> str | None:
     tfs = payload.get("timeframes") or []
     return tfs[0] if tfs else None
 
@@ -135,13 +105,3 @@ def _infer_grade(decision: dict[str, Any], payload: dict[str, Any] | None = None
         return "C 级"
     except (TypeError, ValueError):
         return "B 级"
-
-
-def _format_entry(decision: dict[str, Any]) -> str:
-    entry = decision.get("entry") or decision.get("price")
-    if entry is None:
-        return "--"
-    spread = decision.get("entrySpread") or 0
-    if spread:
-        return f"{entry} ± {spread}"
-    return str(entry)

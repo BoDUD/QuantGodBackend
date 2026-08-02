@@ -7,9 +7,17 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
+from tools.notify import notify_service
 from tools.notify.config import NotifyConfig
-from tools.notify.notify_service import build_daily_digest, load_history, scan_runtime_events, send_ai_analysis_summary, send_event
+from tools.notify.notify_service import (
+    build_daily_digest,
+    load_history,
+    scan_runtime_events,
+    send_ai_analysis_summary,
+    send_event,
+)
 
 
 class NotifyServiceTests(unittest.TestCase):
@@ -68,7 +76,7 @@ class NotifyServiceTests(unittest.TestCase):
         result = asyncio.run(send_ai_analysis_summary(report, config=cfg, dry_run=True))
         text = result["record"]["text"]
         self.assertIn("XAUUSDc", text)
-        self.assertIn("做空", text)  # Chinese renderer output
+        self.assertIn("偏空", text)  # Chinese renderer output
         self.assertIn("62%", text)
         self.assertIn("中", text)  # Chinese risk label for "medium"
 
@@ -115,7 +123,7 @@ class NotifyServiceTests(unittest.TestCase):
         self.assertEqual(news_event["data"]["phase"], "PRE_EVENT")
         self.assertEqual(news_event["data"]["forecast"], 5.25)
 
-    def test_ai_analysis_notification_blocks_mock_or_incomplete_trade_plan(self) -> None:
+    def test_ai_analysis_blocks_fake_or_execution_text_but_allows_planless_shadow_observation(self) -> None:
         cfg = NotifyConfig.from_env()
         mock_result = asyncio.run(
             send_event(
@@ -135,7 +143,7 @@ class NotifyServiceTests(unittest.TestCase):
         self.assertEqual(mock_result["status"], "blocked_unsafe_message")
         self.assertEqual(mock_result["reason"], "mock_decision_text")
 
-        incomplete_result = asyncio.run(
+        planless_result = asyncio.run(
             send_event(
                 "AI_ANALYSIS",
                 {"symbol": "EURUSDc", "action": "BUY", "confidence": 0.66, "risk": "low", "note": "wait"},
@@ -143,8 +151,20 @@ class NotifyServiceTests(unittest.TestCase):
                 dry_run=True,
             )
         )
-        self.assertTrue(incomplete_result["skipped"])
-        self.assertEqual(incomplete_result["reason"], "incomplete_trade_plan")
+        self.assertTrue(planless_result["ok"])
+        self.assertTrue(planless_result["dryRun"])
+        self.assertFalse(planless_result["sent"])
+
+        execution_result = asyncio.run(
+            send_event(
+                "AI_ANALYSIS",
+                {"symbol": "EURUSDc", "action": "BUY", "confidence": 0.66, "risk": "low", "note": "立即下单"},
+                config=cfg,
+                dry_run=True,
+            )
+        )
+        self.assertTrue(execution_result["skipped"])
+        self.assertEqual(execution_result["reason"], "execution_instruction")
 
     def test_scan_runtime_events_news_not_blocked_when_no_block(self) -> None:
         (self.runtime / "QuantGod_Dashboard.json").write_text(
@@ -188,6 +208,33 @@ class NotifyServiceTests(unittest.TestCase):
         result = asyncio.run(send_event("TEST", {"message": "missing config"}, config=cfg, dry_run=False))
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "telegram_not_configured")
+
+    def test_actual_send_truth_requires_canonical_gateway_receipt(self) -> None:
+        os.environ["QG_TELEGRAM_BOT_TOKEN"] = "test-token"
+        os.environ["QG_TELEGRAM_CHAT_ID"] = "test-chat"
+        os.environ["QG_TELEGRAM_PUSH_ALLOWED"] = "1"
+        cfg = NotifyConfig.from_env()
+        cases = (
+            (
+                {"ok": True, "sent": False, "deliveryOk": False, "delivery": {"ok": False, "skipped": True, "reason": "rate_limited"}},
+                False,
+                "send_suppressed",
+            ),
+            (
+                {"ok": True, "sent": True, "deliveryOk": True, "delivery": {"ok": True, "messageId": 42}},
+                True,
+                "sent",
+            ),
+        )
+        for gateway_result, expected_sent, expected_status in cases:
+            with self.subTest(expected_status=expected_status), mock.patch.object(
+                notify_service, "dispatch_cli_text", return_value=gateway_result
+            ) as dispatch:
+                result = asyncio.run(send_event("TEST", {"message": "gateway truth"}, config=cfg, dry_run=False))
+            dispatch.assert_called_once()
+            self.assertEqual(result["sent"], expected_sent)
+            self.assertEqual(result["deliveryOk"], expected_sent)
+            self.assertEqual(result["status"], expected_status)
 
 
 if __name__ == "__main__":

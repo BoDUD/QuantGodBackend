@@ -40,9 +40,9 @@ test('auto execution policy keeps execution flags false in schema', () => {
   }
 });
 
-test('telegram text is Chinese and states no order actions', () => {
+test('telegram text is a compact Shadow observation without execution hints', () => {
   const text = read('tools/auto_execution_policy/telegram_text.py');
-  assert.match(text, /不会下单/);
-  assert.match(text, /机会入场/);
-  assert.match(text, /建议仓位/);
+  assert.match(text, /策略观察/);
+  assert.match(text, /Shadow/);
+  assert.doesNotMatch(text, /自动执行策略调参|建议仓位|机会入场|出场参数/);
 });

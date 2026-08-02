@@ -12,6 +12,8 @@ try:
         gateway_status_path,
     )
     from tools.usdjpy_evidence_os.telegram_gateway import (
+        _delivery_is_confirmed,
+        _extract_delivery_message_id,
         collect_scheduled_events,
         gateway_status,
     )
@@ -23,6 +25,8 @@ except ModuleNotFoundError:  # pragma: no cover
         gateway_status_path,
     )
     from usdjpy_evidence_os.telegram_gateway import (
+        _delivery_is_confirmed,
+        _extract_delivery_message_id,
         collect_scheduled_events,
         gateway_status,
     )
@@ -43,7 +47,7 @@ def build_gateway_ops_status(runtime_dir: Path) -> Dict[str, Any]:
         if _delivery_counts_as_processed(row)
     }
     pending_rows = [row for row in queue if row.get("eventId") not in processed_ids]
-    sent_rows = [row for row in ledger if _delivery(row).get("ok") is True]
+    sent_rows = [row for row in ledger if _delivery_counts_as_processed(row)]
     suppressed_rows = [
         row
         for row in ledger
@@ -52,7 +56,9 @@ def build_gateway_ops_status(runtime_dir: Path) -> Dict[str, Any]:
     failed_rows = [
         row
         for row in ledger
-        if row.get("delivery") and not _delivery(row).get("ok") and not _delivery(row).get("skipped")
+        if row.get("delivery")
+        and not _delivery_counts_as_processed(row)
+        and not _delivery(row).get("skipped")
     ]
     topic_delivery_rows = _topic_delivery_rows(ledger)
     topic_pending_rows = _topic_pending_rows(pending_rows)
@@ -86,6 +92,8 @@ def build_gateway_ops_status(runtime_dir: Path) -> Dict[str, Any]:
         "commandsAllowed": False,
         "commandsEnvRequested": bool(base_status.get("commandsEnvRequested")),
         "commandsBlockedReason": base_status.get("commandsBlockedReason"),
+        "environmentSafe": base_status.get("environmentSafe") is True,
+        "blockedUnsafeEnvironmentKeys": list(base_status.get("blockedUnsafeEnvironmentKeys") or []),
         "gatewayFiles": {
             "status": str(gateway_status_path(runtime_dir)),
             "ledger": str(gateway_ledger_path(runtime_dir)),
@@ -125,7 +133,7 @@ def _delivery(row: Dict[str, Any]) -> Dict[str, Any]:
 def _delivery_counts_as_processed(row: Dict[str, Any]) -> bool:
     delivery = _delivery(row)
     # Only successful sends clear a queue item from the pending view.
-    return bool(delivery.get("ok"))
+    return _delivery_is_confirmed(delivery)
 
 
 def _topic_delivery_rows(ledger: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -133,15 +141,19 @@ def _topic_delivery_rows(ledger: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for row in ledger:
         topic = str(row.get("topic") or "UNKNOWN")
         delivery = _delivery(row)
+        confirmed = _delivery_is_confirmed(delivery)
+        message_id = _extract_delivery_message_id(delivery) if confirmed else None
         latest[topic] = {
             "topic": topic,
             "eventId": row.get("eventId"),
             "source": row.get("source"),
             "severity": row.get("severity"),
-            "deliveryOk": bool(delivery.get("ok")),
+            "deliveryOk": confirmed,
             "skipped": bool(delivery.get("skipped")),
             "reason": delivery.get("reason") or delivery.get("error"),
             "processedAtIso": _delivery_time(row, delivery),
+            "sentAtIso": str(delivery.get("sentAtIso")) if confirmed and delivery.get("sentAtIso") else None,
+            "messageId": message_id,
         }
     return sorted(latest.values(), key=lambda row: str(row.get("topic") or ""))
 
@@ -171,6 +183,8 @@ def _delivery_time(row: Dict[str, Any], delivery: Dict[str, Any]) -> str | None:
 def _ops_status(base_status: Dict[str, Any], pending: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
     if base_status.get("commandsEnvRequested"):
         return "COMMAND_ENV_BLOCKED_WARN"
+    if base_status.get("environmentSafe") is False:
+        return "UNSAFE_ENVIRONMENT_BLOCKED"
     if failed:
         return "DELIVERY_WARN"
     if pending:
@@ -181,6 +195,8 @@ def _ops_status(base_status: Dict[str, Any], pending: List[Dict[str, Any]], fail
 def _ops_status_zh(base_status: Dict[str, Any], pending: List[Dict[str, Any]], failed: List[Dict[str, Any]]) -> str:
     if base_status.get("commandsEnvRequested"):
         return "Telegram 命令开关被误设，但执行入口已硬阻断"
+    if base_status.get("environmentSafe") is False:
+        return "Telegram 高风险环境开关被误设，外部投递已硬阻断"
     if failed:
         return "有投递失败需要复核"
     if pending:

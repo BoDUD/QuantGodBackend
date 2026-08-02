@@ -1,95 +1,62 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
+
+try:
+    from telegram_digest import build_digest, clean_text
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from tools.telegram_digest import build_digest, clean_text
 
 
-def _items(rows: List[str], max_items: int = 8) -> str:
-    if not rows:
-        return "- 暂无"
-    shown = rows[:max_items]
-    suffix = [] if len(rows) <= max_items else [f"- 其余 {len(rows) - max_items} 条已省略"]
-    return "\n".join(shown + suffix)
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
-def build_automation_telegram_text(report: Dict[str, Any]) -> str:
-    status = report.get("stateZh") or report.get("state") or "未知"
-    symbols = ", ".join(report.get("symbols") or []) or "未指定"
-    source = report.get("singleSourceOfTruth") or "USDJPY_LIVE_LOOP"
-    top_advisory = report.get("topAdvisoryPolicy") or report.get("topShadowPolicy") or {}
-    top_shadow = report.get("topShadowPolicy") or {}
-    dry_run = report.get("dryRunDecision") or {}
-    latency = report.get("entryLatencyReport") or {}
-    latency_summary = latency.get("summary") or {}
-    iteration_plan = report.get("safeIterationPlan") or {}
-    ga_summary = report.get("gaFactorySummary") or iteration_plan.get("gaFactorySummary") or {}
-    best_elite = ga_summary.get("bestElite") or {}
-    latency_timeline = []
-    for stage in latency.get("timeline", []) or []:
-        latency_timeline.append(
-            f"- {stage.get('labelZh', stage.get('stage'))}：{stage.get('statusZh', stage.get('status'))}"
-            f"｜{stage.get('reasonZh', '')}"
+def build_automation_telegram_text(report: dict[str, Any]) -> str:
+    state = clean_text(report.get("stateZh") or report.get("state"), "尚未运行")
+    steps = report.get("steps") if isinstance(report.get("steps"), list) else []
+    passed_steps = sum(1 for step in steps if isinstance(step, dict) and step.get("ok"))
+    missing = [clean_text(item) for item in (report.get("missingEvidence") or []) if clean_text(item)]
+    blockers = [clean_text(item) for item in (report.get("blockedReasons") or []) if clean_text(item)]
+    iteration = _dict(report.get("safeIterationPlan"))
+    ga_summary = _dict(iteration.get("gaFactorySummary"))
+    best_elite = _dict(ga_summary.get("bestElite"))
+    actions = iteration.get("actions") if isinstance(iteration.get("actions"), list) else []
+
+    has_blocker = bool(missing or blockers or "阻断" in state or "失败" in state)
+    if has_blocker:
+        conclusion = "巡检发现证据缺口，自动链路保持只读。"
+        level = "warning"
+    elif not steps:
+        conclusion = "尚无完整巡检结果，等待下一轮只读闭环。"
+        level = "info"
+    else:
+        conclusion = "自动巡检通过，继续积累 Shadow 证据。"
+        level = "ok"
+
+    reasons = (blockers + missing)[:2]
+    if not reasons and not steps:
+        reasons = ["当前尚未生成完整巡检证据。"]
+    next_action = "运行下一轮自动巡检并刷新证据。"
+    if actions and isinstance(actions[0], dict):
+        next_action = clean_text(
+            actions[0].get("nextRequiredActionZh") or actions[0].get("reasonZh"),
+            next_action,
         )
-    iteration_actions = []
-    for action in iteration_plan.get("actions", []) or []:
-        iteration_actions.append(
-            f"- {action.get('labelZh', action.get('actionId'))}：{action.get('nextRequiredActionZh', action.get('reasonZh', ''))}"
-        )
-    steps = []
-    for step in report.get("steps", []):
-        mark = "通过" if step.get("ok") else "未通过"
-        label = step.get("labelZh") or step.get("name")
-        detail = step.get("summaryZh") or step.get("reason") or ""
-        steps.append(f"- {label}：{mark}" + (f"｜{detail}" if detail else ""))
-
-    missing = [f"- {x}" for x in report.get("missingEvidence", [])]
-    blockers = [f"- {x}" for x in report.get("blockedReasons", [])]
-    opportunities = []
-    for item in report.get("policySummary", {}).get("opportunities", []):
-        opportunities.append(
-            f"- {item.get('symbol')}｜{item.get('directionZh', item.get('direction'))}｜{item.get('entryModeZh', item.get('entryMode'))}｜建议仓位 {item.get('recommendedLot', 0)}｜{item.get('reason', '')}"
-        )
-    blocked = []
-    for item in report.get("policySummary", {}).get("blocked", []):
-        blocked.append(
-            f"- {item.get('symbol')}｜{item.get('directionZh', item.get('direction'))}｜阻断｜{item.get('reason', '')}"
-        )
-
-    return "\n".join([
-        "【QuantGod USDJPY 自动化闭环巡检】",
-        "",
-        f"结论：{status}",
-        f"品种：{symbols}",
-        f"主状态来源：{source}（USDJPY Strategy Lab + Shadow advisory compatibility loop）",
-        f"生成时间：{report.get('generatedAt', '')}",
-        "",
-        "Shadow advisory 路线：",
-        f"- 研究候选：{top_advisory.get('strategy', '暂无')}｜{top_advisory.get('direction', 'UNKNOWN')}｜{top_advisory.get('entryMode', 'UNKNOWN')}｜研究仓位参数 {top_advisory.get('recommendedLot', 0)}",
-        f"- 影子第一名：{top_shadow.get('strategy', '暂无')}｜{top_shadow.get('direction', 'UNKNOWN')}｜{top_shadow.get('entryMode', 'UNKNOWN')}",
-        f"- EA 干跑：{dry_run.get('decision', '暂无')}｜{dry_run.get('strategy', 'UNKNOWN')}｜{dry_run.get('direction', 'UNKNOWN')}",
-        f"- 入场慢点：{latency_summary.get('stateZh', '暂无')}｜{latency_summary.get('primaryReasonZh', '')}",
-        "",
-        "链路步骤：",
-        _items(steps, 10),
-        "",
-        "入场延迟时间线：",
-        _items(latency_timeline, 8),
-        "",
-        "下一轮安全迭代：",
-        f"- 就绪分：{iteration_plan.get('readinessScore', '暂无')}｜模式：{iteration_plan.get('mode', 'SHADOW_SIMULATION_ONLY')}",
-        f"- GA 精英：第 {ga_summary.get('currentGeneration', '暂无')} 代｜{best_elite.get('seedId', '暂无')}｜fitness {best_elite.get('fitness', '暂无')}｜{best_elite.get('promotionStage', 'SHADOW')}",
-        _items(iteration_actions, 6),
-        "",
-        "缺失证据：",
-        _items(missing, 8),
-        "",
-        "阻断原因：",
-        _items(blockers, 8),
-        "",
-        "机会入场 / 标准入场：",
-        _items(opportunities, 8),
-        "",
-        "当前阻断项：",
-        _items(blocked, 8),
-        "",
-        "安全边界：executionLaneExists=false；本链路只生成 Shadow/ReadOnly 证据和中文复核文本，不会下单、平仓、撤单或修改 broker 状态。",
-    ])
+    symbols = ", ".join(str(item) for item in (report.get("symbols") or [])) or "USDJPYc"
+    readiness = iteration.get("readinessScore")
+    metrics = [
+        symbols,
+        f"步骤 {passed_steps}/{len(steps)} 通过",
+        f"就绪分 {readiness if readiness not in (None, '') else '—'}",
+        f"GA 合格策略 {'有' if best_elite else '无'}",
+    ]
+    return build_digest(
+        title="自动巡检",
+        level=level,
+        conclusion=conclusion,
+        metrics=metrics,
+        reasons=reasons,
+        next_action=next_action,
+        generated_at=report.get("generatedAt"),
+    )

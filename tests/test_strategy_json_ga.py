@@ -805,9 +805,11 @@ class StrategyJsonGATests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_generation(Path(tmp), write=True)
             text = ga_to_chinese_text(result)
-            self.assertIn("GA 进化报告", text)
-            self.assertIn("安全边界", text)
-            self.assertIn("不直接实盘", text)
+            self.assertIn("QuantGod · GA 进化", text)
+            self.assertIn("结论：", text)
+            self.assertIn("下一步：", text)
+            self.assertIn("无执行通道", text)
+            self.assertLessEqual(len(text), 700)
             self.assertNotIn("OrderSend", text)
 
 

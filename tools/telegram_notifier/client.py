@@ -1,11 +1,18 @@
-"""Small standard-library Telegram Bot API client for push-only notifications."""
+"""Small Telegram Bot API client for configuration and chat-link queries.
+
+Outbound messages intentionally do not use this client. All delivery transport
+is owned by the canonical QuantGod Telegram Gateway.
+"""
 from __future__ import annotations
+
 import json
 import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
+
 
 class TelegramApiError(RuntimeError):
     """Raised when Telegram returns an API error or non-JSON response."""
@@ -89,10 +96,6 @@ class TelegramClient:
         if allowed_updates is not None:
             params["allowed_updates"] = json.dumps(list(allowed_updates), separators=(",", ":"))
         return self.request("getUpdates", params)
-
-    def send_message(self, *, chat_id: str, text: str, disable_notification: bool = False) -> dict[str, Any]:
-        return self.request("sendMessage", {"chat_id": str(chat_id), "text": validate_message_text(text), "disable_notification": "true" if disable_notification else "false"})
-
 
 def extract_chat_candidates(updates: Iterable[dict[str, Any]], *, private_only: bool = True) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
