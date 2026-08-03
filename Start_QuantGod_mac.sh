@@ -335,6 +335,7 @@ if [[ -d "$MT5_ROOT" ]]; then
   EA_BUILD_DIR="$MT5_PREFIX/drive_c/qg"
   EA_BUILD_SOURCE="$EA_BUILD_DIR/QuantGod_MultiStrategy.mq5"
   EA_BUILD_OUTPUT="$EA_BUILD_DIR/QuantGod_MultiStrategy.ex5"
+  EA_COMPILE_LOG="$EA_BUILD_DIR/compile.log"
   EA_COMPILE_MARKER="$EA_BUILD_DIR/.QuantGod_MultiStrategy.compile-started"
   EA_INSTALLED_OUTPUT="$MT5_EXPERTS/QuantGod_MultiStrategy.ex5"
   EA_DISABLED_OUTPUT="$MT5_EXPERTS/QuantGod_MultiStrategy.ex5.execution-lane-removed"
@@ -366,12 +367,40 @@ if [[ -d "$MT5_ROOT" ]]; then
       fi
       sleep 1
     done
-    if [[ "$COMPILE_CODE" -ne 0 || "$EA_COMPILE_READY" != "1" ]]; then
+    # Recent Wine/MetaEditor builds can return 1 after a successful compile.
+    # Never trust that exit code alone: require both a fresh EX5 and a fresh
+    # UTF-16/UTF-8 compile log with the exact zero-error, zero-warning result.
+    EA_COMPILE_LOG_SAFE=0
+    if [[ "$EA_COMPILE_READY" == "1" && -s "$EA_COMPILE_LOG" && "$EA_COMPILE_LOG" -nt "$EA_COMPILE_MARKER" ]]; then
+      if "$QG_PYTHON_BIN" - "$EA_COMPILE_LOG" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+raw = Path(sys.argv[1]).read_bytes()
+text = None
+for encoding in ("utf-16", "utf-8-sig", "utf-8"):
+    try:
+        text = raw.decode(encoding)
+        break
+    except UnicodeDecodeError:
+        continue
+if text is None or re.search(r"Result:\s*0 errors,\s*0 warnings\b", text) is None:
+    raise SystemExit(1)
+PY
+      then
+        EA_COMPILE_LOG_SAFE=1
+      fi
+    fi
+    if [[ "$EA_COMPILE_READY" != "1" || "$EA_COMPILE_LOG_SAFE" != "1" ]]; then
       rm -f "$EA_BUILD_OUTPUT" "$EA_COMPILE_MARKER" "$EA_INSTALL_TMP"
       echo "MetaEditor did not produce a fresh safe QuantGod_MultiStrategy.ex5. Exit code: $COMPILE_CODE" >&2
-      echo "Check: $MT5_PREFIX/drive_c/qg/compile.log"
+      echo "Check: $EA_COMPILE_LOG"
       echo "The previous EA binary remains quarantined as $EA_DISABLED_OUTPUT and MT5 will not be launched." >&2
       exit 3
+    fi
+    if [[ "$COMPILE_CODE" -ne 0 ]]; then
+      echo "MetaEditor returned $COMPILE_CODE after a verified zero-error, zero-warning compile; accepting the fresh artifact."
     fi
     cp "$EA_BUILD_OUTPUT" "$EA_INSTALL_TMP"
     mv -f "$EA_INSTALL_TMP" "$EA_INSTALLED_OUTPUT"
