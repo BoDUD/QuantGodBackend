@@ -135,16 +135,51 @@ class Mt5ExecutionGuardTests(unittest.TestCase):
 
     def test_mac_compile_cannot_reuse_a_stale_binary(self):
         text = MAC_LAUNCHER.read_text(encoding="utf-8")
-        self.assertIn('rm -f "$EA_BUILD_OUTPUT" "$EA_COMPILE_MARKER" "$EA_INSTALL_TMP"', text)
+        self.assertIn('EA_BUILD_DIR="$(mktemp -d "$EA_BUILD_ROOT/compile-run.XXXXXX")"', text)
+        self.assertIn('EA_COMPILE_RUN_ID="${EA_BUILD_DIR##*/}"', text)
+        self.assertIn('EA_BUILD_WIN_DIR="C:\\\\qg\\\\$EA_COMPILE_RUN_ID"', text)
+        self.assertIn(
+            'EA_EXPECTED_WINDOWS_SOURCE="${EA_BUILD_WIN_DIR}\\\\QuantGod_MultiStrategy.mq5"',
+            text,
+        )
+        self.assertIn(
+            'rm -f "$EA_BUILD_OUTPUT" "$EA_COMPILE_LOG" "$EA_COMPILE_MARKER" "$EA_INSTALL_TMP"',
+            text,
+        )
         self.assertLess(text.index('mv -f "$EA_INSTALLED_OUTPUT" "$EA_DISABLED_OUTPUT"'), text.index('if [[ -x "$WINE64" ]]'))
         self.assertIn('EA_COMPILE_WAIT_SECONDS="${QG_MT5_COMPILE_WAIT_SECONDS:-120}"', text)
+        self.assertIn('[[ ! "$EA_COMPILE_WAIT_SECONDS" =~ ^[0-9]+$ ]]', text)
+        self.assertIn('EA_COMPILE_WAIT_SECONDS > 600', text)
         self.assertIn('"$EA_BUILD_OUTPUT" -nt "$EA_COMPILE_MARKER"', text)
+        self.assertIn('-s "$EA_COMPILE_LOG" && "$EA_COMPILE_LOG" -nt "$EA_COMPILE_MARKER"', text)
         self.assertIn('"$EA_COMPILE_READY" != "1"', text)
-        self.assertIn('"$EA_COMPILE_LOG" -nt "$EA_COMPILE_MARKER"', text)
         self.assertIn('EA_COMPILE_LOG_SAFE=0', text)
-        self.assertIn(r'Result:\s*0 errors,\s*0 warnings\b', text)
+        self.assertIn('tools/validate_metaeditor_compile.py', text)
+        self.assertIn('--source "$EA_BUILD_SOURCE"', text)
+        self.assertIn('--ex5 "$EA_BUILD_OUTPUT"', text)
+        self.assertIn('--log "$EA_COMPILE_LOG"', text)
+        self.assertIn('--marker "$EA_COMPILE_MARKER"', text)
+        self.assertEqual(
+            text.count('--expected-windows-source "$EA_EXPECTED_WINDOWS_SOURCE"'),
+            3,
+        )
         self.assertIn('"$EA_COMPILE_LOG_SAFE" != "1"', text)
         self.assertIn('if [[ "$COMPILE_CODE" -ne 0 ]]; then', text)
+        self.assertIn('EA_CANONICAL_SOURCE="$EA_BUILD_ROOT/QuantGod_MultiStrategy.mq5"', text)
+        self.assertIn('EA_CANONICAL_OUTPUT="$EA_BUILD_ROOT/QuantGod_MultiStrategy.ex5"', text)
+        self.assertIn('EA_CANONICAL_LOG="$EA_BUILD_ROOT/compile.log"', text)
+        self.assertIn('cp -p "$EA_BUILD_SOURCE" "$EA_CANONICAL_SOURCE_TMP"', text)
+        self.assertIn('cp -p "$EA_BUILD_OUTPUT" "$EA_CANONICAL_OUTPUT_TMP"', text)
+        self.assertIn('cp -p "$EA_COMPILE_LOG" "$EA_CANONICAL_LOG_TMP"', text)
+        self.assertLess(
+            text.index('mv -f "$EA_CANONICAL_OUTPUT_TMP" "$EA_CANONICAL_OUTPUT"'),
+            text.index('mv -f "$EA_CANONICAL_SOURCE_TMP" "$EA_CANONICAL_SOURCE"'),
+        )
+        self.assertLess(
+            text.index('mv -f "$EA_CANONICAL_LOG_TMP" "$EA_CANONICAL_LOG"'),
+            text.index('mv -f "$EA_CANONICAL_SOURCE_TMP" "$EA_CANONICAL_SOURCE"'),
+        )
+        self.assertIn('cp -p "$EA_CANONICAL_OUTPUT" "$EA_INSTALL_TMP"', text)
         self.assertIn('mv -f "$EA_INSTALL_TMP" "$EA_INSTALLED_OUTPUT"', text)
         self.assertIn("previous EA binary remains quarantined", text)
         self.assertNotRegex(

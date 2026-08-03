@@ -332,15 +332,26 @@ if [[ -d "$MT5_ROOT" ]]; then
     patch_ini_section_key "$MT5_ROOT/config/terminal.ini" "Charts" "MaxBars" "$QG_MT5_MAX_BARS"
   fi
 
-  EA_BUILD_DIR="$MT5_PREFIX/drive_c/qg"
+  EA_BUILD_ROOT="$MT5_PREFIX/drive_c/qg"
+  EA_BUILD_DIR="$(mktemp -d "$EA_BUILD_ROOT/compile-run.XXXXXX")"
+  EA_COMPILE_RUN_ID="${EA_BUILD_DIR##*/}"
+  EA_BUILD_WIN_DIR="C:\\qg\\$EA_COMPILE_RUN_ID"
+  EA_EXPECTED_WINDOWS_SOURCE="${EA_BUILD_WIN_DIR}\\QuantGod_MultiStrategy.mq5"
   EA_BUILD_SOURCE="$EA_BUILD_DIR/QuantGod_MultiStrategy.mq5"
   EA_BUILD_OUTPUT="$EA_BUILD_DIR/QuantGod_MultiStrategy.ex5"
   EA_COMPILE_LOG="$EA_BUILD_DIR/compile.log"
   EA_COMPILE_MARKER="$EA_BUILD_DIR/.QuantGod_MultiStrategy.compile-started"
+  EA_CANONICAL_SOURCE="$EA_BUILD_ROOT/QuantGod_MultiStrategy.mq5"
+  EA_CANONICAL_OUTPUT="$EA_BUILD_ROOT/QuantGod_MultiStrategy.ex5"
+  EA_CANONICAL_LOG="$EA_BUILD_ROOT/compile.log"
+  EA_CANONICAL_SOURCE_TMP="$EA_BUILD_ROOT/.QuantGod_MultiStrategy.mq5.verified-$EA_COMPILE_RUN_ID"
+  EA_CANONICAL_OUTPUT_TMP="$EA_BUILD_ROOT/.QuantGod_MultiStrategy.ex5.verified-$EA_COMPILE_RUN_ID"
+  EA_CANONICAL_LOG_TMP="$EA_BUILD_ROOT/.compile.log.verified-$EA_COMPILE_RUN_ID"
   EA_INSTALLED_OUTPUT="$MT5_EXPERTS/QuantGod_MultiStrategy.ex5"
   EA_DISABLED_OUTPUT="$MT5_EXPERTS/QuantGod_MultiStrategy.ex5.execution-lane-removed"
   EA_INSTALL_TMP="$MT5_EXPERTS/.QuantGod_MultiStrategy.ex5.new.$$"
-  rm -f "$EA_BUILD_OUTPUT" "$EA_COMPILE_MARKER" "$EA_INSTALL_TMP"
+  rm -f "$EA_BUILD_OUTPUT" "$EA_COMPILE_LOG" "$EA_COMPILE_MARKER" "$EA_INSTALL_TMP" \
+    "$EA_CANONICAL_SOURCE_TMP" "$EA_CANONICAL_OUTPUT_TMP" "$EA_CANONICAL_LOG_TMP"
   if [[ -f "$EA_INSTALLED_OUTPUT" ]]; then
     mv -f "$EA_INSTALLED_OUTPUT" "$EA_DISABLED_OUTPUT"
   fi
@@ -352,16 +363,24 @@ if [[ -d "$MT5_ROOT" ]]; then
     set +e
     WINEPREFIX="$MT5_PREFIX" "$WINE64" \
       'C:\Program Files\MetaTrader 5\metaeditor64.exe' \
-      '/compile:C:\qg\QuantGod_MultiStrategy.mq5' \
-      '/log:C:\qg\compile.log'
+      "/compile:${EA_EXPECTED_WINDOWS_SOURCE}" \
+      "/log:${EA_BUILD_WIN_DIR}\\compile.log"
     COMPILE_CODE=$?
     set -e
-    # MetaEditor may detach from Wine before it flushes the EX5. Poll for a
-    # bounded interval and accept only an artifact newer than this run's marker.
+    # MetaEditor may detach from Wine before it flushes its files. Poll for a
+    # bounded interval and require both artifacts to be newer than this run's
+    # marker. The per-run directory prevents a previous detached compiler from
+    # writing stale evidence into the current acceptance paths.
     EA_COMPILE_WAIT_SECONDS="${QG_MT5_COMPILE_WAIT_SECONDS:-120}"
+    if [[ ! "$EA_COMPILE_WAIT_SECONDS" =~ ^[0-9]+$ ]] || \
+       ((EA_COMPILE_WAIT_SECONDS < 1 || EA_COMPILE_WAIT_SECONDS > 600)); then
+      echo "QG_MT5_COMPILE_WAIT_SECONDS must be an integer from 1 to 600." >&2
+      exit 2
+    fi
     EA_COMPILE_READY=0
     for ((EA_COMPILE_WAITED = 0; EA_COMPILE_WAITED < EA_COMPILE_WAIT_SECONDS; EA_COMPILE_WAITED++)); do
-      if [[ -s "$EA_BUILD_OUTPUT" && "$EA_BUILD_OUTPUT" -nt "$EA_COMPILE_MARKER" ]]; then
+      if [[ -s "$EA_BUILD_OUTPUT" && "$EA_BUILD_OUTPUT" -nt "$EA_COMPILE_MARKER" && \
+            -s "$EA_COMPILE_LOG" && "$EA_COMPILE_LOG" -nt "$EA_COMPILE_MARKER" ]]; then
         EA_COMPILE_READY=1
         break
       fi
@@ -369,25 +388,17 @@ if [[ -d "$MT5_ROOT" ]]; then
     done
     # Recent Wine/MetaEditor builds can return 1 after a successful compile.
     # Never trust that exit code alone: require both a fresh EX5 and a fresh
-    # UTF-16/UTF-8 compile log with the exact zero-error, zero-warning result.
+    # supported-encoding compile log with exactly one final zero-error,
+    # zero-warning result. The validator repeats the freshness checks so this
+    # gate cannot be weakened by the polling loop alone.
     EA_COMPILE_LOG_SAFE=0
-    if [[ "$EA_COMPILE_READY" == "1" && -s "$EA_COMPILE_LOG" && "$EA_COMPILE_LOG" -nt "$EA_COMPILE_MARKER" ]]; then
-      if "$QG_PYTHON_BIN" - "$EA_COMPILE_LOG" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-raw = Path(sys.argv[1]).read_bytes()
-text = None
-for encoding in ("utf-16", "utf-8-sig", "utf-8"):
-    try:
-        text = raw.decode(encoding)
-        break
-    except UnicodeDecodeError:
-        continue
-if text is None or re.search(r"Result:\s*0 errors,\s*0 warnings\b", text) is None:
-    raise SystemExit(1)
-PY
+    if [[ "$EA_COMPILE_READY" == "1" ]]; then
+      if "$QG_PYTHON_BIN" "$SCRIPT_DIR/tools/validate_metaeditor_compile.py" \
+        --source "$EA_BUILD_SOURCE" \
+        --ex5 "$EA_BUILD_OUTPUT" \
+        --log "$EA_COMPILE_LOG" \
+        --marker "$EA_COMPILE_MARKER" \
+        --expected-windows-source "$EA_EXPECTED_WINDOWS_SOURCE"
       then
         EA_COMPILE_LOG_SAFE=1
       fi
@@ -402,9 +413,43 @@ PY
     if [[ "$COMPILE_CODE" -ne 0 ]]; then
       echo "MetaEditor returned $COMPILE_CODE after a verified zero-error, zero-warning compile; accepting the fresh artifact."
     fi
-    cp "$EA_BUILD_OUTPUT" "$EA_INSTALL_TMP"
+
+    # Publish the exact validated run back to the canonical provenance staging
+    # paths. copy2-equivalent `cp -p` preserves the source/log/binary mtimes;
+    # source is moved last so canonical source <= canonical EX5/log remains true.
+    EA_CANONICAL_PUBLISH_READY=0
+    if cp -p "$EA_BUILD_SOURCE" "$EA_CANONICAL_SOURCE_TMP" && \
+       cp -p "$EA_BUILD_OUTPUT" "$EA_CANONICAL_OUTPUT_TMP" && \
+       cp -p "$EA_COMPILE_LOG" "$EA_CANONICAL_LOG_TMP" && \
+       "$QG_PYTHON_BIN" "$SCRIPT_DIR/tools/validate_metaeditor_compile.py" \
+         --source "$EA_CANONICAL_SOURCE_TMP" \
+         --ex5 "$EA_CANONICAL_OUTPUT_TMP" \
+         --log "$EA_CANONICAL_LOG_TMP" \
+         --marker "$EA_COMPILE_MARKER" \
+         --expected-windows-source "$EA_EXPECTED_WINDOWS_SOURCE" && \
+       mv -f "$EA_CANONICAL_OUTPUT_TMP" "$EA_CANONICAL_OUTPUT" && \
+       mv -f "$EA_CANONICAL_LOG_TMP" "$EA_CANONICAL_LOG" && \
+       mv -f "$EA_CANONICAL_SOURCE_TMP" "$EA_CANONICAL_SOURCE" && \
+       "$QG_PYTHON_BIN" "$SCRIPT_DIR/tools/validate_metaeditor_compile.py" \
+         --source "$EA_CANONICAL_SOURCE" \
+         --ex5 "$EA_CANONICAL_OUTPUT" \
+         --log "$EA_CANONICAL_LOG" \
+         --marker "$EA_COMPILE_MARKER" \
+         --expected-windows-source "$EA_EXPECTED_WINDOWS_SOURCE"
+    then
+      EA_CANONICAL_PUBLISH_READY=1
+    fi
+    if [[ "$EA_CANONICAL_PUBLISH_READY" != "1" ]]; then
+      rm -f "$EA_CANONICAL_SOURCE_TMP" "$EA_CANONICAL_OUTPUT_TMP" "$EA_CANONICAL_LOG_TMP" \
+        "$EA_BUILD_OUTPUT" "$EA_COMPILE_MARKER" "$EA_INSTALL_TMP"
+      echo "Verified compile could not be published to canonical provenance staging; MT5 will not be launched." >&2
+      exit 3
+    fi
+
+    cp -p "$EA_CANONICAL_OUTPUT" "$EA_INSTALL_TMP"
     mv -f "$EA_INSTALL_TMP" "$EA_INSTALLED_OUTPUT"
-    rm -f "$EA_DISABLED_OUTPUT" "$EA_COMPILE_MARKER"
+    rm -f "$EA_DISABLED_OUTPUT" "$EA_COMPILE_MARKER" \
+      "$EA_CANONICAL_SOURCE_TMP" "$EA_CANONICAL_OUTPUT_TMP" "$EA_CANONICAL_LOG_TMP"
     echo "Fresh Shadow/ReadOnly EA compiled and atomically installed into MT5 Experts."
 
     if [[ "${QG_PREPARE_ISOLATED_TESTER:-1}" != "0" ]]; then
