@@ -139,7 +139,12 @@ def _diagnostic_spread_pips(diagnostics: Dict[str, Any]) -> float | None:
     return None
 
 
-def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def _build_spread_gate(
+    snapshot: Dict[str, Any],
+    diagnostics: Dict[str, Any] | None = None,
+    *,
+    dual_account: bool = True,
+) -> Dict[str, Any]:
     diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
     normal, soft, hard = _spread_thresholds(diagnostics)
     spread = _diagnostic_spread_pips(diagnostics)
@@ -148,7 +153,7 @@ def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | N
         spread = _spread_from_price_payload(_price_payload(snapshot or {}))
         source = "runtime_snapshot" if spread is not None else "missing"
     if spread is None:
-        return {
+        payload = {
             "schema": "quantgod.usdjpy_spread_gate.v1",
             "spreadPips": None,
             "tier": "UNKNOWN",
@@ -160,13 +165,23 @@ def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | N
             "lotMultiplier": 0.0,
             "maxCentOpportunityLot": 0.0,
             "action": "BLOCK",
-            "centAction": "BLOCKED",
-            "usdAction": "BLOCKED",
-            "centActionZh": "美分账户阻断；没有可靠点差。",
-            "usdActionZh": "美元账户阻断；没有可靠点差。",
             "source": source,
-            "reasonZh": "缺少可靠点差，不能用未知执行成本入场。",
         }
+        if dual_account:
+            payload.update({
+                "centAction": "BLOCKED",
+                "usdAction": "BLOCKED",
+                "centActionZh": "美分账户阻断；没有可靠点差。",
+                "usdActionZh": "美元账户阻断；没有可靠点差。",
+                "reasonZh": "缺少可靠点差，不能用未知执行成本入场。",
+            })
+        else:
+            payload.update({
+                "currentAccountAction": "BLOCKED",
+                "currentAccountActionZh": "当前主账号阻断；没有可靠点差。",
+                "reasonZh": "缺少可靠点差，当前主账号不能用未知执行成本生成入场建议。",
+            })
+        return payload
     soft_lot_multiplier = max(0.01, min(1.0, _env_float("QG_USDJPY_SPREAD_SOFT_LOT_MULTIPLIER", 0.35)))
     soft_high_lot_multiplier = max(0.01, min(1.0, _env_float("QG_USDJPY_SPREAD_SOFT_HIGH_LOT_MULTIPLIER", 0.20)))
     soft_cap = max(0.01, _env_float("QG_USDJPY_SOFT_WIDE_CENT_MAX_LOT", 0.10))
@@ -180,7 +195,11 @@ def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | N
         action = "ALLOW_NORMAL"
         cent_action = "ALLOW_NORMAL"
         usd_action = "ALLOW_STANDARD_IF_ELIGIBLE"
-        reason = "点差处于正常上限内，按 quorum 和账户车道正常处理。"
+        reason = (
+            "点差处于正常上限内，按 quorum 和账户车道正常处理。"
+            if dual_account else
+            "点差处于正常上限内，当前主账号按 quorum 正常生成 Shadow/Paper 建议。"
+        )
     elif spread <= soft:
         tier = "SOFT_WIDE"
         tier_zh = "轻微偏宽"
@@ -190,7 +209,11 @@ def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | N
         action = "DOWNGRADE_LOT_NOT_BLOCK"
         cent_action = "CENT_OPPORTUNITY_SMALL_LOT"
         usd_action = "USD_PAPER_MIRROR_ONLY"
-        reason = "点差轻微偏宽，美分账户降仓机会入场，美元账户仅镜像观察。"
+        reason = (
+            "点差轻微偏宽，美分账户降仓机会入场，美元账户仅镜像观察。"
+            if dual_account else
+            "点差轻微偏宽，当前美分主账号仅生成降仓机会建议。"
+        )
     elif spread <= hard:
         tier = "SOFT_WIDE_HIGH"
         tier_zh = "偏宽较高"
@@ -200,7 +223,11 @@ def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | N
         action = "DOWNGRADE_TO_MIN_LOT_NOT_BLOCK"
         cent_action = "CENT_OPPORTUNITY_MIN_LOT"
         usd_action = "USD_PAPER_MIRROR_ONLY"
-        reason = "点差偏宽但未到严重异常，美分账户只允许极小仓机会入场，美元账户仅镜像观察。"
+        reason = (
+            "点差偏宽但未到严重异常，美分账户只允许极小仓机会入场，美元账户仅镜像观察。"
+            if dual_account else
+            "点差偏宽但未到严重异常，当前美分主账号仅生成极小仓机会建议。"
+        )
     else:
         tier = "HARD_WIDE"
         tier_zh = "严重偏宽"
@@ -210,8 +237,8 @@ def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | N
         action = "BLOCK"
         cent_action = "BLOCKED"
         usd_action = "BLOCKED"
-        reason = "点差严重偏宽，两个账户都硬阻断。"
-    return {
+        reason = "点差严重偏宽，两个账户都硬阻断。" if dual_account else "点差严重偏宽，当前主账号硬阻断。"
+    payload = {
         "schema": "quantgod.usdjpy_spread_gate.v1",
         "spreadPips": round(spread, 4),
         "tier": tier,
@@ -223,13 +250,22 @@ def _build_spread_gate(snapshot: Dict[str, Any], diagnostics: Dict[str, Any] | N
         "lotMultiplier": lot_multiplier,
         "maxCentOpportunityLot": cap,
         "action": action,
-        "centAction": cent_action,
-        "usdAction": usd_action,
-        "centActionZh": "美分账户允许小仓机会入场。" if not hard_block and tier != "NORMAL" else ("美分账户正常处理。" if not hard_block else "美分账户阻断。"),
-        "usdActionZh": "美元账户仅 paper mirror，不实盘。" if not hard_block and tier != "NORMAL" else ("美元账户只允许合格 STANDARD_ENTRY。" if not hard_block else "美元账户阻断。"),
         "source": source,
         "reasonZh": reason,
     }
+    if dual_account:
+        payload.update({
+            "centAction": cent_action,
+            "usdAction": usd_action,
+            "centActionZh": "美分账户允许小仓机会入场。" if not hard_block and tier != "NORMAL" else ("美分账户正常处理。" if not hard_block else "美分账户阻断。"),
+            "usdActionZh": "美元账户仅 paper mirror，不实盘。" if not hard_block and tier != "NORMAL" else ("美元账户只允许合格 STANDARD_ENTRY。" if not hard_block else "美元账户阻断。"),
+        })
+    else:
+        payload.update({
+            "currentAccountAction": cent_action,
+            "currentAccountActionZh": "当前美分主账号仅生成小仓机会建议。" if not hard_block and tier != "NORMAL" else ("当前主账号正常生成 Shadow/Paper 建议。" if not hard_block else "当前主账号阻断。"),
+        })
+    return payload
 
 
 def _read_json_file(path: Path) -> Dict[str, Any]:
@@ -262,6 +298,10 @@ def _account_lane(account_registry: Dict[str, Any], mode: str) -> Dict[str, Any]
     return {}
 
 
+def _dual_account_mode(account_registry: Dict[str, Any]) -> bool:
+    return bool(_account_lane(account_registry, "standard_usd"))
+
+
 def _cent_opportunity_lot_cap(
     *,
     account_registry: Dict[str, Any],
@@ -290,6 +330,7 @@ def _cent_opportunity_sampling_gate(
     min_lot: float,
     max_lot: float,
     step: float,
+    dual_account: bool = True,
 ) -> Dict[str, Any]:
     cent_lane = _account_lane(account_registry, "cent")
     usd_lane = _account_lane(account_registry, "standard_usd")
@@ -300,28 +341,40 @@ def _cent_opportunity_sampling_gate(
         max_lot=max_lot,
         step=step,
     )
-    return {
+    gate = {
         "schema": "quantgod.usdjpy_cent_opportunity_sampling_gate.v1",
-        "mode": "CENT_SMALL_LOT_SAMPLE_USD_PAPER_MIRROR",
+        "mode": "CENT_SMALL_LOT_SAMPLE_USD_PAPER_MIRROR" if dual_account else "PRIMARY_CENT_SHADOW_SAMPLE",
         "accountAlias": cent_lane.get("accountAlias") or "hfm_cent",
         "accountMode": "cent",
         "entryMode": ENTRY_OPPORTUNITY,
-        "allowedLiveAccountMode": "cent",
-        "usdAccountAlias": usd_lane.get("accountAlias") or "hfm_usd",
-        "usdAccountMode": "paper_mirror_only",
-        "usdLiveAllowed": False,
         "maxOpportunityLot": cap,
         "spreadTier": spread_gate.get("tier") or "UNKNOWN",
-        "spreadAction": spread_gate.get("centAction") or spread_gate.get("action") or "UNKNOWN",
+        "spreadAction": spread_gate.get("currentAccountAction") or spread_gate.get("centAction") or spread_gate.get("action") or "UNKNOWN",
         "requiresRuntimeFreshness": ["FRESH", "SOFT_STALE"],
         "requiresHardGatePass": True,
         "requiresNewsNotHard": True,
         "sampleGoals": cent_lane.get("sampleGoals") if isinstance(cent_lane.get("sampleGoals"), dict) else {},
-        "reasonZh": (
-            f"机会入场只允许美分账户小仓采样，单笔上限 {cap:.2f} lot；"
-            "美元账户只做 paper mirror，不能实盘接探索单。"
-        ),
     }
+    if dual_account:
+        gate.update({
+            "allowedLiveAccountMode": "cent",
+            "usdAccountAlias": usd_lane.get("accountAlias") or "hfm_usd",
+            "usdAccountMode": "paper_mirror_only",
+            "usdLiveAllowed": False,
+            "reasonZh": (
+                f"机会入场只允许美分账户小仓采样，单笔上限 {cap:.2f} lot；"
+                "美元账户只做 paper mirror，不能实盘接探索单。"
+            ),
+        })
+    else:
+        gate.update({
+            "advisoryAccountMode": "cent",
+            "reasonZh": (
+                f"当前美分主账号仅生成 Shadow/Paper 小仓建议，单笔建议上限 {cap:.2f} lot；"
+                "不产生实盘执行许可。"
+            ),
+        })
+    return gate
 
 
 def _apply_cent_sampling_gate_to_live_policy(
@@ -847,17 +900,19 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
     adaptive = adaptive_policy(runtime_dir)
     news_gate = classify_news_gate(snapshot or {})
     account_registry = mt5_account_registry()
+    dual_account = _dual_account_mode(account_registry)
     execution_report = _load_execution_quality_report(runtime_dir)
     runtime_tier, runtime_ok, runtime_reasons = _runtime_freshness(snapshot or {})
     fast_ok, fast_reasons = _fastlane_ok(quality)
     diagnostics = _load_rsi_entry_diagnostics(runtime_dir)
-    spread_gate = _build_spread_gate(snapshot or {}, diagnostics)
+    spread_gate = _build_spread_gate(snapshot or {}, diagnostics, dual_account=dual_account)
     cent_sampling_gate = _cent_opportunity_sampling_gate(
         account_registry=account_registry,
         spread_gate=spread_gate,
         min_lot=min_lot,
         max_lot=max_lot,
         step=step,
+        dual_account=dual_account,
     )
     policies: List[PolicyItem] = []
     for route in scoreboard.get("routes", []):
@@ -1005,15 +1060,42 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
     top_live_policy = live_eligible_candidates[0].to_dict() if live_eligible_candidates else None
     live_recovery_candidate = live_route_candidates[0].to_dict() if live_route_candidates else None
     top_policy = top_live_policy or live_recovery_candidate or top_shadow_policy
-    usd_deployment_gate = _usd_deployment_gate(
-        top_policy=top_policy or {},
-        spread_gate=spread_gate,
-        news_gate=news_gate,
-        runtime_tier=runtime_tier,
-        fast_ok=fast_ok,
-        account_registry=account_registry,
-        execution_report=execution_report,
-    )
+    usd_deployment_gate = None
+    if dual_account:
+        usd_deployment_gate = _usd_deployment_gate(
+            top_policy=top_policy or {},
+            spread_gate=spread_gate,
+            news_gate=news_gate,
+            runtime_tier=runtime_tier,
+            fast_ok=fast_ok,
+            account_registry=account_registry,
+            execution_report=execution_report,
+        )
+    if dual_account:
+        account_lane_policy = {
+            "centAccountCanUseOpportunityEntry": True,
+            "usdAccountOpportunityEntryMode": "PAPER_MIRROR_ONLY",
+            "usdAccountLiveEntryModes": ["STANDARD_ENTRY"],
+            "softWideSpreadCentMode": "OPPORTUNITY_ENTRY_SMALL_LOT",
+            "softWideSpreadUsdMode": "PAPER_MIRROR_ONLY",
+            "usdDeploymentLiveMode": "STANDARD_ENTRY_NORMAL_SPREAD_NEWS_NONE_ONLY",
+            "usdDeploymentTargetStage": usd_deployment_gate.get("targetStage"),
+            "usdDeploymentLiveAllowed": bool(usd_deployment_gate.get("liveAllowed")),
+            "centOpportunitySamplingGate": cent_sampling_gate,
+            "centOpportunityLotCap": cent_sampling_gate.get("maxOpportunityLot"),
+            "centOpportunityLiveAccountOnly": True,
+        }
+    else:
+        primary_lane = _account_lane(account_registry, "cent")
+        account_lane_policy = {
+            "accountScope": "SINGLE_PRIMARY",
+            "primaryAccountAlias": primary_lane.get("accountAlias") or "hfm_cent",
+            "primaryAccountMode": primary_lane.get("accountMode") or "cent",
+            "primaryAccountOpportunityMode": "SHADOW_PAPER_ADVISORY_ONLY",
+            "softWideSpreadPrimaryMode": "OPPORTUNITY_ENTRY_SMALL_LOT_ADVISORY",
+            "centOpportunitySamplingGate": cent_sampling_gate,
+            "centOpportunityLotCap": cent_sampling_gate.get("maxOpportunityLot"),
+        }
     payload = {
         "schema": "quantgod.usdjpy_auto_execution_policy.v1",
         "schemaVersion": 1,
@@ -1045,20 +1127,7 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
         "newsGate": news_gate,
         "spreadGate": spread_gate,
         "accountRegistry": account_registry,
-        "usdDeploymentGate": usd_deployment_gate,
-        "accountLanePolicy": {
-            "centAccountCanUseOpportunityEntry": True,
-            "usdAccountOpportunityEntryMode": "PAPER_MIRROR_ONLY",
-            "usdAccountLiveEntryModes": ["STANDARD_ENTRY"],
-            "softWideSpreadCentMode": "OPPORTUNITY_ENTRY_SMALL_LOT",
-            "softWideSpreadUsdMode": "PAPER_MIRROR_ONLY",
-            "usdDeploymentLiveMode": "STANDARD_ENTRY_NORMAL_SPREAD_NEWS_NONE_ONLY",
-            "usdDeploymentTargetStage": usd_deployment_gate.get("targetStage"),
-            "usdDeploymentLiveAllowed": bool(usd_deployment_gate.get("liveAllowed")),
-            "centOpportunitySamplingGate": cent_sampling_gate,
-            "centOpportunityLotCap": cent_sampling_gate.get("maxOpportunityLot"),
-            "centOpportunityLiveAccountOnly": True,
-        },
+        "accountLanePolicy": account_lane_policy,
         "maxLot": max_lot,
         "standardEntryCount": sum(1 for item in policies if item.entryMode == ENTRY_STANDARD),
         "opportunityEntryCount": sum(1 for item in policies if item.entryMode == ENTRY_OPPORTUNITY),
@@ -1085,8 +1154,6 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
             "newsHardBlock": bool(news_gate.get("hardBlock")),
             "spreadGateTier": spread_gate.get("tier"),
             "spreadGateHardBlock": bool(spread_gate.get("hardBlock")),
-            "usdDeploymentLiveAllowed": bool(usd_deployment_gate.get("liveAllowed")),
-            "usdDeploymentTargetStage": usd_deployment_gate.get("targetStage"),
             "centOpportunityLotCap": cent_sampling_gate.get("maxOpportunityLot"),
             "decisionModel": "HARD_GATES_PLUS_SIGNAL_QUORUM_V1",
             "hardGatePassCount": sum(1 for item in policies if item.hardGateStatus == "PASS"),
@@ -1096,6 +1163,12 @@ def build_usdjpy_policy(runtime_dir: Path, *, write: bool = False, min_samples: 
         "scoreboard": scoreboard,
         "safety": dict(READ_ONLY_SAFETY),
     }
+    if dual_account:
+        payload["usdDeploymentGate"] = usd_deployment_gate
+        payload["evidence"].update({
+            "usdDeploymentLiveAllowed": bool(usd_deployment_gate.get("liveAllowed")),
+            "usdDeploymentTargetStage": usd_deployment_gate.get("targetStage"),
+        })
     assert_no_secret_or_execution_flags(payload)
     if write:
         adaptive_dir = runtime_dir / "adaptive"

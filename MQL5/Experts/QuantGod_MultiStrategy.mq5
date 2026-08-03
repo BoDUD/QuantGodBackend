@@ -7517,6 +7517,79 @@ string KlineExporterCsvPath(string symbol, string timeframe)
    return "backtest\\exported_klines\\QuantGod_" + KlineExporterSafeSymbol(symbol) + "_" + timeframe + "_rates.csv";
 }
 
+void WriteKlineExporterRuntimeHeartbeat(string symbol,
+                                        string timeframeLabel,
+                                        int chunkCount,
+                                        int copiedBars,
+                                        bool exportInProgress)
+{
+   MqlTick tick;
+   ZeroMemory(tick);
+   bool tickAvailable = SymbolInfoTick(symbol, tick) && tick.bid > 0.0 && tick.ask >= tick.bid;
+   datetime serverClock = CurrentServerTime();
+   int tickAgeSeconds = 0;
+   if(tickAvailable && tick.time > 0)
+      tickAgeSeconds = (int)MathMax(0, (long)(serverClock - (datetime)tick.time));
+   int tickFreshLimitSeconds = MathMax(30, MathMax(1, RefreshIntervalSec) * 6);
+   bool tickTimePlausible = tick.time > 0 && (datetime)tick.time <= serverClock + 5;
+   bool tickFresh = tickAvailable && tickTimePlausible && tickAgeSeconds <= tickFreshLimitSeconds;
+   bool brokerSessionConnected = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
+   bool accountIdentityPresent = (AccountInfoInteger(ACCOUNT_LOGIN) > 0 && StringLen(AccountInfoString(ACCOUNT_SERVER)) > 0);
+   bool accountAuthorized = brokerSessionConnected && accountIdentityPresent;
+   bool snapshotEligible = tickFresh && accountAuthorized && ShadowMode && ReadOnlyMode;
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   if(digits <= 0)
+      digits = 3;
+
+   string json = "{\r\n";
+   json += "  \"schema\": \"quantgod.mt5.runtime_snapshot.kline_export.v1\",\r\n";
+   json += "  \"generatedAtServer\": \"" + JsonEscape(FormatDateTime(serverClock, true)) + "\",\r\n";
+   json += "  \"generatedAtLocal\": \"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
+   json += "  \"symbol\": \"" + JsonEscape(symbol) + "\",\r\n";
+   json += "  \"fallback\": false,\r\n";
+   json += "  \"runtimeAgeSeconds\": 0,\r\n";
+   json += "  \"runtimeFresh\": true,\r\n";
+   json += "  \"tradeStatus\": \"SHADOW\",\r\n";
+   json += "  \"executionEnabled\": false,\r\n";
+   json += "  \"readOnlyMode\": true,\r\n";
+   json += "  \"current_price\": {\"bid\": " + DoubleToString(tick.bid, digits)
+           + ", \"ask\": " + DoubleToString(tick.ask, digits)
+           + ", \"spreadPips\": " + FormatNumber(CalcSpreadPips(symbol, tick.bid, tick.ask), 2) + "},\r\n";
+   json += "  \"runtime\": {\"tradeStatus\": \"SHADOW\""
+           + ", \"executionEnabled\": false"
+           + ", \"readOnlyMode\": true"
+           + ", \"tickAgeSeconds\": " + IntegerToString(tickAgeSeconds)
+           + ", \"terminalConnected\": " + JsonBool(brokerSessionConnected)
+           + ", \"brokerSessionConnected\": " + JsonBool(brokerSessionConnected)
+           + ", \"accountIdentityPresent\": " + JsonBool(accountIdentityPresent)
+           + ", \"accountAuthorized\": " + JsonBool(accountAuthorized) + "},\r\n";
+   json += "  \"klineExport\": {\"inProgress\": " + JsonBool(exportInProgress)
+           + ", \"timeframe\": \"" + JsonEscape(timeframeLabel) + "\""
+           + ", \"chunkCount\": " + IntegerToString(chunkCount)
+           + ", \"copiedBars\": " + IntegerToString(copiedBars) + "},\r\n";
+   json += "  \"safety\": {\"readOnly\": true, \"orderSendAllowed\": false, \"livePresetMutationAllowed\": false}\r\n";
+   json += "}\r\n";
+   if(snapshotEligible)
+      WriteTextFile("QuantGod_MT5RuntimeSnapshot_" + KlineExporterSafeSymbol(symbol) + ".json", json);
+
+   string heartbeat = "localTime=" + FormatDateTime(TimeLocal(), true) + "\r\n";
+   heartbeat += "serverTime=" + FormatDateTime(serverClock, true) + "\r\n";
+   heartbeat += "refreshIntervalSeconds=" + IntegerToString(MathMax(1, RefreshIntervalSec)) + "\r\n";
+   heartbeat += "context=KLINE_EXPORT\r\n";
+   heartbeat += "status=" + (exportInProgress ? "IN_PROGRESS" : "COMPLETE") + "\r\n";
+   heartbeat += "focusSymbol=" + symbol + "\r\n";
+   heartbeat += "timeframe=" + timeframeLabel + "\r\n";
+   heartbeat += "chunkCount=" + IntegerToString(chunkCount) + "\r\n";
+   heartbeat += "copiedBars=" + IntegerToString(copiedBars) + "\r\n";
+   heartbeat += "tickAvailable=" + (tickAvailable ? "true" : "false") + "\r\n";
+   heartbeat += "tickFresh=" + (tickFresh ? "true" : "false") + "\r\n";
+   heartbeat += "tickAgeSeconds=" + IntegerToString(tickAgeSeconds) + "\r\n";
+   heartbeat += "tickFreshLimitSeconds=" + IntegerToString(tickFreshLimitSeconds) + "\r\n";
+   heartbeat += "accountAuthorized=" + (accountAuthorized ? "true" : "false") + "\r\n";
+   heartbeat += "runtimeSnapshotPublished=" + (snapshotEligible ? "true" : "false") + "\r\n";
+   WriteTextFile("QuantGod_MT5_TimerHeartbeat.txt", heartbeat);
+}
+
 int KlineExporterChunkDays(ENUM_TIMEFRAMES timeframe)
 {
    if(timeframe == PERIOD_M1)
@@ -7579,6 +7652,7 @@ int ExportUsdJpyKlineTimeframe(string symbol,
    int failedChunks = 0;
    bool truncated = false;
    string firstError = "";
+   datetime lastProgressHeartbeat = TimeLocal();
 
    while(cursor < toTime)
    {
@@ -7610,9 +7684,14 @@ int ExportUsdJpyKlineTimeframe(string symbol,
                             + " from=" + FormatDateTime(cursor, true)
                             + " to=" + FormatDateTime(chunkEnd, true);
          }
+         WriteKlineExporterRuntimeHeartbeat(symbol, timeframeLabel, chunkCount, rowsToWrite, true);
+         lastProgressHeartbeat = TimeLocal();
          cursor = chunkEnd + timeframeSeconds;
          continue;
       }
+
+      WriteKlineExporterRuntimeHeartbeat(symbol, timeframeLabel, chunkCount, rowsToWrite, true);
+      lastProgressHeartbeat = TimeLocal();
 
       totalCopied += copied;
       for(int i = 0; i < copied; i++)
@@ -7642,6 +7721,11 @@ int ExportUsdJpyKlineTimeframe(string symbol,
          if(oldestWritten <= 0)
             oldestWritten = rates[i].time;
          rowsToWrite++;
+         if((TimeLocal() - lastProgressHeartbeat) >= MathMax(5, RefreshIntervalSec))
+         {
+            WriteKlineExporterRuntimeHeartbeat(symbol, timeframeLabel, chunkCount, rowsToWrite, true);
+            lastProgressHeartbeat = TimeLocal();
+         }
       }
       cursor = chunkEnd + timeframeSeconds;
    }
@@ -7693,6 +7777,7 @@ void ExportUsdJpyKlinesIfDue(bool force = false)
    datetime fromTime = now - months * 31 * 24 * 60 * 60;
    string items = "";
    int totalRows = 0;
+   WriteKlineExporterRuntimeHeartbeat(symbol, "ALL", 0, 0, true);
    totalRows += ExportUsdJpyKlineTimeframe(symbol, PERIOD_M1, "M1", fromTime, now, maxBars, items);
    totalRows += ExportUsdJpyKlineTimeframe(symbol, PERIOD_M5, "M5", fromTime, now, maxBars, items);
    totalRows += ExportUsdJpyKlineTimeframe(symbol, PERIOD_M15, "M15", fromTime, now, maxBars, items);
@@ -7714,6 +7799,7 @@ void ExportUsdJpyKlinesIfDue(bool force = false)
    manifest += "}\r\n";
    WriteTextFile("backtest\\exported_klines\\QuantGod_USDJPY_KlineExportManifest.json", manifest);
    WriteTextFile("QuantGod_USDJPYKlineExportManifest.json", manifest);
+   WriteKlineExporterRuntimeHeartbeat(symbol, "ALL", 0, totalRows, false);
    g_lastUsdJpyKlineExport = now;
    Print("QuantGod USDJPY CopyRates exporter wrote ", totalRows, " bars across M1/M5/M15/H1/H4.");
 }

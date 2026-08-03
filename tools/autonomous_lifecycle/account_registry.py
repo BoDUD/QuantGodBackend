@@ -22,6 +22,11 @@ def _env_text(name: str, default: str) -> str:
     return str(os.environ.get(name, default)).strip() or default
 
 
+def _env_enabled(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "1" if default else "0")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _cent_lane() -> Dict[str, Any]:
     max_lot = min(max(_env_float("QG_CENT_MAX_LOT", _env_float("QG_AUTO_MAX_LOT", 2.0)), 0.0), 2.0)
     return {
@@ -100,7 +105,50 @@ def _usd_lane() -> Dict[str, Any]:
 
 
 def mt5_account_registry() -> Dict[str, Any]:
-    accounts: List[Dict[str, Any]] = [_cent_lane(), _usd_lane()]
+    primary = _cent_lane()
+    secondary_shadow_enabled = _env_enabled("QG_MT5_SECONDARY_SHADOW_ENABLED", True)
+    accounts: List[Dict[str, Any]] = [primary]
+    if secondary_shadow_enabled:
+        accounts.append(_usd_lane())
+
+    if not secondary_shadow_enabled:
+        primary.pop("sampleGoals", None)
+        return {
+            "schema": "quantgod.mt5_account_registry.v1",
+            "mode": "MT5_USDJPY_SINGLE_PRIMARY_LANE",
+            "secondaryShadowEnabled": False,
+            "primaryAccount": primary["accountAlias"],
+            "accounts": accounts,
+            "spreadPolicy": {
+                "schema": "quantgod.usdjpy_spread_lane_policy.v1",
+                "normalLimitPips": _env_float("QG_USDJPY_SPREAD_NORMAL_PIPS", 2.2),
+                "softLimitPips": _env_float("QG_USDJPY_SPREAD_SOFT_PIPS", 2.7),
+                "hardLimitPips": _env_float("QG_USDJPY_SPREAD_HARD_PIPS", 3.0),
+                "primarySoftWideAction": "OPPORTUNITY_ENTRY_SMALL_LOT_ADVISORY",
+                "reasonZh": "当前仅主账号参与 USDJPY Shadow/Paper 评估；严重偏宽点差仍为硬阻断。",
+            },
+            "globalExposureGuard": {
+                "schema": "quantgod.global_usdjpy_exposure_guard.v1",
+                "symbol": "USDJPYc",
+                "direction": "LONG",
+                "singleAccountOnly": True,
+                "rulesZh": [
+                    "当前仅主账号参与 Shadow/ReadOnly 监控与建议生成。",
+                    "所有反馈、净 R、连亏和 Case Memory 仅按当前主账号分桶。",
+                ],
+            },
+            "safety": {
+                "mt5Only": True,
+                "shadowOnly": True,
+                "readOnlyMode": True,
+                "operatorApprovalRequired": True,
+                "unattendedLiveExpansionAllowed": False,
+                "liveExpansionAllowed": False,
+                "orderSendAllowed": False,
+                "livePresetMutationAllowed": False,
+            },
+        }
+
     spread_policy = {
         "schema": "quantgod.usdjpy_spread_lane_policy.v1",
         "normalLimitPips": _env_float("QG_USDJPY_SPREAD_NORMAL_PIPS", 2.2),

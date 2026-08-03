@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.usdjpy_strategy_lab.data_loader import sample_runtime
 from tools.usdjpy_strategy_lab.data_loader import focus_runtime_snapshot
@@ -704,9 +705,67 @@ class USDJPYStrategyLabTests(unittest.TestCase):
 
             self.assertEqual(policy["spreadGate"]["tier"], "HARD_WIDE")
             self.assertTrue(policy["spreadGate"]["hardBlock"])
+            self.assertEqual(policy["spreadGate"]["reasonZh"], "点差严重偏宽，两个账户都硬阻断。")
+            self.assertIn("usdDeploymentGate", policy)
+            self.assertEqual(policy["accountRegistry"]["mode"], "MT5_USDJPY_MULTI_ACCOUNT_LANE_SPLIT")
             self.assertEqual(rsi_long["hardGateStatus"], "BLOCKED")
             self.assertEqual(rsi_long["entryMode"], ENTRY_BLOCKED)
             self.assertFalse(rsi_long["allowed"])
+
+    def test_single_primary_profile_omits_secondary_account_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {"QG_MT5_SECONDARY_SHADOW_ENABLED": "0"},
+            clear=False,
+        ):
+            runtime = Path(tmp)
+            sample_runtime(runtime, overwrite=True)
+            (runtime / "QuantGod_USDJPYRsiEntryDiagnostics.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "quantgod.mt5.usdjpy_rsi_entry_diagnostics.v1",
+                        "symbol": "USDJPYc",
+                        "strategy": "RSI_Reversal",
+                        "direction": "LONG",
+                        "state": "SPREAD_BLOCK",
+                        "guards": {
+                            "sessionOpen": True,
+                            "spreadAllowed": False,
+                            "spreadPips": 3.1,
+                            "maxSpreadPips": 2.2,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            policy = build_usdjpy_policy(runtime)
+            dry_run = build_dry_run_decision(runtime)
+            registry = policy["accountRegistry"]
+            account_lane = policy["accountLanePolicy"]
+            sampling_gate = account_lane["centOpportunitySamplingGate"]
+            serialized = json.dumps({"policy": policy, "dryRun": dry_run}, ensure_ascii=False)
+
+            self.assertEqual(registry["schema"], "quantgod.mt5_account_registry.v1")
+            self.assertEqual(registry["mode"], "MT5_USDJPY_SINGLE_PRIMARY_LANE")
+            self.assertFalse(registry["secondaryShadowEnabled"])
+            self.assertEqual(len(registry["accounts"]), 1)
+            self.assertEqual(registry["accounts"][0]["accountAlias"], "hfm_cent")
+            self.assertNotIn("capitalDeploymentAccount", registry)
+            self.assertNotIn("usdDeploymentGate", policy)
+            self.assertEqual(account_lane["accountScope"], "SINGLE_PRIMARY")
+            self.assertEqual(sampling_gate["mode"], "PRIMARY_CENT_SHADOW_SAMPLE")
+            self.assertNotIn("usdAccountAlias", sampling_gate)
+            self.assertNotIn("usdAccountMode", sampling_gate)
+            self.assertNotIn("usdLiveAllowed", sampling_gate)
+            self.assertNotIn("usdAction", policy["spreadGate"])
+            self.assertEqual(policy["spreadGate"]["reasonZh"], "点差严重偏宽，当前主账号硬阻断。")
+            self.assertNotIn("hfm_usd", serialized)
+            self.assertNotIn("美元账户", serialized)
+            self.assertNotIn("两个账户", serialized)
+            self.assertFalse(policy["safety"]["orderSendAllowed"])
+            self.assertFalse(dry_run["safety"]["orderSendAllowed"])
 
     def test_missing_spread_gate_blocks_when_no_reliable_spread_exists(self):
         spread_gate = _build_spread_gate({}, {})

@@ -108,6 +108,7 @@ test('MT5 EA exports USDJPY CopyRates CSVs for macOS history fallback', () => {
     'UsdJpyKlineExportMonths',
     'ExportUsdJpyKlinesIfDue',
     'ExportUsdJpyKlineTimeframe',
+    'WriteKlineExporterRuntimeHeartbeat',
     'KlineExporterChunkDays',
     'CopyRates(symbol, timeframe, cursor, chunkEnd, rates)',
     'chunkCount',
@@ -116,6 +117,8 @@ test('MT5 EA exports USDJPY CopyRates CSVs for macOS history fallback', () => {
     'backtest\\\\exported_klines',
     'QuantGod_USDJPY_KlineExportManifest.json',
     'QuantGod_USDJPYKlineExportManifest.json',
+    'QuantGod_MT5RuntimeSnapshot_',
+    'quantgod.mt5.runtime_snapshot.kline_export.v1',
     'PERIOD_M1',
     'PERIOD_M5',
     'PERIOD_M15',
@@ -124,6 +127,46 @@ test('MT5 EA exports USDJPY CopyRates CSVs for macOS history fallback', () => {
   ]) {
     assert.match(ea, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
+});
+
+test('CopyRates exporter keeps truthful runtime evidence fresh between chunks', () => {
+  const ea = read('MQL5/Experts/QuantGod_MultiStrategy.mq5');
+  const policy = read('tools/usdjpy_strategy_lab/policy_builder.py');
+  const heartbeatStart = ea.indexOf('void WriteKlineExporterRuntimeHeartbeat');
+  const exportStart = ea.indexOf('int ExportUsdJpyKlineTimeframe');
+  const exportEnd = ea.indexOf('void ExportUsdJpyKlinesIfDue', exportStart);
+  assert.ok(heartbeatStart >= 0 && exportStart > heartbeatStart && exportEnd > exportStart);
+
+  const heartbeat = ea.slice(heartbeatStart, exportStart);
+  const timeframeExport = ea.slice(exportStart, exportEnd);
+  assert.match(heartbeat, /SymbolInfoTick\(symbol, tick\)/);
+  assert.match(heartbeat, /tickFreshLimitSeconds\s*=\s*MathMax\(30, MathMax\(1, RefreshIntervalSec\) \* 6\)/);
+  assert.match(
+    heartbeat,
+    /snapshotEligible\s*=\s*tickFresh && accountAuthorized && ShadowMode && ReadOnlyMode/,
+  );
+  assert.match(heartbeat, /"runtimeAgeSeconds\\": 0/);
+  assert.match(heartbeat, /"tradeStatus\\": \\"SHADOW/);
+  assert.match(heartbeat, /"executionEnabled\\": false/);
+  assert.match(heartbeat, /"readOnlyMode\\": true/);
+  assert.match(heartbeat, /"current_price\\"/);
+  assert.match(heartbeat, /"orderSendAllowed\\": false/);
+  assert.match(
+    heartbeat,
+    /if\(snapshotEligible\)\s+WriteTextFile\("QuantGod_MT5RuntimeSnapshot_"/,
+  );
+  assert.equal(
+    (heartbeat.match(/WriteTextFile\("QuantGod_MT5RuntimeSnapshot_"/g) || []).length,
+    1,
+  );
+  assert.match(heartbeat, /runtimeSnapshotPublished=/);
+  assert.match(heartbeat, /QuantGod_MT5_TimerHeartbeat\.txt/);
+  assert.doesNotMatch(heartbeat, /\bOrderSend\s*\(|\bPositionClose\s*\(|\bCTrade\b/);
+
+  assert.match(timeframeExport, /CopyRates\(symbol, timeframe, cursor, chunkEnd, rates\)/);
+  assert.match(timeframeExport, /WriteKlineExporterRuntimeHeartbeat\(symbol, timeframeLabel, chunkCount, rowsToWrite, true\)/);
+  assert.match(timeframeExport, /TimeLocal\(\) - lastProgressHeartbeat/);
+  assert.match(policy, /RUNTIME_HARD_STALE_SECONDS\s*=\s*90\.0/);
 });
 
 test('Mac MT5 startup raises MaxBars so M1 CopyRates can reach 6-12 months', () => {
