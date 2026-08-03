@@ -442,11 +442,15 @@ int g_usdTrackedEventImportance[];
 NewsFilterState g_newsState;
 datetime g_lastNewsRefresh = 0;
 datetime g_lastFullExport = 0;
+datetime g_lastShadowCsvExport = 0;
 datetime g_lastPilotTick = 0;
 datetime g_lastUsdJpyKlineExport = 0;
 datetime g_nextStartupWarmupLog = 0;
 datetime g_startupWarmupUntil = 0;
 bool g_fullRuntimeInitialized = false;
+
+const int SHADOW_CSV_EXPORT_INTERVAL_SECONDS = 3600;
+const int SHADOW_CSV_EXPORT_STAGE_COUNT = 12;
 
 struct TradeRetryState
 {
@@ -7521,7 +7525,8 @@ void WriteKlineExporterRuntimeHeartbeat(string symbol,
                                         string timeframeLabel,
                                         int chunkCount,
                                         int copiedBars,
-                                        bool exportInProgress)
+                                        bool exportInProgress,
+                                        string progressContext = "KLINE_EXPORT")
 {
    MqlTick tick;
    ZeroMemory(tick);
@@ -7540,9 +7545,13 @@ void WriteKlineExporterRuntimeHeartbeat(string symbol,
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    if(digits <= 0)
       digits = 3;
+   bool shadowCsvProgress = (progressContext == "SHADOW_CSV_EXPORT");
+   string snapshotSchema = shadowCsvProgress
+                           ? "quantgod.mt5.runtime_snapshot.shadow_csv_export.v1"
+                           : "quantgod.mt5.runtime_snapshot.kline_export.v1";
 
    string json = "{\r\n";
-   json += "  \"schema\": \"quantgod.mt5.runtime_snapshot.kline_export.v1\",\r\n";
+   json += "  \"schema\": \"" + snapshotSchema + "\",\r\n";
    json += "  \"generatedAtServer\": \"" + JsonEscape(FormatDateTime(serverClock, true)) + "\",\r\n";
    json += "  \"generatedAtLocal\": \"" + JsonEscape(FormatDateTime(TimeLocal(), true)) + "\",\r\n";
    json += "  \"symbol\": \"" + JsonEscape(symbol) + "\",\r\n";
@@ -7563,10 +7572,20 @@ void WriteKlineExporterRuntimeHeartbeat(string symbol,
            + ", \"brokerSessionConnected\": " + JsonBool(brokerSessionConnected)
            + ", \"accountIdentityPresent\": " + JsonBool(accountIdentityPresent)
            + ", \"accountAuthorized\": " + JsonBool(accountAuthorized) + "},\r\n";
-   json += "  \"klineExport\": {\"inProgress\": " + JsonBool(exportInProgress)
-           + ", \"timeframe\": \"" + JsonEscape(timeframeLabel) + "\""
-           + ", \"chunkCount\": " + IntegerToString(chunkCount)
-           + ", \"copiedBars\": " + IntegerToString(copiedBars) + "},\r\n";
+   if(shadowCsvProgress)
+   {
+      json += "  \"shadowCsvExport\": {\"inProgress\": " + JsonBool(exportInProgress)
+              + ", \"stage\": \"" + JsonEscape(timeframeLabel) + "\""
+              + ", \"completedStages\": " + IntegerToString(chunkCount)
+              + ", \"totalStages\": " + IntegerToString(copiedBars) + "},\r\n";
+   }
+   else
+   {
+      json += "  \"klineExport\": {\"inProgress\": " + JsonBool(exportInProgress)
+              + ", \"timeframe\": \"" + JsonEscape(timeframeLabel) + "\""
+              + ", \"chunkCount\": " + IntegerToString(chunkCount)
+              + ", \"copiedBars\": " + IntegerToString(copiedBars) + "},\r\n";
+   }
    json += "  \"safety\": {\"readOnly\": true, \"orderSendAllowed\": false, \"livePresetMutationAllowed\": false}\r\n";
    json += "}\r\n";
    if(snapshotEligible)
@@ -7575,12 +7594,21 @@ void WriteKlineExporterRuntimeHeartbeat(string symbol,
    string heartbeat = "localTime=" + FormatDateTime(TimeLocal(), true) + "\r\n";
    heartbeat += "serverTime=" + FormatDateTime(serverClock, true) + "\r\n";
    heartbeat += "refreshIntervalSeconds=" + IntegerToString(MathMax(1, RefreshIntervalSec)) + "\r\n";
-   heartbeat += "context=KLINE_EXPORT\r\n";
+   heartbeat += "context=" + progressContext + "\r\n";
    heartbeat += "status=" + (exportInProgress ? "IN_PROGRESS" : "COMPLETE") + "\r\n";
    heartbeat += "focusSymbol=" + symbol + "\r\n";
-   heartbeat += "timeframe=" + timeframeLabel + "\r\n";
-   heartbeat += "chunkCount=" + IntegerToString(chunkCount) + "\r\n";
-   heartbeat += "copiedBars=" + IntegerToString(copiedBars) + "\r\n";
+   if(shadowCsvProgress)
+   {
+      heartbeat += "stage=" + timeframeLabel + "\r\n";
+      heartbeat += "completedStages=" + IntegerToString(chunkCount) + "\r\n";
+      heartbeat += "totalStages=" + IntegerToString(copiedBars) + "\r\n";
+   }
+   else
+   {
+      heartbeat += "timeframe=" + timeframeLabel + "\r\n";
+      heartbeat += "chunkCount=" + IntegerToString(chunkCount) + "\r\n";
+      heartbeat += "copiedBars=" + IntegerToString(copiedBars) + "\r\n";
+   }
    heartbeat += "tickAvailable=" + (tickAvailable ? "true" : "false") + "\r\n";
    heartbeat += "tickFresh=" + (tickFresh ? "true" : "false") + "\r\n";
    heartbeat += "tickAgeSeconds=" + IntegerToString(tickAgeSeconds) + "\r\n";
@@ -8612,23 +8640,82 @@ string BuildRegimeEvaluationCsv(ClosedTradeRecord &closedTrades[], RegimeAggrega
    return csv;
 }
 
+void WriteShadowCsvRuntimeHeartbeat(string stage,
+                                    int completedStages,
+                                    bool exportInProgress)
+{
+   string symbol = g_focusSymbol;
+   if(StringLen(symbol) == 0)
+      symbol = _Symbol;
+   WriteKlineExporterRuntimeHeartbeat(symbol,
+                                      stage,
+                                      completedStages,
+                                      SHADOW_CSV_EXPORT_STAGE_COUNT,
+                                      exportInProgress,
+                                      "SHADOW_CSV_EXPORT");
+}
+
 void ExportShadowCsvs(SymbolSnapshot &snapshots[], TradeJournalRecord &journal[], ClosedTradeRecord &closedTrades[])
 {
+   int completedStages = 0;
+   WriteShadowCsvRuntimeHeartbeat("BUILD_AGGREGATES", completedStages, true);
+
    StrategyAggregateRecord strategyAggregates[];
    RegimeAggregateRecord regimeAggregates[];
    BuildAggregates(snapshots, closedTrades, strategyAggregates, regimeAggregates);
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("AGGREGATES_READY", completedStages, true);
 
    WriteTextFile("QuantGod_TradeJournal.csv", BuildTradeJournalCsv(journal));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("TRADE_JOURNAL", completedStages, true);
    WriteTextFile("QuantGod_LiveExecutionFeedbackHistory.jsonl", BuildLiveExecutionFeedbackHistoryJsonl(journal));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("EXECUTION_FEEDBACK", completedStages, true);
    WriteTextFile("QuantGod_CloseHistory.csv", BuildCloseHistoryCsv(closedTrades));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("CLOSE_HISTORY", completedStages, true);
    WriteTextFile("QuantGod_TradeOutcomeLabels.csv", BuildTradeOutcomeLabelsCsv(closedTrades));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("TRADE_OUTCOME_LABELS", completedStages, true);
    WriteTextFile("QuantGod_TradeEventLinks.csv", BuildTradeEventLinksCsv(closedTrades, journal));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("TRADE_EVENT_LINKS", completedStages, true);
    WriteTextFile("QuantGod_ManualAlphaLedger.csv", BuildManualAlphaLedgerCsv(closedTrades));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("MANUAL_ALPHA_LEDGER", completedStages, true);
    WriteTextFile("QuantGod_ShadowOutcomeLedger.csv", BuildShadowOutcomeLedgerCsv());
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("SHADOW_OUTCOME_LEDGER", completedStages, true);
    WriteTextFile("QuantGod_ShadowCandidateOutcomeLedger.csv", BuildShadowCandidateOutcomeLedgerCsv());
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("SHADOW_CANDIDATE_LEDGER", completedStages, true);
    WriteTextFile("QuantGod_StrategyEvaluationReport.csv", BuildStrategyEvaluationCsv(snapshots, strategyAggregates));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("STRATEGY_EVALUATION", completedStages, true);
    WriteTextFile("QuantGod_RegimeEvaluationReport.csv", BuildRegimeEvaluationCsv(closedTrades, regimeAggregates));
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("REGIME_EVALUATION", completedStages, true);
    WriteTextFile("QuantGod_OpportunityLabels.csv", "EventId,LabelTimeLocal,LabelTimeServer,EventTimeServer,EventBarTime,Symbol,Strategy,Timeframe,SignalStatus,SignalDirection,SignalScore,Regime,AdaptiveState,RiskMultiplier,HorizonBars,ReferencePrice,FutureClose,LongClosePips,ShortClosePips,LongMFEPips,LongMAEPips,ShortMFEPips,ShortMAEPips,NeutralThresholdPips,DirectionalOutcome,BestOpportunity,LabelReason\r\n");
+   completedStages++;
+   WriteShadowCsvRuntimeHeartbeat("COMPLETE", completedStages, false);
+}
+
+void ExportShadowCsvsIfDue(SymbolSnapshot &snapshots[], TradeJournalRecord &journal[], ClosedTradeRecord &closedTrades[])
+{
+   datetime now = TimeLocal();
+   bool firstExport = (g_lastShadowCsvExport <= 0);
+   bool localClockReset = (!firstExport && now < g_lastShadowCsvExport);
+   if(!firstExport && !localClockReset &&
+      (now - g_lastShadowCsvExport) < SHADOW_CSV_EXPORT_INTERVAL_SECONDS)
+      return;
+
+   // Claim the interval before starting so a failed/slow first export cannot
+   // fall back into the old five-second rebuild loop.
+   g_lastShadowCsvExport = now;
+   ExportShadowCsvs(snapshots, journal, closedTrades);
+   Print("QuantGod Shadow CSV export completed. nextIntervalSeconds=",
+         SHADOW_CSV_EXPORT_INTERVAL_SECONDS);
 }
 
 void InitializeSnapshots(SymbolSnapshot &snapshots[])
@@ -9990,7 +10077,7 @@ void ExportDashboard(bool runExecutionLoop)
    WriteTextFile("QuantGod_ReceiptWriterReconciliationStatus.json", receiptWriterReconciliationStatusJson);
    WriteTextFile("QuantGod_RollbackAutoDisableStatus.json", rollbackAutoDisableStatusJson);
    WriteTextFile("QuantGod_Dashboard.json", json);
-   ExportShadowCsvs(snapshots, journal, closedTrades);
+   ExportShadowCsvsIfDue(snapshots, journal, closedTrades);
    UpdateShadowChartComment(tradeStatus, connected, accountLogin);
 }
 
