@@ -188,6 +188,51 @@ test('secondary Shadow auth diagnostics expose the reason without leaking the ra
   assert.equal(secondary.payload.terminal.lastAuthFailure.login, undefined);
   assert.equal(secondary.payload.account.login, undefined);
   assert.equal(secondary.payload.account.loginMasked, '••••0002');
+  assert.equal(secondary.payload.connection.accountIdentityPresent, true);
+  assert.equal(secondary.payload.connection.accountAuthorized, false);
+  assert.equal(secondary.payload.connection.brokerSessionConnected, false);
+  assert.equal(secondary.payload.connection.brokerConnected, false);
+  assert.equal(secondary.payload.connection.operationalConnected, false);
+  assert.equal(secondary.payload.connection.readReady, false);
+  assert.equal(secondary.payload.connection.writerFresh, true);
+  assert.equal(typeof secondary.payload.connection.processRunning, 'boolean');
+  assert.equal(secondary.payload.runtime.accountIdentityPresent, true);
+  assert.equal(secondary.payload.runtime.accountAuthorized, false);
+  assert.equal(secondary.payload.runtime.brokerSessionConnected, false);
+  assert.equal(secondary.payload.runtime.connected, false);
   assert.equal(JSON.stringify(secondary.payload).includes(privateLogin), false);
   assert.equal(secondary.payload.safety.orderSendAllowed, false);
+
+  fs.writeFileSync(
+    path.join(secondaryFiles, 'QuantGod_Dashboard.json'),
+    JSON.stringify({
+      timestamp: localTimestamp(Date.now()),
+      account: {
+        number: privateLogin,
+        server: brokerServer,
+        currency: 'USD',
+        balance: 1000,
+        equity: 1000,
+      },
+      runtime: {
+        terminalConnected: true,
+        brokerSessionConnected: true,
+        accountIdentityPresent: true,
+        accountAuthorized: true,
+        tradeAllowed: false,
+      },
+    }),
+  );
+  fs.appendFileSync(
+    path.join(logDir, `${dateName}.log`),
+    `${logDate} 00:00:02.000 Network '${privateLogin}': authorized on ${brokerServer}\n`,
+  );
+
+  const recovered = await requestJson(port, '/api/mt5-readonly-secondary/snapshot');
+  assert.equal(recovered.payload.terminal.authLogStatus, 'AUTHORIZED');
+  assert.equal(recovered.payload.connection.accountIdentityPresent, true);
+  assert.equal(recovered.payload.connection.brokerSessionConnected, true);
+  assert.equal(recovered.payload.connection.accountAuthorized, true);
+  assert.equal(recovered.payload.connection.operationalConnected, true);
+  assert.equal(JSON.stringify(recovered.payload).includes(privateLogin), false);
 });

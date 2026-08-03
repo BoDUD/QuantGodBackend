@@ -667,29 +667,65 @@ def build_connection_state(
     terminal: dict[str, Any],
     account: dict[str, Any] | None,
     snapshot_fresh: bool,
+    process_running: bool | None = None,
 ) -> dict[str, Any]:
+    """Build connection truth without treating stored identity as authorization.
+
+    ``accountIdentityPresent`` only says that a login/server identity is visible
+    in the snapshot.  Current authorization additionally requires a confirmed
+    broker session.  The legacy fields remain in the response, while the new
+    names make writer/process/session evidence explicit for API consumers.
+    """
+
     terminal_value = runtime.get("terminalConnected")
     terminal_connected = terminal_value if isinstance(terminal_value, bool) else terminal.get("connected") is True
-    broker_value = runtime.get("brokerConnected")
-    broker_connected = broker_value if isinstance(broker_value, bool) else terminal_connected
-    account_value = runtime.get("accountAuthorized")
-    if isinstance(account_value, bool):
-        account_authorized = account_value
+    broker_value = runtime.get("brokerSessionConnected")
+    if not isinstance(broker_value, bool):
+        broker_value = runtime.get("brokerConnected")
+    broker_session_connected = broker_value if isinstance(broker_value, bool) else terminal_connected
+
+    identity_value = runtime.get("accountIdentityPresent")
+    if isinstance(identity_value, bool):
+        account_identity_present = identity_value
     else:
-        account_authorized = bool(
+        account_identity_present = bool(
             account
             and to_int(first_present(account, "login", "number", default=0)) > 0
             and str(first_present(account, "server", default="")).strip()
         )
-    operational_connected = terminal_connected and broker_connected and account_authorized
+
+    account_value = runtime.get("accountAuthorized")
+    if isinstance(account_value, bool):
+        authorization_evidence = account_value
+    else:
+        # Compatibility for older EA snapshots: identity alone is never enough.
+        # A current broker session is the additional authorization evidence.
+        authorization_evidence = broker_session_connected and account_identity_present
+    account_authorized = bool(
+        authorization_evidence
+        and broker_session_connected
+        and account_identity_present
+    )
+
+    if process_running is None:
+        process_value = runtime.get("processRunning")
+        process_running = process_value if isinstance(process_value, bool) else terminal_connected
+
+    operational_connected = terminal_connected and broker_session_connected and account_authorized
     return {
+        # Compatibility fields retained for existing clients.
         "terminalConnected": terminal_connected,
-        "brokerConnected": broker_connected,
+        "brokerConnected": broker_session_connected,
         "accountAuthorized": account_authorized,
         "operationalConnected": operational_connected,
         "snapshotFresh": snapshot_fresh,
+        # Explicit v2 semantics.
+        "writerFresh": snapshot_fresh,
+        "processRunning": bool(process_running),
+        "brokerSessionConnected": broker_session_connected,
+        "accountIdentityPresent": account_identity_present,
         "readReady": operational_connected and snapshot_fresh,
-        "semantics": "INDEPENDENT_REQUIRED_SIGNALS",
+        "semantics": "EXPLICIT_CONNECTION_EVIDENCE_V2",
     }
 
 
@@ -914,6 +950,7 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
         terminal=terminal,
         account=account,
         snapshot_fresh=snapshot_fresh,
+        process_running=host_process.get("targetProcessDetected") is True,
     )
     terminal["connected"] = connection["terminalConnected"]
     runtime.update(
@@ -921,7 +958,11 @@ def build_ea_snapshot_fallback(args: argparse.Namespace) -> dict[str, Any] | Non
             "connected": connection["operationalConnected"],
             "terminalConnected": connection["terminalConnected"],
             "brokerConnected": connection["brokerConnected"],
+            "brokerSessionConnected": connection["brokerSessionConnected"],
             "accountAuthorized": connection["accountAuthorized"],
+            "accountIdentityPresent": connection["accountIdentityPresent"],
+            "writerFresh": connection["writerFresh"],
+            "processRunning": connection["processRunning"],
             "connectionState": connection,
         }
     )
@@ -1056,15 +1097,28 @@ def build_missing_ea_snapshot_payload(
             },
             "hostProcess": host_process,
             "account": None,
-            "runtime": {},
+            "runtime": {
+                "connected": False,
+                "terminalConnected": False,
+                "brokerConnected": False,
+                "brokerSessionConnected": False,
+                "accountAuthorized": False,
+                "accountIdentityPresent": False,
+                "writerFresh": False,
+                "processRunning": False,
+            },
             "connection": {
                 "terminalConnected": False,
                 "brokerConnected": False,
+                "brokerSessionConnected": False,
                 "accountAuthorized": False,
+                "accountIdentityPresent": False,
                 "operationalConnected": False,
                 "snapshotFresh": False,
+                "writerFresh": False,
+                "processRunning": False,
                 "readReady": False,
-                "semantics": "INDEPENDENT_REQUIRED_SIGNALS",
+                "semantics": "EXPLICIT_CONNECTION_EVIDENCE_V2",
             },
             "watchlist": "",
             "market": {},
@@ -1199,6 +1253,7 @@ def status_payload(mt5: Any, endpoint: str = "status") -> dict[str, Any]:
         terminal=terminal,
         account=account,
         snapshot_fresh=True,
+        process_running=True,
     )
     payload.update(
         {
@@ -1209,7 +1264,11 @@ def status_payload(mt5: Any, endpoint: str = "status") -> dict[str, Any]:
                 "connected": connection["operationalConnected"],
                 "terminalConnected": connection["terminalConnected"],
                 "brokerConnected": connection["brokerConnected"],
+                "brokerSessionConnected": connection["brokerSessionConnected"],
                 "accountAuthorized": connection["accountAuthorized"],
+                "accountIdentityPresent": connection["accountIdentityPresent"],
+                "writerFresh": connection["writerFresh"],
+                "processRunning": connection["processRunning"],
                 "connectionState": connection,
             },
             "connection": connection,

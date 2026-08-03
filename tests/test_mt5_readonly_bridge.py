@@ -171,23 +171,28 @@ class FakeMt5:
 
 
 class Mt5ReadOnlyBridgeTests(unittest.TestCase):
-    def test_connection_state_keeps_authorization_connectivity_and_freshness_independent(self):
+    def test_connection_state_separates_identity_session_process_and_writer_truth(self):
         legacy_terminal = bridge.ea_terminal_payload({"runtime": {"connected": True}}, None)
         self.assertFalse(legacy_terminal["connected"])
 
         account = {"login": 123456, "server": "Fake-Live"}
-        authorized_but_disconnected = bridge.build_connection_state(
+        identity_but_disconnected = bridge.build_connection_state(
             runtime={"terminalConnected": False, "brokerConnected": False, "accountAuthorized": True},
             terminal={"connected": False},
             account=account,
             snapshot_fresh=True,
+            process_running=True,
         )
-        self.assertTrue(authorized_but_disconnected["accountAuthorized"])
-        self.assertFalse(authorized_but_disconnected["terminalConnected"])
-        self.assertFalse(authorized_but_disconnected["brokerConnected"])
-        self.assertFalse(authorized_but_disconnected["operationalConnected"])
-        self.assertTrue(authorized_but_disconnected["snapshotFresh"])
-        self.assertFalse(authorized_but_disconnected["readReady"])
+        self.assertTrue(identity_but_disconnected["accountIdentityPresent"])
+        self.assertFalse(identity_but_disconnected["accountAuthorized"])
+        self.assertTrue(identity_but_disconnected["processRunning"])
+        self.assertFalse(identity_but_disconnected["terminalConnected"])
+        self.assertFalse(identity_but_disconnected["brokerSessionConnected"])
+        self.assertFalse(identity_but_disconnected["brokerConnected"])
+        self.assertFalse(identity_but_disconnected["operationalConnected"])
+        self.assertTrue(identity_but_disconnected["snapshotFresh"])
+        self.assertTrue(identity_but_disconnected["writerFresh"])
+        self.assertFalse(identity_but_disconnected["readReady"])
 
         connected_but_stale = bridge.build_connection_state(
             runtime={"terminalConnected": True, "brokerConnected": True, "accountAuthorized": True},
@@ -196,7 +201,11 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
             snapshot_fresh=False,
         )
         self.assertTrue(connected_but_stale["operationalConnected"])
+        self.assertTrue(connected_but_stale["accountIdentityPresent"])
+        self.assertTrue(connected_but_stale["accountAuthorized"])
+        self.assertTrue(connected_but_stale["brokerSessionConnected"])
         self.assertFalse(connected_but_stale["snapshotFresh"])
+        self.assertFalse(connected_but_stale["writerFresh"])
         self.assertFalse(connected_but_stale["readReady"])
 
     def test_live_bridge_does_not_treat_authorized_account_as_connected_terminal(self):
@@ -217,8 +226,11 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         payload = bridge.status_payload(fake)
 
         self.assertEqual(payload["status"], "INITIALIZED")
-        self.assertTrue(payload["connection"]["accountAuthorized"])
+        self.assertTrue(payload["connection"]["accountIdentityPresent"])
+        self.assertFalse(payload["connection"]["accountAuthorized"])
+        self.assertTrue(payload["connection"]["processRunning"])
         self.assertFalse(payload["connection"]["terminalConnected"])
+        self.assertFalse(payload["connection"]["brokerSessionConnected"])
         self.assertFalse(payload["connection"]["brokerConnected"])
         self.assertFalse(payload["connection"]["operationalConnected"])
         self.assertTrue(payload["snapshotFresh"])
@@ -231,6 +243,27 @@ class Mt5ReadOnlyBridgeTests(unittest.TestCase):
         self.assertFalse(bridge.SAFETY["credentialStorageAllowed"])
         self.assertFalse(bridge.SAFETY["livePresetMutationAllowed"])
         self.assertFalse(bridge.SAFETY["mutatesMt5"])
+
+    def test_ea_writer_exports_identity_separately_from_broker_authorization(self):
+        ea_source = (
+            Path(__file__).resolve().parents[1] / "MQL5" / "Experts" / "QuantGod_MultiStrategy.mq5"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "bool accountIdentityPresent = (accountLogin > 0 && StringLen(accountServer) > 0);",
+            ea_source,
+        )
+        self.assertIn(
+            "bool accountAuthorized = (brokerSessionConnected && accountIdentityPresent);",
+            ea_source,
+        )
+        self.assertNotIn(
+            "bool accountAuthorized = (accountLogin > 0 && StringLen(accountServer) > 0);",
+            ea_source,
+        )
+        self.assertIn('"    \\"brokerSessionConnected\\": "', ea_source)
+        self.assertIn('"    \\"accountIdentityPresent\\": "', ea_source)
+        self.assertIn('"    \\"processRunning\\": true', ea_source)
 
     def test_parse_args_defaults_to_snapshot(self):
         args = bridge.parse_args([])

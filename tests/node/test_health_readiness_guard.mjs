@@ -28,8 +28,12 @@ test('operator overview separates writer, broker, authorization, quote, data and
 
   writeJson(path.join(runtimeDir, 'QuantGod_Dashboard.json'), {
     timestamp: '2026-08-01T11:59:50Z',
+    account: { number: 123456, server: 'Synthetic-Live' },
     runtime: {
+      processRunning: true,
       terminalConnected: true,
+      brokerSessionConnected: true,
+      accountIdentityPresent: true,
       accountAuthorized: true,
       connected: true,
       tickAgeSeconds: 58000,
@@ -51,7 +55,10 @@ test('operator overview separates writer, broker, authorization, quote, data and
   const overview = health.buildOperatorOverview({ defaultRuntimeDir: runtimeDir }, nowMs);
   assert.equal(overview.mode, 'SHADOW_READONLY');
   assert.equal(overview.mt5.writerFresh, true);
+  assert.equal(overview.mt5.processRunning, true);
+  assert.equal(overview.mt5.brokerSessionConnected, true);
   assert.equal(overview.mt5.brokerConnected, true);
+  assert.equal(overview.mt5.accountIdentityPresent, true);
   assert.equal(overview.mt5.accountAuthorized, true);
   assert.equal(overview.mt5.quoteFresh, false);
   assert.deepEqual(overview.mt5.marketSession, { state: 'CLOSED', reasonCode: 'WEEKEND' });
@@ -68,6 +75,36 @@ test('operator overview separates writer, broker, authorization, quote, data and
   assert.equal(overview.safety.liveExpansionAllowed, false);
   assert.equal(overview.safety.operatorApprovalRequired, true);
   assert.ok(overview.canonicalDataRoot.id.length >= 12);
+});
+
+test('identity and fresh writer do not imply an authorized broker session', (t) => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quantgod-health-auth-failed-'));
+  t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }));
+  const nowMs = Date.parse('2026-08-03T12:00:00Z');
+
+  writeJson(path.join(runtimeDir, 'QuantGod_Dashboard.json'), {
+    timestamp: '2026-08-03T11:59:50Z',
+    account: { number: 123456, server: 'Synthetic-Live' },
+    runtime: {
+      processRunning: true,
+      brokerSessionConnected: false,
+      accountIdentityPresent: true,
+      // Legacy/broken writers could leave this true after AUTH_FAILED.
+      accountAuthorized: true,
+      tickAgeSeconds: 10,
+    },
+  }, nowMs - 10000);
+
+  const overview = health.buildOperatorOverview({ defaultRuntimeDir: runtimeDir }, nowMs);
+  assert.equal(overview.mt5.writerFresh, true);
+  assert.equal(overview.mt5.processRunning, true);
+  assert.equal(overview.mt5.accountIdentityPresent, true);
+  assert.equal(overview.mt5.brokerSessionConnected, false);
+  assert.equal(overview.mt5.brokerConnected, false);
+  assert.equal(overview.mt5.accountAuthorized, false);
+  assert.equal(overview.mt5.monitorReady, false);
+  assert.match(overview.blockedReasons.join(','), /BROKER_NOT_CONFIRMED/);
+  assert.match(overview.blockedReasons.join(','), /ACCOUNT_NOT_AUTHORIZED/);
 });
 
 test('old PASS artifacts are stale and cannot make readiness pass', (t) => {
@@ -118,6 +155,8 @@ test('stale writer evidence cannot claim current broker connection or account au
 
   const overview = health.buildOperatorOverview({ defaultRuntimeDir: runtimeDir }, nowMs);
   assert.equal(overview.mt5.writerFresh, false);
+  assert.equal(overview.mt5.processRunning, false);
+  assert.equal(overview.mt5.brokerSessionConnected, false);
   assert.equal(overview.mt5.brokerConnected, false);
   assert.equal(overview.mt5.brokerConnectionKnown, false);
   assert.equal(overview.mt5.accountAuthorized, false);

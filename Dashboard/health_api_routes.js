@@ -207,10 +207,36 @@ function buildOperatorOverview(ctx, nowMs = Date.now()) {
   const maxQuoteAgeSeconds = finiteNumber(process.env.QG_QUOTE_FRESH_SECONDS, DEFAULT_QUOTE_FRESH_SECONDS);
   const writer = writerEvidence(runtimeRoot.resolved, nowMs, maxWriterAgeMs);
   const dashboard = writer.payload || {};
-  const terminalConnected = booleanValue(firstValue(dashboard, ['runtime.terminalConnected'], null));
-  const accountAuthorized = booleanValue(firstValue(dashboard, ['runtime.accountAuthorized'], null));
-  const brokerConnectionKnown = writer.fresh && terminalConnected !== null;
-  const accountAuthorizationKnown = writer.fresh && accountAuthorized !== null;
+  const runtime = dashboard.runtime && typeof dashboard.runtime === 'object' ? dashboard.runtime : {};
+  const account = dashboard.account && typeof dashboard.account === 'object' ? dashboard.account : {};
+  const brokerSessionSignal = booleanValue(firstValue(dashboard, [
+    'runtime.brokerSessionConnected',
+    'runtime.brokerConnected',
+    'runtime.terminalConnected',
+  ], null));
+  const accountAuthorizationSignal = booleanValue(firstValue(dashboard, ['runtime.accountAuthorized'], null));
+  const explicitIdentitySignal = booleanValue(firstValue(dashboard, ['runtime.accountIdentityPresent'], null));
+  const accountLogin = String(firstValue(account, ['login', 'number', 'loginMasked'], '')).trim();
+  const accountLoginDigits = accountLogin.replace(/[^0-9]/g, '');
+  const accountLoginPresent = Boolean(accountLoginDigits && /[1-9]/.test(accountLoginDigits));
+  const accountServer = String(firstValue(account, ['server'], '')).trim();
+  const accountIdentityPresent = explicitIdentitySignal === null
+    ? Boolean(accountLoginPresent && accountServer)
+    : explicitIdentitySignal;
+  const processSignal = booleanValue(firstValue(runtime, ['processRunning'], null));
+  // A fresh writer proves the EA process was active recently for legacy
+  // snapshots that predate the explicit processRunning field.
+  const processRunning = writer.fresh && (processSignal === null || processSignal === true);
+  const processRunningKnown = writer.fresh;
+  const brokerConnectionKnown = writer.fresh && brokerSessionSignal !== null;
+  const brokerSessionConnected = brokerConnectionKnown && brokerSessionSignal === true;
+  const accountAuthorizationKnown = writer.fresh
+    && accountAuthorizationSignal !== null
+    && brokerConnectionKnown;
+  const accountAuthorized = accountAuthorizationKnown
+    && accountAuthorizationSignal === true
+    && brokerSessionConnected
+    && accountIdentityPresent;
   const quoteAgeSeconds = finiteNumber(firstValue(dashboard, ['runtime.tickAgeSeconds'], null), null);
   const quoteFresh = writer.fresh && quoteAgeSeconds !== null && quoteAgeSeconds <= maxQuoteAgeSeconds;
   const session = marketSession(nowMs, quoteFresh);
@@ -230,8 +256,9 @@ function buildOperatorOverview(ctx, nowMs = Date.now()) {
 
   const marketNeutral = session.state === 'CLOSED';
   const mt5MonitorReady = writer.fresh
-    && terminalConnected === true
-    && accountAuthorized === true
+    && processRunning
+    && brokerSessionConnected
+    && accountAuthorized
     && (quoteFresh || marketNeutral);
   const dataReady = history.ready;
   const automationReady = automation.ready;
@@ -249,8 +276,9 @@ function buildOperatorOverview(ctx, nowMs = Date.now()) {
   if (!runtimeRoot.exists) blockedReasons.push('CANONICAL_RUNTIME_MISSING');
   if (!writer.available) blockedReasons.push('MT5_WRITER_MISSING');
   else if (!writer.fresh) blockedReasons.push('MT5_WRITER_STALE');
-  if (writer.fresh && terminalConnected !== true) blockedReasons.push('BROKER_NOT_CONFIRMED');
-  if (writer.fresh && accountAuthorized !== true) blockedReasons.push('ACCOUNT_NOT_AUTHORIZED');
+  if (writer.fresh && !processRunning) blockedReasons.push('MT5_PROCESS_NOT_RUNNING');
+  if (writer.fresh && !brokerSessionConnected) blockedReasons.push('BROKER_NOT_CONFIRMED');
+  if (writer.fresh && !accountAuthorized) blockedReasons.push('ACCOUNT_NOT_AUTHORIZED');
   if (!quoteFresh && !marketNeutral) blockedReasons.push('QUOTE_STALE');
   if (!dataReady) blockedReasons.push(`HISTORY_${history.status}_${history.freshness}`);
   if (!automationReady) blockedReasons.push(`AUTOMATION_${automation.status}_${automation.freshness}`);
@@ -273,9 +301,15 @@ function buildOperatorOverview(ctx, nowMs = Date.now()) {
       writerFresh: writer.fresh,
       writerAgeSeconds: writer.ageSeconds,
       writerObservedAt: writer.observedAt,
-      brokerConnected: brokerConnectionKnown && terminalConnected === true,
+      processRunning,
+      processRunningKnown,
+      brokerSessionConnected,
+      // Compatibility alias retained for existing frontend clients.
+      brokerConnected: brokerSessionConnected,
       brokerConnectionKnown,
-      accountAuthorized: accountAuthorizationKnown && accountAuthorized === true,
+      accountIdentityPresent,
+      accountIdentityKnown: writer.available,
+      accountAuthorized,
       accountAuthorizationKnown,
       quoteFresh,
       quoteAgeSeconds,

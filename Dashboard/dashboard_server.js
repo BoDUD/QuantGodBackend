@@ -896,6 +896,120 @@ function redactSecondaryMt5Identity(payload) {
   };
 }
 
+function firstBooleanSignal(...values) {
+  for (const value of values) {
+    if (value === true || value === false) return value;
+  }
+  return null;
+}
+
+function withMt5AuthorizationSemantics(payload, terminalLog = null) {
+  const next = cloneJsonObject(payload);
+  const runtime = next.runtime && typeof next.runtime === 'object' ? next.runtime : {};
+  const connection = next.connection && typeof next.connection === 'object'
+    ? next.connection
+    : runtime.connectionState && typeof runtime.connectionState === 'object'
+      ? runtime.connectionState
+      : {};
+  const terminal = next.terminal && typeof next.terminal === 'object' ? next.terminal : {};
+  const account = next.account && typeof next.account === 'object' ? next.account : {};
+  const hostProcess = next.hostProcess && typeof next.hostProcess === 'object' ? next.hostProcess : {};
+
+  const accountLogin = String(account.login ?? account.number ?? account.loginMasked ?? '').trim();
+  const accountLoginDigits = accountLogin.replace(/[^0-9]/g, '');
+  const accountLoginPresent = Boolean(accountLoginDigits && /[1-9]/.test(accountLoginDigits));
+  const accountServer = String(account.server ?? '').trim();
+  const explicitIdentity = firstBooleanSignal(
+    connection.accountIdentityPresent,
+    runtime.accountIdentityPresent,
+  );
+  const accountIdentityPresent = explicitIdentity === null
+    ? Boolean(accountLoginPresent && accountServer)
+    : explicitIdentity;
+  const writerFresh = firstBooleanSignal(
+    connection.writerFresh,
+    runtime.writerFresh,
+    connection.snapshotFresh,
+    next.snapshotFresh,
+    next._freshness?.fresh,
+  ) === true;
+  const processRunningSignal = firstBooleanSignal(
+    connection.processRunning,
+    runtime.processRunning,
+    hostProcess.targetProcessDetected,
+    terminal.targetHostProcessDetected,
+    hostProcess.terminalProcessDetected,
+    terminal.hostProcessDetected,
+  );
+  // Fresh writer evidence keeps legacy snapshots compatible until their EA
+  // source is rebuilt with the explicit processRunning field.
+  const processRunning = processRunningSignal === null
+    ? writerFresh
+    : processRunningSignal === true;
+  const rawTerminalConnected = firstBooleanSignal(
+    connection.terminalConnected,
+    runtime.terminalConnected,
+    terminal.connected,
+  ) === true;
+  const rawBrokerSessionConnected = firstBooleanSignal(
+    connection.brokerSessionConnected,
+    runtime.brokerSessionConnected,
+    connection.brokerConnected,
+    runtime.brokerConnected,
+    rawTerminalConnected,
+  ) === true;
+  const authorizationEvidence = firstBooleanSignal(
+    connection.accountAuthorized,
+    runtime.accountAuthorized,
+  );
+  const authFailed = ['AUTH_FAILED', 'AUTH_CONFIG_REJECTED'].includes(
+    String(terminalLog?.status || '').toUpperCase(),
+  );
+
+  // A latest AUTH_FAILED journal event is authoritative negative evidence.
+  // Preserve writer/process/identity signals, but fail the broker session and
+  // account authorization closed. Identity fields alone never grant access.
+  const terminalConnected = authFailed ? false : rawTerminalConnected;
+  const brokerSessionConnected = authFailed ? false : rawBrokerSessionConnected;
+  const accountAuthorized = authFailed
+    ? false
+    : authorizationEvidence === null
+      ? brokerSessionConnected && accountIdentityPresent
+      : authorizationEvidence && brokerSessionConnected && accountIdentityPresent;
+  const operationalConnected = terminalConnected && brokerSessionConnected && accountAuthorized;
+  const readReady = operationalConnected && writerFresh;
+
+  const normalizedConnection = {
+    ...connection,
+    terminalConnected,
+    brokerConnected: brokerSessionConnected,
+    brokerSessionConnected,
+    accountIdentityPresent,
+    accountAuthorized,
+    operationalConnected,
+    snapshotFresh: writerFresh,
+    writerFresh,
+    processRunning,
+    readReady,
+    semantics: 'EXPLICIT_CONNECTION_EVIDENCE_V2',
+  };
+  next.runtime = {
+    ...runtime,
+    connected: operationalConnected,
+    terminalConnected,
+    brokerConnected: brokerSessionConnected,
+    brokerSessionConnected,
+    accountIdentityPresent,
+    accountAuthorized,
+    writerFresh,
+    processRunning,
+    connectionState: normalizedConnection,
+  };
+  next.connection = normalizedConnection;
+  next.terminal = { ...terminal, connected: terminalConnected };
+  return next;
+}
+
 function secondaryMt5RootDir() {
   const filesDir = secondaryMt5FilesDir();
   return filesDir ? path.resolve(filesDir, '..', '..') : '';
@@ -946,7 +1060,29 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
       ...registration,
       snapshotFresh: true,
       account: null,
-      runtime: {},
+      runtime: {
+        connected: false,
+        terminalConnected: false,
+        brokerConnected: false,
+        brokerSessionConnected: false,
+        accountIdentityPresent: false,
+        accountAuthorized: false,
+        writerFresh: false,
+        processRunning: false,
+      },
+      connection: {
+        terminalConnected: false,
+        brokerConnected: false,
+        brokerSessionConnected: false,
+        accountIdentityPresent: false,
+        accountAuthorized: false,
+        operationalConnected: false,
+        snapshotFresh: false,
+        writerFresh: false,
+        processRunning: false,
+        readReady: false,
+        semantics: 'EXPLICIT_CONNECTION_EVIDENCE_V2',
+      },
       terminal: {
         connected: false,
         tradeAllowed: false,
@@ -1063,15 +1199,16 @@ async function handleMt5Readonly(req, res, endpoint, options = {}) {
       return;
     }
     const payload = result.payload && typeof result.payload === 'object' ? result.payload : {};
-    const publicPayload = scope === 'secondary' ? redactSecondaryMt5Identity(payload) : payload;
+    const terminalLog = scope === 'secondary'
+      ? readMt5TerminalStatus(secondaryMt5RootDir())
+      : readMt5TerminalStatus();
+    const semanticPayload = withMt5AuthorizationSemantics(payload, terminalLog);
+    const publicPayload = scope === 'secondary'
+      ? redactSecondaryMt5Identity(semanticPayload)
+      : semanticPayload;
     const bridgeTerminal = publicPayload?.terminal && typeof publicPayload.terminal === 'object'
       ? publicPayload.terminal
       : null;
-    const terminalLog = scope === 'secondary'
-      ? readMt5TerminalStatus(secondaryMt5RootDir())
-      : payload?.ok === false || String(payload?.status || '').toUpperCase() === 'UNAVAILABLE'
-        ? readMt5TerminalStatus()
-        : null;
     const terminal = terminalLog
       ? {
           ...(bridgeTerminal || {}),
@@ -2099,7 +2236,10 @@ const server = http.createServer((req, res) => {
         const { payload, stat } = readJsonFileCached(latestDashboard);
         const terminal = readMt5TerminalStatus();
         const freshness = latestDashboardFreshness(stat, latestDashboard, payload);
-        const safePayload = withDashboardFreshnessOverlay(payload, freshness);
+        const safePayload = withMt5AuthorizationSemantics(
+          withDashboardFreshnessOverlay(payload, freshness),
+          terminal,
+        );
         sendJson(res, 200, withServiceMeta({
           ...safePayload,
           ...(terminal ? { _terminal: terminal } : {}),

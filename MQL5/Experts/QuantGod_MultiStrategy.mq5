@@ -9613,7 +9613,11 @@ void ExportDashboard(bool runExecutionLoop)
       drawdown = 0.0;
 
    bool terminalConnected = (bool)TerminalInfoInteger(TERMINAL_CONNECTED);
-   bool brokerConnected = terminalConnected;
+   // TERMINAL_CONNECTED is broker-session evidence, not proof that the
+   // terminal process merely exists. Export an explicit name while retaining
+   // the legacy aliases consumed by older dashboard clients.
+   bool brokerSessionConnected = terminalConnected;
+   bool brokerConnected = brokerSessionConnected;
    bool terminalTradeAllowed = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
    bool programTradeAllowed = (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
    bool dllAllowed = (bool)MQLInfoInteger(MQL_DLLS_ALLOWED);
@@ -9624,8 +9628,12 @@ void ExportDashboard(bool runExecutionLoop)
    string tradePermissionBlocker = LiveTradePermissionBlocker(g_focusSymbol);
    long accountLogin = AccountInfoInteger(ACCOUNT_LOGIN);
    string accountServer = AccountInfoString(ACCOUNT_SERVER);
-   bool accountAuthorized = (accountLogin > 0 && StringLen(accountServer) > 0);
-   bool connected = (terminalConnected && brokerConnected && accountAuthorized);
+   bool accountIdentityPresent = (accountLogin > 0 && StringLen(accountServer) > 0);
+   // A cached identity can remain visible after authorization fails. Require a
+   // current broker session so identity presence can never masquerade as an
+   // authorized account.
+   bool accountAuthorized = (brokerSessionConnected && accountIdentityPresent);
+   bool connected = (terminalConnected && brokerSessionConnected && accountAuthorized);
    bool tradePermissionsAllowed = (IsPilotLiveMode() && connected && terminalTradeAllowed && programTradeAllowed && accountTradeAllowed && accountExpertTradeAllowed && focusSymbolTradeAllowed);
    string startupGuardReason = "";
    bool startupGuardActive = PilotStartupEntryGuardBlocks(g_focusSymbol, startupGuardReason);
@@ -9721,11 +9729,19 @@ void ExportDashboard(bool runExecutionLoop)
    json += "    \"pilotLatestConsecutiveLossNet\": " + FormatNumber(g_pilotLatestConsecutiveLossNet, 2) + ",\r\n";
    json += "    \"pilotFloatingProfit\": " + FormatNumber(SumPilotFloatingProfit(), 2) + ",\r\n";
    json += "    \"connected\": " + JsonBool(connected) + ",\r\n";
+   json += "    \"writerFreshAtExport\": true,\r\n";
+   json += "    \"processRunning\": true,\r\n";
    json += "    \"terminalConnected\": " + JsonBool(terminalConnected) + ",\r\n";
    json += "    \"brokerConnected\": " + JsonBool(brokerConnected) + ",\r\n";
+   json += "    \"brokerSessionConnected\": " + JsonBool(brokerSessionConnected) + ",\r\n";
+   json += "    \"accountIdentityPresent\": " + JsonBool(accountIdentityPresent) + ",\r\n";
    json += "    \"accountAuthorized\": " + JsonBool(accountAuthorized) + ",\r\n";
-   json += "    \"connectionState\": {\"terminalConnected\": " + JsonBool(terminalConnected)
+   json += "    \"connectionState\": {\"writerFreshAtExport\": true"
+           + ", \"processRunning\": true"
+           + ", \"terminalConnected\": " + JsonBool(terminalConnected)
            + ", \"brokerConnected\": " + JsonBool(brokerConnected)
+           + ", \"brokerSessionConnected\": " + JsonBool(brokerSessionConnected)
+           + ", \"accountIdentityPresent\": " + JsonBool(accountIdentityPresent)
            + ", \"accountAuthorized\": " + JsonBool(accountAuthorized)
            + ", \"operationalConnected\": " + JsonBool(connected)
            + ", \"snapshotFreshAtExport\": true},\r\n";
@@ -9852,8 +9868,12 @@ void ExportDashboard(bool runExecutionLoop)
    statusFile += "newsCurrency=" + g_newsState.eventCurrency + "\r\n";
    statusFile += "newsReason=" + exportNewsReason + "\r\n";
    statusFile += "connected=" + (connected ? "true" : "false") + "\r\n";
+   statusFile += "writerFreshAtExport=true\r\n";
+   statusFile += "processRunning=true\r\n";
    statusFile += "terminalConnected=" + (terminalConnected ? "true" : "false") + "\r\n";
    statusFile += "brokerConnected=" + (brokerConnected ? "true" : "false") + "\r\n";
+   statusFile += "brokerSessionConnected=" + (brokerSessionConnected ? "true" : "false") + "\r\n";
+   statusFile += "accountIdentityPresent=" + (accountIdentityPresent ? "true" : "false") + "\r\n";
    statusFile += "accountAuthorized=" + (accountAuthorized ? "true" : "false") + "\r\n";
    statusFile += "focusSymbol=" + g_focusSymbol + "\r\n";
    statusFile += "watchlist=" + g_resolvedWatchlist + "\r\n";
