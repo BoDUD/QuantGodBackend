@@ -4,6 +4,8 @@ const path = require('path');
 
 const DEFAULT_WRITER_FRESH_MS = 180000;
 const DEFAULT_QUOTE_FRESH_SECONDS = 30;
+const DEFAULT_DISK_MAINTENANCE_FRESH_SECONDS = 7200;
+const MAX_DISK_MAINTENANCE_FUTURE_SKEW_SECONDS = 300;
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -152,7 +154,7 @@ function marketSession(nowMs, quoteFresh) {
   return { state: 'UNKNOWN', reasonCode: 'QUOTE_STALE' };
 }
 
-function reportState(report, statusPaths, nowMs, maxAgeSeconds) {
+function reportState(report, statusPaths, nowMs, maxAgeSeconds, extraReadyStatuses = []) {
   if (!report) {
     return {
       available: false,
@@ -167,7 +169,15 @@ function reportState(report, statusPaths, nowMs, maxAgeSeconds) {
   const status = String(firstValue(report.payload, statusPaths, 'UNKNOWN')).toUpperCase();
   const ageSeconds = Math.max(0, (nowMs - report.stat.mtimeMs) / 1000);
   const fresh = ageSeconds <= maxAgeSeconds;
-  const ready = fresh && ['PASS', 'READY', 'OK', 'COMPLETED', 'FRESH'].includes(status);
+  const readyStatuses = new Set([
+    'PASS',
+    'READY',
+    'OK',
+    'COMPLETED',
+    'FRESH',
+    ...extraReadyStatuses.map((value) => String(value).toUpperCase()),
+  ]);
+  const ready = fresh && readyStatuses.has(status);
   return {
     available: true,
     ready,
@@ -180,9 +190,131 @@ function reportState(report, statusPaths, nowMs, maxAgeSeconds) {
   };
 }
 
-function diskState(runtimeDir) {
+function unavailableDiskMaintenance(reason) {
+  return {
+    available: false,
+    status: 'UNAVAILABLE',
+    reason,
+  };
+}
+
+function optionalFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function diskMaintenanceState(nowMs) {
+  const filePath = String(process.env.QG_DISK_MAINTENANCE_STATUS_FILE || '').trim();
+  if (!filePath) return unavailableDiskMaintenance('STATUS_FILE_NOT_CONFIGURED');
+  const configuredStatusRoot = String(process.env.QG_LAUNCHD_STATUS_ROOT || '').trim();
+  if (configuredStatusRoot) {
+    const expectedPath = path.resolve(
+      configuredStatusRoot,
+      'QuantGod_DiskSpaceMaintenanceStatus.json',
+    );
+    if (path.resolve(filePath) !== expectedPath) {
+      return unavailableDiskMaintenance('STATUS_FILE_PATH_MISMATCH');
+    }
+  }
+
+  let descriptor = null;
+  try {
+    const lexicalStat = fs.lstatSync(filePath);
+    if (lexicalStat.isSymbolicLink() || !lexicalStat.isFile()) {
+      return unavailableDiskMaintenance('STATUS_FILE_NOT_REGULAR');
+    }
+    const noFollow = Number(fs.constants.O_NOFOLLOW || 0);
+    const nonBlock = Number(fs.constants.O_NONBLOCK || 0);
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow | nonBlock);
+    const descriptorStat = fs.fstatSync(descriptor);
+    if (!descriptorStat.isFile()) {
+      return unavailableDiskMaintenance('STATUS_FILE_NOT_REGULAR');
+    }
+    if (lexicalStat.dev !== descriptorStat.dev || lexicalStat.ino !== descriptorStat.ino) {
+      return unavailableDiskMaintenance('STATUS_FILE_CHANGED_DURING_OPEN');
+    }
+    if (lexicalStat.nlink !== 1 || descriptorStat.nlink !== 1) {
+      return unavailableDiskMaintenance('STATUS_FILE_HARDLINKED');
+    }
+    if (typeof process.getuid === 'function' && descriptorStat.uid !== process.getuid()) {
+      return unavailableDiskMaintenance('STATUS_FILE_OWNER_MISMATCH');
+    }
+    if ((descriptorStat.mode & 0o077) !== 0) {
+      return unavailableDiskMaintenance('STATUS_FILE_PERMISSIONS_TOO_OPEN');
+    }
+    const payload = JSON.parse(fs.readFileSync(descriptor, 'utf8').replace(/^\uFEFF/, ''));
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return unavailableDiskMaintenance('STATUS_PAYLOAD_INVALID');
+    }
+    if (payload.schema !== 'quantgod.disk_space_maintenance.v1') {
+      return unavailableDiskMaintenance('STATUS_SCHEMA_UNSUPPORTED');
+    }
+
+    const generatedAtIso = String(payload.generatedAtIso || '').trim();
+    const generatedAtMs = parseEvidenceTime(generatedAtIso);
+    if (generatedAtMs === null) {
+      return unavailableDiskMaintenance('STATUS_TIMESTAMP_INVALID');
+    }
+    if (generatedAtMs - nowMs > MAX_DISK_MAINTENANCE_FUTURE_SKEW_SECONDS * 1000) {
+      return unavailableDiskMaintenance('STATUS_TIMESTAMP_IN_FUTURE');
+    }
+    const maxAgeSeconds = Math.max(0, finiteNumber(
+      process.env.QG_DISK_MAINTENANCE_FRESH_SECONDS,
+      DEFAULT_DISK_MAINTENANCE_FRESH_SECONDS,
+    ));
+    const ageSeconds = Math.max(0, (nowMs - generatedAtMs) / 1000);
+    const summarySource = payload.summary && typeof payload.summary === 'object'
+      ? payload.summary
+      : {};
+    const summary = {};
+    for (const key of [
+      'candidateCount',
+      'reclaimableCount',
+      'reclaimableBytes',
+      'deletedCount',
+      'deletedBytes',
+      'errorCount',
+    ]) {
+      const value = optionalFiniteNumber(summarySource[key]);
+      if (value !== null) summary[key] = value;
+    }
+    const safetySource = payload.safety && typeof payload.safety === 'object'
+      ? payload.safety
+      : {};
+    return {
+      available: true,
+      status: String(payload.status || 'UNKNOWN').toUpperCase(),
+      schema: payload.schema,
+      generatedAtIso,
+      ageSeconds,
+      maxAgeSeconds,
+      freshness: ageSeconds <= maxAgeSeconds ? 'FRESH' : 'STALE',
+      mode: String(payload.mode || ''),
+      appliedPressureLevel: String(payload.appliedPressureLevel || 'UNKNOWN').toUpperCase(),
+      pressureLevel: String(payload.pressureLevel || 'UNKNOWN').toUpperCase(),
+      pressureActive: booleanValue(payload.pressureActive),
+      pressureReason: String(payload.pressureReason || ''),
+      pressureRemainingBytes: optionalFiniteNumber(payload.pressureRemainingBytes),
+      summary,
+      safety: {
+        localOnly: booleanValue(safetySource.localOnly),
+        userDataDeletionAllowed: booleanValue(safetySource.userDataDeletionAllowed),
+        mt5MutationAllowed: booleanValue(safetySource.mt5MutationAllowed),
+        orderSendAllowed: booleanValue(safetySource.orderSendAllowed),
+      },
+    };
+  } catch (_) {
+    return unavailableDiskMaintenance('STATUS_READ_FAILED');
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor);
+  }
+}
+
+function diskState(runtimeDir, nowMs = Date.now()) {
+  const maintenance = diskMaintenanceState(nowMs);
   if (typeof fs.statfsSync !== 'function' || !fs.existsSync(runtimeDir)) {
-    return { available: false, freeRatio: null, status: 'UNKNOWN' };
+    return { available: false, freeRatio: null, status: 'UNKNOWN', maintenance };
   }
   try {
     const stats = fs.statfsSync(runtimeDir);
@@ -195,9 +327,16 @@ function diskState(runtimeDir) {
       freeBytes,
       freeRatio,
       status: freeRatio === null ? 'UNKNOWN' : freeRatio < 0.1 ? 'CRITICAL' : freeRatio < 0.2 ? 'WARN' : 'PASS',
+      maintenance,
     };
   } catch (error) {
-    return { available: false, freeRatio: null, status: 'UNKNOWN', error: error.message };
+    return {
+      available: false,
+      freeRatio: null,
+      status: 'UNKNOWN',
+      error: error.message,
+      maintenance,
+    };
   }
 }
 
@@ -247,12 +386,18 @@ function buildOperatorOverview(ctx, nowMs = Date.now()) {
   ]), ['productionStatus', 'status', 'state'], nowMs, finiteNumber(process.env.QG_HISTORY_STATUS_FRESH_SECONDS, 7200));
   const automation = reportState(firstExistingJson([
     path.join(runtimeRoot.resolved, 'automation', 'QuantGod_AutomationChainLatest.json'),
-  ]), ['state', 'status', 'runStatus'], nowMs, finiteNumber(process.env.QG_AUTOMATION_STATUS_FRESH_SECONDS, 900));
+  ]), ['state', 'status', 'runStatus'], nowMs, finiteNumber(
+    process.env.QG_AUTOMATION_STATUS_FRESH_SECONDS,
+    900,
+  ), ['SHADOW_ADVISORY_READY']);
   const productionEvidence = reportState(firstExistingJson([
     path.join(runtimeRoot.resolved, 'production_validation', 'QuantGod_ProductionEvidenceValidationReport.json'),
     path.join(runtimeRoot.resolved, 'QuantGod_ProductionEvidenceValidationReport.json'),
-  ]), ['report.status', 'status', 'overallStatus'], nowMs, finiteNumber(process.env.QG_PRODUCTION_EVIDENCE_FRESH_SECONDS, 86400));
-  const disk = diskState(runtimeRoot.resolved);
+  ]), ['report.status', 'status', 'overallStatus'], nowMs, finiteNumber(
+    process.env.QG_PRODUCTION_EVIDENCE_FRESH_SECONDS,
+    86400,
+  ), ['SHADOW_ADVISORY_READY']);
+  const disk = diskState(runtimeRoot.resolved, nowMs);
 
   const marketNeutral = session.state === 'CLOSED';
   const mt5MonitorReady = writer.fresh

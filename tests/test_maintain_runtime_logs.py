@@ -1,24 +1,26 @@
 import gzip
 import importlib.util
 import os
-import time
+import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-
+from unittest import mock
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "maintain_runtime_logs.py"
 SPEC = importlib.util.spec_from_file_location("maintain_runtime_logs", MODULE_PATH)
 runtime_logs = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
+sys.modules[SPEC.name] = runtime_logs
 SPEC.loader.exec_module(runtime_logs)
 
 
 class RuntimeLogMaintenanceTests(unittest.TestCase):
     def test_collision_fallback_archives_are_numbered_and_recognized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive_dir = Path(tmp) / "archive"
+            archive_dir = Path(tmp).resolve() / "archive"
             archive_dir.mkdir()
             stamp = "20260802T021500JST"
 
@@ -40,7 +42,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
 
     def test_rotates_large_active_log_and_truncates_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime_root = Path(tmp) / "runtime"
+            runtime_root = Path(tmp).resolve() / "runtime"
             runtime_root.mkdir(parents=True)
             active_log = runtime_root / "agent_v25_screen.log"
             active_log.write_text("line\n" * 64, encoding="utf-8")
@@ -60,7 +62,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
 
     def test_compresses_legacy_archives_and_prunes_expired_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime_root = Path(tmp) / "runtime"
+            runtime_root = Path(tmp).resolve() / "runtime"
             archive_dir = runtime_root / "log_archive"
             runtime_root.mkdir(parents=True)
             legacy = runtime_root / "agent_v25_screen.20260512T1459JST.log"
@@ -87,7 +89,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
 
     def test_prunes_log_archives_over_size_cap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime_root = Path(tmp) / "runtime"
+            runtime_root = Path(tmp).resolve() / "runtime"
             archive_dir = runtime_root / "log_archive"
             archive_dir.mkdir(parents=True)
             old_archive = archive_dir / "agent_v25_screen.20260510T1459JST.log.gz"
@@ -113,7 +115,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
 
     def test_compacts_large_jsonl_and_archives_full_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime_root = Path(tmp) / "runtime"
+            runtime_root = Path(tmp).resolve() / "runtime"
             ledger = runtime_root / "execution" / "QuantGod_LiveExecutionFeedback.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text("".join(f'{{"i":{i},"text":"{"x" * 20}"}}\n' for i in range(10)), encoding="utf-8")
@@ -136,7 +138,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
 
     def test_jsonl_tail_respects_byte_cap_when_keep_lines_are_large(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime_root = Path(tmp) / "runtime"
+            runtime_root = Path(tmp).resolve() / "runtime"
             ledger = runtime_root / "notifications" / "QuantGod_TelegramGatewayLedger.jsonl"
             ledger.parent.mkdir(parents=True)
             ledger.write_text(
@@ -162,7 +164,7 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
 
     def test_prunes_jsonl_archives_over_size_cap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime_root = Path(tmp) / "runtime"
+            runtime_root = Path(tmp).resolve() / "runtime"
             archive_dir = runtime_root / "jsonl_archive"
             archive_dir.mkdir(parents=True)
             old_archive = archive_dir / "execution__QuantGod_LiveExecutionFeedback.20260510T1459JST.1.jsonl.gz"
@@ -185,6 +187,173 @@ class RuntimeLogMaintenanceTests(unittest.TestCase):
 
             self.assertTrue(any(item["reason"] == "jsonl_archive_size_cap" for item in status["jsonl"]["deleted"]))
             self.assertFalse(old_archive.exists())
+
+    def test_rejects_symlinked_active_log_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            runtime_root = root / "runtime"
+            runtime_root.mkdir()
+            outside = root / "outside.log"
+            outside.write_text("outside evidence\n", encoding="utf-8")
+            (runtime_root / "agent_v25_screen.log").symlink_to(outside)
+
+            with self.assertRaises(runtime_logs.MaintenanceError):
+                runtime_logs.maintain_logs(
+                    runtime_root,
+                    max_active_bytes=1,
+                    maintain_jsonl=False,
+                )
+
+            self.assertEqual(outside.read_text(encoding="utf-8"), "outside evidence\n")
+
+    def test_rejects_hardlinked_active_log_without_truncating_peer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            runtime_root = root / "runtime"
+            runtime_root.mkdir()
+            outside = root / "outside.log"
+            original = b"outside evidence\n" * 32
+            outside.write_bytes(original)
+            os.link(outside, runtime_root / "agent_v25_screen.log")
+
+            with self.assertRaises(runtime_logs.MaintenanceError):
+                runtime_logs.maintain_logs(
+                    runtime_root,
+                    max_active_bytes=1,
+                    maintain_jsonl=False,
+                )
+
+            self.assertEqual(outside.read_bytes(), original)
+
+    def test_rejects_symlinked_jsonl_without_rewriting_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            runtime_root = root / "runtime"
+            ledger_dir = runtime_root / "execution"
+            ledger_dir.mkdir(parents=True)
+            outside = root / "outside.jsonl"
+            original = b'{"outside":true}\n' * 32
+            outside.write_bytes(original)
+            (ledger_dir / "QuantGod_LiveExecutionFeedback.jsonl").symlink_to(outside)
+
+            with self.assertRaises(runtime_logs.MaintenanceError):
+                runtime_logs.maintain_logs(
+                    runtime_root,
+                    max_active_bytes=1024 * 1024,
+                    jsonl_max_active_bytes=1,
+                    maintain_jsonl=True,
+                )
+
+            self.assertEqual(outside.read_bytes(), original)
+
+    def test_rejects_hardlinked_jsonl_without_rewriting_peer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            runtime_root = root / "runtime"
+            ledger_dir = runtime_root / "execution"
+            ledger_dir.mkdir(parents=True)
+            outside = root / "outside.jsonl"
+            original = b'{"outside":true}\n' * 32
+            outside.write_bytes(original)
+            os.link(outside, ledger_dir / "QuantGod_LiveExecutionFeedback.jsonl")
+
+            with self.assertRaises(runtime_logs.MaintenanceError):
+                runtime_logs.maintain_logs(
+                    runtime_root,
+                    max_active_bytes=1024 * 1024,
+                    jsonl_max_active_bytes=1,
+                    maintain_jsonl=True,
+                )
+
+            self.assertEqual(outside.read_bytes(), original)
+
+    def test_rejects_hardlinked_archive_before_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            runtime_root = root / "runtime"
+            archive_dir = runtime_root / "log_archive"
+            archive_dir.mkdir(parents=True)
+            outside = root / "outside.log.gz"
+            outside.write_bytes(b"archive evidence")
+            os.link(outside, archive_dir / "agent_v25_screen.20260510T1459JST.log.gz")
+
+            with self.assertRaises(runtime_logs.MaintenanceError):
+                runtime_logs.maintain_logs(
+                    runtime_root,
+                    archive_dir=archive_dir,
+                    archive_max_bytes=1,
+                    retention_days=30,
+                    maintain_jsonl=False,
+                )
+
+            self.assertEqual(outside.read_bytes(), b"archive evidence")
+
+    def test_rejects_symlinked_archive_before_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            runtime_root = root / "runtime"
+            archive_dir = runtime_root / "log_archive"
+            archive_dir.mkdir(parents=True)
+            outside = root / "outside.log.gz"
+            outside.write_bytes(b"archive evidence")
+            (archive_dir / "agent_v25_screen.20260510T1459JST.log.gz").symlink_to(outside)
+
+            with self.assertRaises(runtime_logs.MaintenanceError):
+                runtime_logs.maintain_logs(
+                    runtime_root,
+                    archive_dir=archive_dir,
+                    archive_max_bytes=1,
+                    retention_days=30,
+                    maintain_jsonl=False,
+                )
+
+            self.assertEqual(outside.read_bytes(), b"archive evidence")
+
+    def test_rejects_symlink_component_in_runtime_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            real_runtime = root / "real-runtime"
+            real_runtime.mkdir()
+            linked_runtime = root / "runtime-link"
+            linked_runtime.symlink_to(real_runtime, target_is_directory=True)
+
+            with self.assertRaises(runtime_logs.MaintenanceError):
+                runtime_logs.maintain_logs(linked_runtime, maintain_jsonl=False)
+
+    def test_safe_unlink_refuses_path_swap_after_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_root = Path(tmp).resolve() / "runtime"
+            runtime_root.mkdir()
+            candidate = runtime_root / "agent_v25_screen.20260510T1459JST.log.gz"
+            candidate.write_bytes(b"original archive")
+            snapshot = runtime_logs._snapshot_managed_file(
+                candidate,
+                root=runtime_root,
+                label="test archive",
+            )
+            moved_original = runtime_root / "moved-original.log.gz"
+            candidate.rename(moved_original)
+            candidate.write_bytes(b"replacement archive")
+
+            with self.assertRaises(runtime_logs.ManagedFileChangedError):
+                runtime_logs._safe_unlink(snapshot)
+
+            self.assertEqual(candidate.read_bytes(), b"replacement archive")
+            self.assertEqual(moved_original.read_bytes(), b"original archive")
+
+    def test_rejects_file_when_current_uid_does_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_root = Path(tmp).resolve() / "runtime"
+            runtime_root.mkdir()
+            active_log = runtime_root / "agent_v25_screen.log"
+            active_log.write_text("log\n", encoding="utf-8")
+            mismatched_uid = (os.getuid() if hasattr(os, "getuid") else 0) + 1
+
+            with (
+                mock.patch.object(runtime_logs, "_current_uid", return_value=mismatched_uid),
+                self.assertRaises(runtime_logs.MaintenanceError),
+            ):
+                runtime_logs.maintain_logs(runtime_root, maintain_jsonl=False)
 
 
 if __name__ == "__main__":
